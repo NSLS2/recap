@@ -5,7 +5,7 @@ Credits
 Maintainer
 ----------
 
-* Brookhaven National Lab <vshekar1@bnl.gov>
+* Venkateswaran Shekar (Brookhaven National Lab) <vshekar1@bnl.gov>
 
 Contributors
 ------------
