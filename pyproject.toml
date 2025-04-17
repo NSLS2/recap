@@ -1,3 +1,41 @@
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyrecap"
+version = "0.0.1"  # overridden by versioneer
+description = "Scientific framework for Reproducible Experiment Capture and Provenance"
+authors = [{ name = "Venkateswaran Shekar", email = "vshekar1@bnl.gov" }]
+requires-python = ">=3.8"
+readme = "README.rst"
+license = { text = "BSD-3-Clause" }
+dependencies = [
+    "sqlalchemy>=2.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["recap*"]
+
+[tool.versioneer]
+VCS = "git"
+style = "pep440"
+versionfile_source = "recap/_version.py"
+versionfile_build = "recap/_version.py"
+tag_prefix = ""
+parentdir_prefix_version = "recap-"
+
+[tool.hatch.build.targets.wheel]
+packages = ["recap"]
+
 [tool.black]
 line-length = 115
 include = '\.pyi?$'

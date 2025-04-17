@@ -13,7 +13,7 @@ RECAP (Reproducible Experiment Capture and Provenance)
 A scientific framework for Reproducible Experiment Capture, tracking, and metadata management
 
 * Free software: 3-clause BSD license
-* Documentation: (COMING SOON!) https://vshekar.github.io/recap.
+* Documentation: (COMING SOON!) 
 
 Features
 --------
