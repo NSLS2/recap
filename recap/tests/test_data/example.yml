@@ -1,0 +1,53 @@
+container_types:
+  - name: "Library Plate 1536"
+    ref_name: "LP1536"
+    attributes:
+      - name: "Number of rows in Library plate 1536"
+        ref_name: "row_num_LB1536"
+        value_type: "int"
+        default_value: 32
+      - name: "Number of colums in Lib plate 1536"
+        ref_name: "row_num_LB1536"
+        value_type: "int"
+        default_value: 48
+    subcontainer_generation:
+      levels:
+        - level_name: "row"
+          count: 32
+          alphabetical_name: true
+          uppercase_name: true
+          zero_padding: 0
+          prefix: ""
+          suffix: ""
+        - level_name: "col"
+          count: 48
+          alphabetical_name: false
+          uppercase_name: false
+          zero_padding: 2
+          prefix: ""
+          suffix: ""
+        - level_name: "subwell"
+          count: 2
+          alphabetical_name: true
+          uppercase_name: false
+          zero_padding: 0
+          prefix: ""
+          suffix: ""
+      naming_pattern: "{row}{col}{subwell}"
+    subcontainer_attributes:
+      - name: "well_used"
+        ref_name: "well_used"
+        value_type: "bool"
+        default_value: true
+      - name: "Catalog ID"
+        ref_name: "catalog_id"
+        value_type: "str"
+        default_value: ""
+      - name: "SMILES code"
+        ref_name: "SMILES"
+        value_type: "str"
+        default_value: ""
+      - name: "Sequence"
+        ref_name: "sequence"
+        value_type: "int"
+        default_value: 0

@@ -1,0 +1,134 @@
+container_types:
+  - name: "96 Well PCR Plate"
+    ref_name: "96WPCR"
+    properties:
+      - name: "Number of rows in 96 well PCR plate"
+        ref_name: "row_num_96WPCR"
+        value_type: "int"
+        default_value: 8
+        unit: null
+      - name: "Number of columns in Lib plate 1536"
+        ref_name: "col_num_96WPCR"
+        value_type: "int"
+        default_value: 12
+        unit: null
+    subcontainer_generation:
+      levels:
+        - level_name: "row"
+          count: 8
+          alphabetical_name: true
+          uppercase_name: true
+          zero_padding: 0
+          prefix: ""
+          suffix: ""
+        - level_name: "col"
+          count: 12
+          alphabetical_name: false
+          uppercase_name: false
+          zero_padding: 0
+          prefix: ""
+          suffix: ""
+      naming_pattern: "{row}{col}"
+    subcontainer_properties:
+      - name: "Total Volume"
+        ref_name: "total_volume"
+        value_type: "int"
+        default_value: 0
+        unit: "uL"
+  - name: "LiX holders"
+    ref_name: "lix_holder"
+    properties:
+      - name: "Number of positions in lix holder"
+        ref_name: "positions"
+        value_type: "int"
+        default_value: 18
+        unit: null
+      - name: "Holder name"
+        ref_name: "name"
+        value_type: "str"
+        default_value: ""
+        unit: null
+    subcontainer_generation:
+      levels:
+        - level_name: "position"
+          count: 18
+          alphabetical_name: false
+          uppercase_name: false
+          zero_padding: 0
+          prefix: ""
+          suffix: ""
+      naming_pattern: "{position}"
+    subcontainer_properties:
+      - name: "Total Volume"
+        ref_name: "total_volume"
+        value_type: "int"
+        default_value: 0
+        unit: "uL"
+
+workflow_type:
+  name: "Solution Scattering"
+  ref_name: "solution_scattering"
+  action_types:
+    - name: "Initialize"
+      ref_name: "initialize"
+      source_container: null
+      destination_container: "96WPCR"
+      decomposable: true
+      subaction_parameters:
+        - name: "Sample Name"
+          ref_name: "sample_name"
+          value_type: "str"
+          default_value: ""
+          unit: null
+        - name: "Buffer"
+          ref_name: "buffer"
+          value_type: "str"
+          default_value: ""
+          unit: null
+        - name: "Volume"
+          ref_name: "volume"
+          value_type: "float"
+          default_value: 0.0
+          unit: "uL"
+        - name: "Mixing"
+          ref_name: "mixing"
+          value_type: "str"
+          default_value: ""
+          unit: null
+        - name: "Stock"
+          ref_name: "stock"
+          value_type: "bool"
+          default_value: false
+          unit: null
+        - name: "Notes"
+          ref_name: "notes"
+          value_type: "str"
+          default_value: ""
+          unit: null
+    - name: "Mixing"
+      ref_name: "mixing"
+      source_container: "96WPCR"
+      destination_container: "96WPCR"
+      decomposable: true
+      custom_subactions: true
+      subaction_parameters:
+        - name: "Transfer Volume"
+          ref_name: "transfer_volume"
+          value_type: "float"
+          default_value: 0.0
+          unit: "uL"
+    - name: "Plate to holder"
+      ref_name: "plate_to_holder"
+      source_container: "96WPCR"
+      dest_container: "lix_holder"
+      decomposable: true
+      custom_subactions: true
+      subaction_parameters:
+        - name: "Transfer Volume"
+          ref_name: "transfer_volume"
+          value_type: "float"
+          default_value: 0.0
+          unit: "uL"
+    - name: "Bluesky Run"
+      
+      

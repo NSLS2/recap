@@ -1,4 +1,4 @@
 def test_experiment(db_session):
-    from recap.models.experiment import ExperimentType
+    from recap.models.process import ProcessTemplate
 
-    experiment_type = ExperimentType(name="Test Experiment")
+    experiment_type = ProcessTemplate(name="Test Experiment")

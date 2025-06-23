@@ -1,37 +1,45 @@
+from typing import List, Optional, TYPE_CHECKING
+from uuid import UUID, uuid4
+
 import sqlalchemy
-from .base import Base
-from sqlalchemy import (
-    Column,
-    ForeignKey,
-    Table,
-)
-from sqlalchemy.orm import declared_attr, relationship, mapped_column, Mapped, Session, validates
+from sqlalchemy import Column, ForeignKey, Table
 from sqlalchemy.ext.hybrid import hybrid_property
-from typing import List, Optional, Set, Any
-from uuid import uuid4, UUID
-
-container_type_attribute_association = Table(
-    "container_type_attribute_association",
-    Base.metadata,
-    Column("container_type_id", sqlalchemy.UUID, ForeignKey("container_type.uid")),
-    Column("attribute_id", sqlalchemy.UUID, ForeignKey("attribute.uid")),
+from sqlalchemy.orm import (
+    Mapped,
+    declared_attr,
+    mapped_column,
+    relationship,
+    validates,
 )
 
-action_type_attribute_association = Table(
-    "action_type_parameter_type_association",
+if TYPE_CHECKING:
+    from recap.models.resource import ResourceTemplate
+    from recap.models.step import StepTemplate
+
+from .base import Base
+
+resource_template_attribute_association = Table(
+    "resource_template_attribute_association",
     Base.metadata,
-    Column("action_type_id", sqlalchemy.UUID, ForeignKey("action_type.uid")),
-    Column("attribute_id", sqlalchemy.UUID, ForeignKey("attribute.uid")),
+    Column("resource_template_id", sqlalchemy.UUID, ForeignKey("resource_template.id")),
+    Column("attribute_id", sqlalchemy.UUID, ForeignKey("attribute.id")),
+)
+
+step_template_attribute_association = Table(
+    "step_template_parameter_template_association",
+    Base.metadata,
+    Column("step_template_id", sqlalchemy.UUID, ForeignKey("step_template.id")),
+    Column("attribute_id", sqlalchemy.UUID, ForeignKey("attribute.id")),
 )
 
 
 class Attribute(Base):
     """
     Attributes store values that may be associated with properties of an object or
-    parameters of an action.
+    parameters of an step.
 
     An attribute consists of a name, value_type, unit of measurement and a default_value.
-    For example, A heat action has a parameter of temperature. This can be captured by
+    For example, A heat step has a parameter of temperature. This can be captured by
     creating a temperature attribute like:
 
     name: "DegreeCelciusTemperature"
@@ -39,7 +47,7 @@ class Attribute(Base):
     unit: "degC"
     default_value: "100.0"
 
-    An example of a property is volume of a container, which can be captured by creating
+    An example of a property is volume of a resource, which can be captured by creating
     a volume attribute:
 
     name: "uL Volume"
@@ -49,18 +57,18 @@ class Attribute(Base):
     """
 
     __tablename__ = "attribute"
-    uid: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
-    short_name: Mapped[Optional[str]] = mapped_column(nullable=True)
+    ref_name: Mapped[Optional[str]] = mapped_column(nullable=True)
     value_type: Mapped[str] = mapped_column(nullable=False)
     unit: Mapped[Optional[str]] = mapped_column(nullable=True)
     default_value: Mapped[Optional[str]] = mapped_column(nullable=True)
 
-    container_types: Mapped[List["ContainerType"]] = relationship(
-        back_populates="attributes", secondary=container_type_attribute_association
+    resource_templates: Mapped[List["ResourceTemplate"]] = relationship(
+        back_populates="attributes", secondary=resource_template_attribute_association
     )
-    action_types: Mapped[List["ActionType"]] = relationship(
-        back_populates="attributes", secondary=action_type_attribute_association
+    step_templates: Mapped[List["StepTemplate"]] = relationship(
+        back_populates="attributes", secondary=step_template_attribute_association
     )
 
 
@@ -77,7 +85,9 @@ class AttributeValueMixin:
     bool_value: Mapped[Optional[bool]] = mapped_column(nullable=True)
     str_value: Mapped[Optional[str]] = mapped_column(nullable=True)
 
-    attribute_id: Mapped[UUID] = mapped_column(ForeignKey("attribute.uid"), nullable=False)
+    attribute_id: Mapped[UUID] = mapped_column(
+        ForeignKey("attribute.id"), nullable=False
+    )
     # attribute: Mapped["Attribute"] = relationship()
 
     @declared_attr
@@ -97,7 +107,9 @@ class AttributeValueMixin:
         if value is not None:
             current_type = self.attribute.value_type if self.attribute else None
             if key != f"{current_type}_value":
-                raise ValueError(f"{key} cannot be set for property type {current_type}")
+                raise ValueError(
+                    f"{key} cannot be set for property type {current_type}"
+                )
         return value
 
     def set_value(self, value):
@@ -125,6 +137,15 @@ class AttributeValueMixin:
 
     @hybrid_property
     def value(self):
+        if not self.attribute:
+            return None
+
+        vt = self.attribute.value_type
+        return getattr(self, f"{vt}_value", None)
+
+    @value.setter
+    def value(self, v):
+        self.set_value(v)
         if not self.attribute:
             return None
 

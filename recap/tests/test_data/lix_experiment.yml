@@ -1,0 +1,62 @@
+containers:
+  - name: "Plate #1"
+    ref_name: "plate_uuid"
+    type: "96WPCR"
+  - name: "Holder #1"
+    ref_name: "holder_uuid"
+    type: "lix_holder"
+
+experiment:
+  name: "SS #1"
+  ref_name: "UUID"
+  type: "solution_scattering"
+  actions:
+    - type: "initialize"
+      destination: "plate_uuid"
+      subactions:
+        - destination: "A1"
+          sample_name: "buffer1"
+          volume: 60
+        - destination: "A2"
+          sample_name: "sample1"
+          buffer: "buffer1"
+          volume: 60
+        - destination: "B1"
+          sample_name: "buffer6"
+          volume: 60
+          notes: "dilution series example; each mixing field contains a series of well:volume pairs"
+        - destination: "B2"
+          sample_name: "sample8"
+          buffer: "buffer6"
+          mixing: "B10:60, B12:6"
+        - destination: "B10"
+          sample_name: "buffer stock"
+          volume: 150
+          stock: true
+        - destination: "B12"
+          sample_name: "buffer stock"
+          volume: 150
+          stock: true
+    - type: "mixing"
+      source: "plate_uuid"
+      destination: "plate_uuid"    
+      subactions: 
+        - source: "B10"
+          destination: "B2"
+          transfer_volume: 60
+        - source: "B12"
+          destination: "B2"
+          transfer_volume: 6
+    - type: "plate_to_holder"
+      source: "plate_uuid"
+      destination: "holder_uuid"
+      subactions:
+        - source: "A1"
+          destination: "1"
+          transfer_volume: 60
+        - source: "A2"
+          destination: "3"
+          transfer_volume: 60
+        - source: "A3"
+          destination: "5"
+          transfer_volume: 60
