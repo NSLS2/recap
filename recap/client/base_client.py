@@ -6,14 +6,15 @@ from typing import Optional
 from recap.dsl.process_builder import ProcessTemplateBuilder, ProcessRunBuilder
 from recap.dsl.resource_builder import ResourceTemplateBuilder
 
+
 class RecapClient:
-    def __init__(self, url: Optional[str]=None, echo: bool = False, session= None):
+    def __init__(self, url: Optional[str] = None, echo: bool = False, session=None):
         if url is not None:
             self.engine = create_engine(url, echo=echo)
             self.Session = sessionmaker(bind=self.engine, expire_on_commit=False, future=True)
         if session is not None:
             self._session = session
-    
+
     @contextmanager
     def session(self):
         """Yield a Session with transaction boundaries."""
@@ -30,11 +31,7 @@ class RecapClient:
         return ProcessTemplateBuilder(session=session, name=name, version=version)
 
     def process_run(self, name: str, template_name: str, version: str):
-        return ProcessRunBuilder(session=self._session, name=name,
-                                 template_name=template_name, version=version)
+        return ProcessRunBuilder(session=self._session, name=name, template_name=template_name, version=version)
 
     def resource_template(self, name: str, type_names: list[str]):
-        return ResourceTemplateBuilder(session=self._session, name=name,
-                                       type_names=type_names)
-
-        
+        return ResourceTemplateBuilder(session=self._session, name=name, type_names=type_names)

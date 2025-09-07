@@ -21,12 +21,10 @@ if TYPE_CHECKING:
 
 
 def _reject_new(key, _value):
-    raise KeyError(
-        f"{key!r} is not a valid AttributeValue for this Parameter -"
-        "keys are fixed by the template"
-    )
+    raise KeyError(f"{key!r} is not a valid AttributeValue for this Parameter -" "keys are fixed by the template")
 
-class Parameter(Base): #, AttributeValueMixin):
+
+class Parameter(Base):  # , AttributeValueMixin):
     __tablename__ = "parameter"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
 
@@ -39,9 +37,7 @@ class Parameter(Base): #, AttributeValueMixin):
     # values: Mapped[List["AttributeValue"]] = relationship("AttributeValue", back_populates="parameter")
     _values = relationship(
         "AttributeValue",
-        collection_class=mapped_collection(
-            lambda av: av.template.name
-        ),
+        collection_class=mapped_collection(lambda av: av.template.name),
         back_populates="parameter",
         cascade="all, delete-orphan",
     )
@@ -73,7 +69,9 @@ class StepTemplate(Base):
     )
 
     process_template_id: Mapped[UUID] = mapped_column(
-        ForeignKey("process_template.id"), nullable=False, index=True,
+        ForeignKey("process_template.id"),
+        nullable=False,
+        index=True,
     )
     process_template = relationship("ProcessTemplate", back_populates="step_templates")
 
@@ -81,7 +79,7 @@ class StepTemplate(Base):
         "StepTemplateResourceSlotBinding",
         back_populates="step_template",
         cascade="all, delete-orphan",
-        collection_class=attribute_mapped_collection("role")
+        collection_class=attribute_mapped_collection("role"),
     )
     resource_slots = association_proxy(
         "bindings",
@@ -90,49 +88,34 @@ class StepTemplate(Base):
             role=slot_role, resource_slot=resource_slot
         ),
     )
-    __table_args__ = (
-            UniqueConstraint("process_template_id", "name", name="uq_step_name_per_process"),
-        )
+    __table_args__ = (UniqueConstraint("process_template_id", "name", name="uq_step_name_per_process"),)
+
 
 class StepTemplateResourceSlotBinding(Base):
     __tablename__ = "step_template_resource_slot_binding"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    step_template_id: Mapped[UUID] = mapped_column(
-        ForeignKey("step_template.id"), nullable=False
-    )
+    step_template_id: Mapped[UUID] = mapped_column(ForeignKey("step_template.id"), nullable=False)
     step_template: Mapped[StepTemplate] = relationship(back_populates="bindings")
 
-    resource_slot_id: Mapped[UUID] = mapped_column(
-        ForeignKey("resource_slot.id"), nullable=False
-    )
+    resource_slot_id: Mapped[UUID] = mapped_column(ForeignKey("resource_slot.id"), nullable=False)
     resource_slot: Mapped["ResourceSlot"] = relationship()
 
     role: Mapped[str] = mapped_column(nullable=False)
 
-    __table_args__ = (
-        UniqueConstraint("step_template_id", "role", name="uq_step_template_role"),
-    )
+    __table_args__ = (UniqueConstraint("step_template_id", "role", name="uq_step_template_role"),)
 
 
 class StepTemplateEdge(Base):
     __tablename__ = "step_template_edge"
-    process_template_id: Mapped[UUID] = mapped_column(
-        ForeignKey("process_template.id"), primary_key=True
-    )
-    from_id: Mapped[UUID] = mapped_column(
-        ForeignKey("step_template.id"), primary_key=True
-    )
-    to_id: Mapped[UUID] = mapped_column(
-        ForeignKey("step_template.id"), primary_key=True
-    )
+    process_template_id: Mapped[UUID] = mapped_column(ForeignKey("process_template.id"), primary_key=True)
+    from_id: Mapped[UUID] = mapped_column(ForeignKey("step_template.id"), primary_key=True)
+    to_id: Mapped[UUID] = mapped_column(ForeignKey("step_template.id"), primary_key=True)
 
 
 class StepEdge(Base):
     __tablename__ = "step_edge"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    process_id: Mapped[UUID] = mapped_column(
-        ForeignKey("process_run.id"), nullable=False
-    )
+    process_id: Mapped[UUID] = mapped_column(ForeignKey("process_run.id"), nullable=False)
     from_step_id: Mapped[UUID] = mapped_column(ForeignKey("step.id"), nullable=False)
     to_step_id: Mapped[UUID] = mapped_column(ForeignKey("step.id"), nullable=False)
 
@@ -142,19 +125,18 @@ class Step(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
 
-    process_run_id: Mapped[UUID] = mapped_column(
-        ForeignKey("process_run.id"), nullable=False
-    )
+    process_run_id: Mapped[UUID] = mapped_column(ForeignKey("process_run.id"), nullable=False)
     process_run: Mapped["ProcessRun"] = relationship(back_populates="steps")
 
-    step_template_id: Mapped[UUID] = mapped_column(
-        ForeignKey("step_template.id"), nullable=False
-    )
+    step_template_id: Mapped[UUID] = mapped_column(ForeignKey("step_template.id"), nullable=False)
     template: Mapped["StepTemplate"] = relationship()
     # parameters: Mapped[List["Parameter"]] = relationship(back_populates="step")
-    parameters = relationship("Parameter",
-                                collection_class=mapped_collection(lambda p: p.template.name),
-                                back_populates="step", cascade="all, delete-orphan")
+    parameters = relationship(
+        "Parameter",
+        collection_class=mapped_collection(lambda p: p.template.name),
+        back_populates="step",
+        cascade="all, delete-orphan",
+    )
 
     # next_steps: Mapped[list["Step"]] = relationship("Step", secondary="step_edge",
     #                                                 primaryjoin=id==StepEdge.from_step_id,
@@ -165,13 +147,8 @@ class Step(Base):
     #                                                 secondaryjoin=id==StepEdge.from_step_id,
     #                                                 viewonly=True,
     #                                                 lazy="selectin")
-    updated_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False
-    )
-    state: Mapped[StepStatus] = \
-            mapped_column(default=StepStatus.PENDING, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now(), nullable=False)
+    state: Mapped[StepStatus] = mapped_column(default=StepStatus.PENDING, nullable=False)
     # parameters = association_proxy(
     #     "_parameters",
     #     "parameters",

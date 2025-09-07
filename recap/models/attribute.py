@@ -56,17 +56,18 @@ def _parse_array_like(value: Any) -> list[Any]:
             return [s]
     return [value]
 
+
 class AttributeTemplate(Base):
     __tablename__ = "attribute_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(nullable=False)
     slug: Mapped[Optional[str]] = mapped_column(nullable=True)
     value_templates: Mapped[List["AttributeValueTemplate"]] = relationship(
-        back_populates="attribute_template", 
+        back_populates="attribute_template",
     )
 
     resource_templates: Mapped[List["ResourceTemplate"]] = relationship(
-       "ResourceTemplate", back_populates="attribute_templates", secondary=resource_template_attribute_association
+        "ResourceTemplate", back_populates="attribute_templates", secondary=resource_template_attribute_association
     )
     step_templates: Mapped[List["StepTemplate"]] = relationship(
         back_populates="attribute_templates", secondary=step_template_attribute_association
@@ -96,6 +97,7 @@ class AttributeValueTemplate(Base):
     attribute_template_id: Mapped[UUID] = mapped_column(ForeignKey("attribute_template.id"))
     attribute_template = relationship(AttributeTemplate, back_populates="value_templates")
 
+
 # --- Keep slug always in sync with name ---
 @event.listens_for(AttributeValueTemplate, "before_insert", propagate=True)
 def _before_insert(mapper, connection, target: AttributeValueTemplate):
@@ -105,6 +107,7 @@ def _before_insert(mapper, connection, target: AttributeValueTemplate):
 @event.listens_for(AttributeValueTemplate, "before_update", propagate=True)
 def _before_update(mapper, connection, target: AttributeValueTemplate):
     target.slug = make_slug(target.name)
+
 
 class AttributeValue(Base):
     __tablename__ = "attribute_value"
@@ -149,9 +152,7 @@ class AttributeValue(Base):
         if value is not None:
             current_type = self.template.value_type if self.template else None
             if key != f"{current_type}_value":
-                raise ValueError(
-                    f"{key} cannot be set for property type {current_type}"
-                )
+                raise ValueError(f"{key} cannot be set for property type {current_type}")
         return value
 
     def set_value(self, value):

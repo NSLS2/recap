@@ -11,6 +11,12 @@ class ValueType(str, Enum):
     FLOAT = "float"
 
 
+class StepStatus(str, Enum):
+    PENDING = "PENDING"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETE = "COMPLETE"
+
+
 # Mapping from ValueType enum to the Python type we expect
 TYPE_MAP = {
     ValueType.INT: int,

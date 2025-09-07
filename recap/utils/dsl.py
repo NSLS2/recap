@@ -2,8 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 
-def _get_or_create(session: Session, model,
-                    where: dict, defaults: dict | None = None):
+def _get_or_create(session: Session, model, where: dict, defaults: dict | None = None):
     stmt = select(model).filter_by(**where)
     obj = session.execute(stmt).scalar_one_or_none()
     if obj:
@@ -17,6 +16,7 @@ def _get_or_create(session: Session, model,
     session.add(obj)
     return obj, True
 
+
 class AliasMixin:
     """
     This is a pydantic model mixin that allows a user to access a
@@ -25,8 +25,9 @@ class AliasMixin:
     But if the user wants to use the original string. This can be used by:
     parameter.get("Sample Temperature") or
     parameter.get("sample_temperature") if they want to use the slugified string
-        
+
     """
+
     def get(self, alias: str):
         for name, field in self.__class__.model_fields.items():
             if field.alias == alias or name == alias:

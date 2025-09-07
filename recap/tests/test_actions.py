@@ -7,9 +7,11 @@ def test_container(db_session):
     from recap.models.process import ProcessTemplate, ResourceSlot, ProcessRun
 
     param_type = AttributeTemplate(
-        name="TestParamType", 
+        name="TestParamType",
     )
-    param_value_template = AttributeValueTemplate(name="volume", value_type="float", unit="uL", default_value="4.0")
+    param_value_template = AttributeValueTemplate(
+        name="volume", value_type="float", unit="uL", default_value="4.0"
+    )
     param_type.value_templates.append(param_value_template)
     db_session.add(param_type)
     process_template = ProcessTemplate(name="TestProcessTemplate")
@@ -70,9 +72,7 @@ def test_container(db_session):
     db_session.add(process_run)
     db_session.commit()
 
-    result: ProcessRun = (
-        db_session.query(ProcessRun).filter_by(name="Test Process Run").first()
-    )
+    result: ProcessRun = db_session.query(ProcessRun).filter_by(name="Test Process Run").first()
 
     assert any(r.name == "A1" for r in result.resources)
     assert result.steps[0].parameters["TestParamType"].values["volume"] == 4.0
