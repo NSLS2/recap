@@ -1,16 +1,18 @@
 from typing import List, Optional, Set, TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, Column, Table
+from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import (
     Mapped,
+    mapped_collection,
     mapped_column,
     relationship,
 )
 
 from .attribute import (
-    Attribute,
-    AttributeValueMixin,
+    AttributeTemplate,
+    AttributeValue,
     resource_template_attribute_association,
 )
 
@@ -18,34 +20,68 @@ if TYPE_CHECKING:
     from recap.models.process import ResourceAssignment
 from .base import Base
 
+def _reject_new(key, _value):
+    raise KeyError(
+        f"{key!r} is not a valid AttributeValue for this Parameter -"
+        "keys are fixed by the template"
+    )
 
-class Property(Base, AttributeValueMixin):
+class Property(Base): #, AttributeValueMixin):
     __tablename__ = "property"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
 
     resource_id: Mapped[UUID] = mapped_column(ForeignKey("resource.id"), nullable=False)
     resource: Mapped["Resource"] = relationship(back_populates="properties")
 
+    attribute_template_id: Mapped[UUID] = mapped_column(ForeignKey("attribute_template.id"))
+    template: Mapped[AttributeTemplate] = relationship(AttributeTemplate)
+
+    # values: Mapped[List["AttributeValue"]] = relationship("AttributeValue", back_populates="property")
+    _values = relationship(
+        "AttributeValue",
+        collection_class=mapped_collection(
+            lambda av: av.template.name
+        ),
+        back_populates="property",
+        cascade="all, delete-orphan"
+    )
+
+    values = association_proxy(
+        "_values",
+        "value",
+        # creator=lambda key, val: AttributeValue(
+        #     template=get_value_template_by_name(key),
+        #     value=val,
+        # )
+        creator=_reject_new,
+    )
+
     def __init__(self, *args, **kwargs):
-        value = kwargs.pop("value", None)
-        attribute = kwargs.get("attribute")
+        template: AttributeTemplate = kwargs.get("template")
         super().__init__(*args, **kwargs)
-        if value is None:
-            value = attribute.default_value
-        self.set_value(value)
+        for vt in template.value_templates:
+            av = AttributeValue(template=vt, property=self)
+            av.set_value(vt.default_value)
+
+resource_template_type_association = Table(
+    "resource_template_type_association",
+    Base.metadata,
+    Column("resource_template_id", ForeignKey("resource_template.id"), primary_key=True),
+    Column("resource_type_id", ForeignKey("resource_type.id"), primary_key=True),
+)
 
 
 class ResourceTemplate(Base):
     __tablename__ = "resource_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
-    ref_name: Mapped[str] = mapped_column(nullable=False)
+    slug: Mapped[str] = mapped_column(nullable=True)
 
-    type_id: Mapped[UUID] = mapped_column(
-        ForeignKey("resource_type.id"), nullable=False
-    )
-    type: Mapped["ResourceType"] = relationship(back_populates="resource_templates")
-
+    types: Mapped[list["ResourceType"]] = relationship(
+            "ResourceType",
+            secondary=resource_template_type_association,
+            back_populates="resource_templates",
+        )
     parent_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("resource_template.id"), nullable=True
     )
@@ -57,7 +93,7 @@ class ResourceTemplate(Base):
         "ResourceTemplate", back_populates="parent"
     )
 
-    attributes: Mapped[List["Attribute"]] = relationship(
+    attribute_templates: Mapped[List["AttributeTemplate"]] = relationship(
         back_populates="resource_templates",
         secondary=resource_template_attribute_association,
     )
@@ -68,7 +104,8 @@ class ResourceType(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
     resource_templates: Mapped[List[ResourceTemplate]] = relationship(
-        back_populates="type"
+        secondary=resource_template_type_association,
+        back_populates="types"
     )
 
 
@@ -94,9 +131,24 @@ class Resource(Base):
         "Resource", back_populates="parent"
     )
 
-    properties: Mapped[List["Property"]] = relationship(
-        "Property", back_populates="resource"
+    # properties: Mapped[List["Property"]] = relationship(
+    #     "Property", back_populates="resource"
+    # )
+
+    properties = relationship(
+        "Property",
+        collection_class=mapped_collection(
+            lambda p: p.template.name
+        ),
+        back_populates="resource",
+        cascade="all, delete-orphan"
     )
+
+    # properties = association_proxy(
+    #     "_properties",
+    #     "properties",
+    #     creator=_reject_new
+    # )
 
     assignments: Mapped[list["ResourceAssignment"]] = relationship(
         "ResourceAssignment", back_populates="resource", cascade="all, delete-orphan"
@@ -143,9 +195,9 @@ class Resource(Base):
             return
 
         visited.add(resource_template.id)
-        for prop in self.template.attributes:
-            if not any(p.attribute.id == prop.id for p in self.properties):
-                self.properties.append(Property(attribute=prop, value=None))
+        for prop in self.template.attribute_templates:
+            if not any(p.template.id == prop.id for name,p in self.properties.items()):
+                self.properties[prop.name] = (Property(template=prop))
 
         for child_ct in self.template.children:
             if child_ct in visited:
@@ -158,18 +210,4 @@ class Resource(Base):
             )
             self.children.append(child_resource)
 
-        visited.add(resource_template.id)
-        for prop in self.template.attributes:
-            if not any(p.attribute.id == prop.id for p in self.properties):
-                self.properties.append(Property(attribute=prop, value=None))
 
-        for child_ct in self.template.children:
-            if child_ct in visited:
-                continue
-            child_resource = Resource(
-                template=child_ct,
-                parent=self,
-                _visited_children=visited,
-                _max_depth=max_depth - 1,
-            )
-            self.children.append(child_resource)

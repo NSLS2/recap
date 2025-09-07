@@ -1,75 +1,98 @@
 from typing import List, Optional, TYPE_CHECKING
 from uuid import UUID, uuid4
+from datetime import datetime
 
 from sqlalchemy import ForeignKey, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_collection, mapped_column, relationship, attribute_mapped_collection
 from sqlalchemy.ext.associationproxy import association_proxy
+from sqlalchemy.sql import func
 
 from recap.models.attribute import (
-    Attribute,
-    AttributeValueMixin,
+    AttributeTemplate,
+    AttributeValue,
+    AttributeValueTemplate,
     step_template_attribute_association,
 )
 from recap.models.base import Base
+from recap.schemas.common import StepStatus
 
 if TYPE_CHECKING:
     from recap.models.process import ProcessRun, ResourceSlot
 
 
-class Parameter(Base, AttributeValueMixin):
+def _reject_new(key, _value):
+    raise KeyError(
+        f"{key!r} is not a valid AttributeValue for this Parameter -"
+        "keys are fixed by the template"
+    )
+
+class Parameter(Base): #, AttributeValueMixin):
     __tablename__ = "parameter"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
 
     step_id: Mapped[UUID] = mapped_column(ForeignKey("step.id"), nullable=False)
     step: Mapped["Step"] = relationship(back_populates="parameters")
 
+    attribute_template_id: Mapped[UUID] = mapped_column(ForeignKey("attribute_template.id"))
+    template: Mapped[AttributeTemplate] = relationship(AttributeTemplate)
+
+    # values: Mapped[List["AttributeValue"]] = relationship("AttributeValue", back_populates="parameter")
+    _values = relationship(
+        "AttributeValue",
+        collection_class=mapped_collection(
+            lambda av: av.template.name
+        ),
+        back_populates="parameter",
+        cascade="all, delete-orphan",
+    )
+
+    values = association_proxy(
+        "_values",
+        "value",
+        # creator=lambda key, val: AttributeValue(
+        #     template=get_value_template_by_name(key),
+        #     value=val,
+        # ),
+        creator=_reject_new,
+    )
+
     def __init__(self, *args, **kwargs):
-        value = kwargs.pop("value", None)
-        attribute = kwargs.get("attribute")
         super().__init__(*args, **kwargs)
-        if value is None:
-            value = attribute.default_value
-        self.set_value(value)
+        for value_template in self.template.value_templates:
+            av = AttributeValue(template=value_template, parameter=self)
+            av.set_value(value_template.default_value)
+        # self.set_value(value)
 
 
 class StepTemplate(Base):
     __tablename__ = "step_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    name: Mapped[str] = mapped_column(unique=True, nullable=False)
-    attributes: Mapped[List["Attribute"]] = relationship(
+    name: Mapped[str] = mapped_column(nullable=False)
+    attribute_templates: Mapped[List["AttributeTemplate"]] = relationship(
         back_populates="step_templates", secondary=step_template_attribute_association
     )
 
     process_template_id: Mapped[UUID] = mapped_column(
-        ForeignKey("process_template.id"), primary_key=True
+        ForeignKey("process_template.id"), nullable=False, index=True,
     )
     process_template = relationship("ProcessTemplate", back_populates="step_templates")
 
-    bindings: Mapped[list["StepTemplateResourceSlotBinding"]] = relationship(
+    bindings: Mapped[dict[str, "StepTemplateResourceSlotBinding"]] = relationship(
         "StepTemplateResourceSlotBinding",
         back_populates="step_template",
         cascade="all, delete-orphan",
+        collection_class=attribute_mapped_collection("role")
     )
     resource_slots = association_proxy(
         "bindings",
         "resource_slot",
-        creator=lambda slot_role: StepTemplateResourceSlotBinding(
-            resource_slot=slot_role[0], role=slot_role[1]
+        creator=lambda slot_role, resource_slot: StepTemplateResourceSlotBinding(
+            role=slot_role, resource_slot=resource_slot
         ),
     )
-    parent_id: Mapped[Optional[UUID]] = mapped_column(
-        ForeignKey("step_template.id"), nullable=True
-    )
-    parent: Mapped["StepTemplate"] = relationship(
-        "StepTemplate",
-        back_populates="children",
-        remote_side=[id],
-        foreign_keys=[parent_id],
-    )
-    children: Mapped[List["StepTemplate"]] = relationship(
-        "StepTemplate", foreign_keys=[parent_id], back_populates="parent"
-    )
-
+    __table_args__ = (
+            UniqueConstraint("process_template_id", "name", name="uq_step_name_per_process"),
+        )
 
 class StepTemplateResourceSlotBinding(Base):
     __tablename__ = "step_template_resource_slot_binding"
@@ -128,18 +151,43 @@ class Step(Base):
         ForeignKey("step_template.id"), nullable=False
     )
     template: Mapped["StepTemplate"] = relationship()
-    parameters: Mapped[List["Parameter"]] = relationship(back_populates="step")
+    # parameters: Mapped[List["Parameter"]] = relationship(back_populates="step")
+    parameters = relationship("Parameter",
+                                collection_class=mapped_collection(lambda p: p.template.name),
+                                back_populates="step", cascade="all, delete-orphan")
 
-    parent_id: Mapped[Optional[UUID]] = mapped_column(
-        ForeignKey("step.id"), nullable=True
+    # next_steps: Mapped[list["Step"]] = relationship("Step", secondary="step_edge",
+    #                                                 primaryjoin=id==StepEdge.from_step_id,
+    #                                                 secondaryjoin=id==StepEdge.to_step_id,
+    #                                                 viewonly=True, lazy="selectin")
+    # prev_steps: Mapped[list["Step"]] = relationship("Step", secondary="step_edge",
+    #                                                 primaryjoin=id==StepEdge.to_step_id,
+    #                                                 secondaryjoin=id==StepEdge.from_step_id,
+    #                                                 viewonly=True,
+    #                                                 lazy="selectin")
+    updated_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False
     )
-    parent: Mapped["Step"] = relationship(
-        "Step", back_populates="children", remote_side=[id], foreign_keys=[parent_id]
-    )
+    state: Mapped[StepStatus] = \
+            mapped_column(default=StepStatus.PENDING, nullable=False)
+    # parameters = association_proxy(
+    #     "_parameters",
+    #     "parameters",
+    #     creator=_reject_new
+    # )
 
-    children: Mapped[List["Step"]] = relationship(
-        "Step", foreign_keys=[parent_id], back_populates="parent"
-    )
+    # parent_id: Mapped[Optional[UUID]] = mapped_column(
+    #     ForeignKey("step.id"), nullable=True
+    # )
+    # parent: Mapped["Step"] = relationship(
+    #     "Step", back_populates="children", remote_side=[id], foreign_keys=[parent_id]
+    # )
+
+    # children: Mapped[List["Step"]] = relationship(
+    #     "Step", foreign_keys=[parent_id], back_populates="parent"
+    # )
 
     def __init__(self, *args, **kwargs):
         template: Optional[StepTemplate] = kwargs.get("template", None)
@@ -160,9 +208,15 @@ class Step(Base):
         if not template:
             return
 
-        for param in self.template.attributes:
-            if not any(p.attribute.id == param.id for p in self.parameters):
-                self.parameters.append(Parameter(attribute=param, value=None))
+        for param in self.template.attribute_templates:
+            if not any(p.template.id == param.id for name, p in self.parameters.items()):
+                self.parameters[param.name] = Parameter(template=param)
+
+    def is_root(self) -> bool:
+        return not self.prev_steps
+
+    def is_leaf(self) -> bool:
+        return not self.next_steps
 
 
 class StepResourceBinding(Base):

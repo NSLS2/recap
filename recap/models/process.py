@@ -3,11 +3,12 @@ from uuid import UUID, uuid4
 import enum
 
 from sqlalchemy import ForeignKey, Enum, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates, attribute_mapped_collection
 from sqlalchemy.ext import associationproxy
 
 from recap.models.step import StepTemplate, StepTemplateEdge, Step
 from recap.models.resource import Resource
+from recap.schemas.common import StepStatus
 
 from .base import Base
 
@@ -16,11 +17,12 @@ class Direction(str, enum.Enum):
     input = "input"
     output = "output"
 
-
 class ProcessTemplate(Base):
     __tablename__ = "process_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
+    version: Mapped[str] = mapped_column(nullable=False)
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=False)
     step_templates: Mapped[List["StepTemplate"]] = relationship(
         back_populates="process_template"
     )
@@ -32,7 +34,9 @@ class ProcessTemplate(Base):
     resource_slots: Mapped[List["ResourceSlot"]] = relationship(
         "ResourceSlot", back_populates="process_template"
     )
-
+    __table_args__ = (
+        UniqueConstraint("name", "version", name="uq_process_template_name_version"),
+    )
 
 class ResourceSlot(Base):
     __tablename__ = "resource_slot"
@@ -71,17 +75,18 @@ class ProcessRun(Base):
     )
     template: Mapped[ProcessTemplate] = relationship()
 
-    assignments: Mapped[list["ResourceAssignment"]] = relationship(
-        "ResourceAssignment", back_populates="process_run", cascade="all, delete-orphan"
+    assignments: Mapped[dict["ResourceSlot", "ResourceAssignment"]] = relationship(
+        "ResourceAssignment", back_populates="process_run",
+        cascade="all, delete-orphan",
+        collection_class=attribute_mapped_collection("resource_slot")
     )
     resources = associationproxy.association_proxy(
         "assignments",
         "resource",
-        creator=lambda res_slot: ResourceAssignment(
-            resource=res_slot[0], resource_slot=res_slot[1]
+        creator=lambda res_slot, resource: ResourceAssignment(
+            resource_slot=res_slot, resource=resource
         ),
     )
-
     steps: Mapped[List["Step"]] = relationship(back_populates="process_run")
 
     def __init__(self, *args, **kwargs):
@@ -131,7 +136,7 @@ class ResourceAssignment(Base):
     resource_slot: Mapped["ResourceSlot"] = relationship()
     # ties back to the underlying Resource
     resource: Mapped["Resource"] = relationship(
-        "Resource"  # , back_populates="assignments"
+        "Resource"  , back_populates="assignments"
     )
 
     # enforce “one assignment per run+slot”

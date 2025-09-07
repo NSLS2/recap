@@ -1,4 +1,3 @@
-from .attribute import Attribute, AttributeValueMixin
 from .step import (
     Step,
     StepTemplate,
@@ -6,16 +5,19 @@ from .step import (
     StepTemplateEdge,
     StepTemplateResourceSlotBinding,
 )
+from .resource import ResourceTemplate, ResourceType, Resource, Property
+from .attribute import AttributeValueTemplate, AttributeTemplate, AttributeValue
 from .process import ProcessTemplate, ProcessRun
-from .resource import ResourceTemplate, ResourceType, Resource
 
 __all__ = [
-    "Attribute",
-    "AttributeValueMixin",
+    "Property",
+    "Parameter",
+    "AttributeValueTemplate",
+    "AttributeTemplate",
+    "AttributeValue",
     "Step",
     "StepTemplate",
     "StepTemplateEdge",
-    "Parameter",
     "StepTemplateResourceSlotBinding",
     "ProcessRun",
     "ProcessTemplate",
