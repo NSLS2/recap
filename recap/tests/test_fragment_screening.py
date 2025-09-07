@@ -33,11 +33,10 @@ def test_fragment_screening(db_session):
 
     # Create a library plate template
     lib_plate_1536_template = ResourceTemplate(
-        name="Library Plate 1536", ref_name="LP1536", types=[container_type]
+        name="Library Plate 1536", types=[container_type]
     )
     plate_dimensions_attr = AttributeTemplate(
         name="LB1536_dimensions",
-        ref_name="LB1536_dimensions",
     )
 
     num_rows_attr_val = AttributeValueTemplate(
@@ -47,7 +46,6 @@ def test_fragment_screening(db_session):
     )
     num_cols_attr_val = AttributeValueTemplate(
         name="columns",
-        # ref_name="num_cols_LB1536",
         value_type="int",
         default_value="48",
     )
@@ -57,7 +55,9 @@ def test_fragment_screening(db_session):
     lib_plate_1536_template.attribute_templates.append(plate_dimensions_attr)
     db_session.add(lib_plate_1536_template)
     db_session.commit()
-    statement = select(ResourceTemplate).where(ResourceTemplate.ref_name == "LP1536")
+    statement = select(ResourceTemplate).where(
+        ResourceTemplate.name == "Library Plate 1536"
+    )
     lib_plate_1536_template = db_session.scalars(statement).one()
     assert (
         lib_plate_1536_template.attribute_templates[0].value_templates[0].default_value
@@ -82,13 +82,11 @@ def test_fragment_screening(db_session):
         name="content",
     )
     catalog_id = AttributeValueTemplate(
-        name="catalog_id", ref_name="catalog_id", value_type="str", default_value=""
+        name="catalog_id", value_type="str", default_value=""
     )
-    smiles = AttributeValueTemplate(
-        name="SMILES", ref_name="SMILES", value_type="str", default_value=""
-    )
+    smiles = AttributeValueTemplate(name="SMILES", value_type="str", default_value="")
     sequence = AttributeValueTemplate(
-        name="sequence", ref_name="sequence", value_type="int", default_value="0"
+        name="sequence", value_type="int", default_value="0"
     )
 
     content_attr.value_templates.append(catalog_id)
@@ -96,31 +94,29 @@ def test_fragment_screening(db_session):
     content_attr.value_templates.append(sequence)
 
     for well_data in lib_well_type_names_1536:
-        well = ResourceTemplate(
-            name=well_data["name"], ref_name=well_data["name"], types=[container_type]
-        )
+        well = ResourceTemplate(name=well_data["name"], types=[container_type])
         well.attribute_templates.append(used)
         well.attribute_templates.append(content_attr)
         db_session.add(well)
         lib_plate_1536_template.children.append(well)
 
     db_session.commit()
-    statement = select(ResourceTemplate).where(ResourceTemplate.ref_name == "LP1536")
+    statement = select(ResourceTemplate).where(
+        ResourceTemplate.name == "Library Plate 1536"
+    )
     lib_plate_1536_template = db_session.scalars(statement).one()
     assert lib_plate_1536_template.children[0].name == "A01"
 
     # Create a library plate resource
     lib_plate = Resource(
         name="Test LP1536",
-        ref_name="Test_LP1536",
         template=lib_plate_1536_template,
     )
     db_session.add(lib_plate)
     db_session.commit()
 
-    statement = select(Resource).where(Resource.ref_name == "Test_LP1536")
+    statement = select(Resource).where(Resource.name == "Test LP1536")
     lib_plate = db_session.scalars(statement).one()
-    # result = db_session.query(Resource).filter_by(ref_name="Test_LP1536").first()
     assert lib_plate.children[0].template.name == "A01"
     assert lib_plate.properties["LB1536_dimensions"].values["rows"] == 32
 
@@ -128,9 +124,7 @@ def test_fragment_screening(db_session):
     from recap.models.resource import Resource, ResourceTemplate, ResourceType
 
     # - Create an xtal plate template
-    xtal_plate_type = ResourceTemplate(
-        name="SwissCI-MRC-2d", ref_name="swiss_ci", types=[container_type]
-    )
+    xtal_plate_type = ResourceTemplate(name="SwissCI-MRC-2d", types=[container_type])
     a_to_h = generate_uppercase_alphabets(8)
     a_to_p = generate_uppercase_alphabets(16)
 
@@ -139,18 +133,14 @@ def test_fragment_screening(db_session):
     plate_maps = [{"echo": i, "shifter": j} for i, j in zip(echo, shifter)]
 
     well_position = AttributeTemplate(name="well_position")
-    well_pos_x = AttributeValueTemplate(
-        name="x", ref_name="x", value_type="int", default_value="0"
-    )
+    well_pos_x = AttributeValueTemplate(name="x", value_type="int", default_value="0")
     well_pos_y_offset_0 = AttributeValueTemplate(
         name="y_0",
-        ref_name="y_0",
         value_type="int",
         default_value="0",
     )
     well_pos_y_offset_1350 = AttributeValueTemplate(
         name="y_1350",
-        ref_name="y_1350",
         value_type="int",
         default_value="1350",
     )
@@ -169,12 +159,10 @@ def test_fragment_screening(db_session):
 
         xtal_well_type = ResourceTemplate(
             name=plate_map["shifter"],
-            ref_name=plate_map["shifter"],
             types=[container_type],
         )
         echo_pos = AttributeValueTemplate(
             name=f"echo_pos_{plate_map['echo']}",
-            ref_name=f"echo_pos_{plate_map['echo']}",
             value_type="str",
             default_value=plate_map["echo"],
         )
@@ -185,9 +173,7 @@ def test_fragment_screening(db_session):
         xtal_plate_type.children.append(xtal_well_type)
 
     # - Create Xtal plate resource
-    xtal_plate = Resource(
-        name="TestXtalPlate", ref_name="TestXtalPlate", template=xtal_plate_type
-    )
+    xtal_plate = Resource(name="TestXtalPlate", template=xtal_plate_type)
     db_session.add(xtal_plate)
     db_session.commit()
 
@@ -234,12 +220,10 @@ def test_fragment_screening(db_session):
 
     puck_collection_template = ResourceTemplate(
         name="Puck collection template",
-        ref_name="puck_collection_template",
         types=[container_type],
     )
     puck_collection = Resource(
         name="PuckCollection",
-        ref_name="puck_collection",
         template=puck_collection_template,
     )
     db_session.add(puck_collection)
@@ -314,6 +298,7 @@ def test_fragment_screening(db_session):
 
     db_session.add(image_plate_template)
     db_session.add(echo_tx_template)
+    db_session.add(harvesting_step_template)
     db_session.commit()
 
     process_template.step_templates.extend(

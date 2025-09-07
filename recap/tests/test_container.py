@@ -15,9 +15,8 @@ def test_attribute(db_session):
     container_type = ResourceType(name="container")
     container_template = ResourceTemplate(
         name="TestContainer",
-        ref_name="tct",
         attribute_templates=[prop_type],
-        type=container_type,
+        types=[container_type],
     )
     db_session.add(container_type)
     db_session.add(container_template)
@@ -27,15 +26,16 @@ def test_attribute(db_session):
     result = db_session.query(ResourceTemplate).filter_by(name="TestContainer").first()
 
     assert result.attribute_templates[0].value_templates[0].unit == "kg"
-    assert result.type.name == "container"
+    assert result.types[0].name == "container"
 
 
 def test_container_type(db_session):
     from recap.models.resource import ResourceTemplate, ResourceType
 
     container_type = ResourceType(name="container")
-    container_type = ResourceTemplate(name="test", ref_name="test", type=container_type)
+    container = ResourceTemplate(name="test", types=[container_type])
     db_session.add(container_type)
+    db_session.add(container)
     db_session.commit()
 
     result = db_session.query(ResourceTemplate).filter_by(name="test").first()
@@ -55,16 +55,13 @@ def test_container(db_session):
     container_type = ResourceType(name="container")
     container_template = ResourceTemplate(
         name="TestContainerType",
-        ref_name="test",
         attribute_templates=[prop_type],
-        type=container_type,
+        types=[container_type],
     )
     db_session.add(container_type)
     db_session.commit()
 
-    container = Resource(
-        name="TestContainer", ref_name="blah", template=container_template
-    )
+    container = Resource(name="TestContainer", template=container_template)
     db_session.add(container)
 
     db_session.commit()
@@ -82,9 +79,8 @@ def test_container(db_session):
 
     child_container_type = ResourceTemplate(
         name="ChildTestContainerType",
-        ref_name="ctct",
         attribute_templates=[child_prop_type],
-        type=container_type,
+        types=[container_type],
     )
     db_session.add(child_container_type)
     db_session.commit()

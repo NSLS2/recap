@@ -30,7 +30,6 @@ def test_solution_scattering_sample_prep(db_session):
 
     sample_plate_96_well = ResourceTemplate(
         name="96-well sample template",
-        ref_name="96WST",
         types=[container_resource_type],
     )
     num_rows_attr_val = AttributeValueTemplate(
@@ -41,14 +40,15 @@ def test_solution_scattering_sample_prep(db_session):
     )
     plate_dimensions_attr = AttributeTemplate(
         name="96_well_plate_dimesions",
-        ref_name="96_well_plate_dimesions",
         value_templates=[num_rows_attr_val, num_cols_attr_val],
     )
     sample_plate_96_well.attribute_templates.append(plate_dimensions_attr)
     db_session.add(sample_plate_96_well)
     db_session.commit()
 
-    statement = select(ResourceTemplate).where(ResourceTemplate.ref_name == "96WST")
+    statement = select(ResourceTemplate).where(
+        ResourceTemplate.name == "96-well sample template"
+    )
     sample_plate_96_well: ResourceTemplate = db_session.scalars(statement).one()
     assert (
         sample_plate_96_well.attribute_templates[0].value_templates[0].default_value
@@ -90,7 +90,7 @@ def test_solution_scattering_sample_prep(db_session):
     well_resource_type = ResourceType(name="well")
     for well_name in well_names:
         well_resource_template = ResourceTemplate(
-            name=well_name, ref_name=well_name, types=[well_resource_type]
+            name=well_name, types=[well_resource_type]
         )
         well_resource_template.attribute_templates.append(well_data)
         db_session.add(well_resource_template)
@@ -99,7 +99,7 @@ def test_solution_scattering_sample_prep(db_session):
     db_session.commit()
 
     sample_holder = ResourceTemplate(
-        name="sample holder template", ref_name="18SH", types=[container_resource_type]
+        name="sample holder template", types=[container_resource_type]
     )
     # Well attributes
     sample_well_data = AttributeTemplate(
@@ -108,7 +108,7 @@ def test_solution_scattering_sample_prep(db_session):
     )
     for well_num in range(1, 19):
         well_resource_template = ResourceTemplate(
-            name=str(well_num), ref_name=str(well_num), types=[well_resource_type]
+            name=str(well_num), types=[well_resource_type]
         )
         well_resource_template.attribute_templates.append(sample_well_data)
         db_session.add(well_resource_template)
@@ -138,14 +138,12 @@ def test_solution_scattering_sample_prep(db_session):
 
     volume_attr_value = AttributeValueTemplate(
         name="volume",
-        ref_name="volume",
         value_type="float",
         unit="uL",
         default_value="0",
     )
     volume_transferred_template = AttributeTemplate(
         name="volume_transferred",
-        ref_name="volume_transferred",
         value_templates=[volume_attr_value],
     )
 

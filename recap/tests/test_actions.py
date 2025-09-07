@@ -14,7 +14,7 @@ def test_container(db_session):
     )
     param_type.value_templates.append(param_value_template)
     db_session.add(param_type)
-    process_template = ProcessTemplate(name="TestProcessTemplate")
+    process_template = ProcessTemplate(name="TestProcessTemplate", version="1.0")
     container_type = ResourceType(name="container")
     container_1_resource_slot = ResourceSlot(
         process_template=process_template,
@@ -34,11 +34,9 @@ def test_container(db_session):
         name="TestActionType",
         attribute_templates=[param_type],
         process_template=process_template,
-        resource_slots=[
-            (container_1_resource_slot, "source_container"),
-            (container_2_resource_slot, "dest_container"),
-        ],
     )
+    step_template.resource_slots["source_container"] = container_1_resource_slot
+    step_template.resource_slots["dest_container"] = container_2_resource_slot
 
     db_session.add(step_template)
     db_session.commit()
@@ -51,8 +49,7 @@ def test_container(db_session):
     db_session.add(child_prop_type)
     child_container_template = ResourceTemplate(
         name="ChildTestContainerType",
-        ref_name="ctc",
-        type=container_type,
+        types=[container_type],
         attribute_templates=[child_attr_template],
     )
     db_session.add(child_container_template)
@@ -61,14 +58,10 @@ def test_container(db_session):
     child_container_a1 = Resource(name="A1", template=child_container_template)
     child_container_a2 = Resource(name="A2", template=child_container_template)
     process_run = ProcessRun(
-        name="Test Process Run",
-        description="This is a test",
-        template=process_template,
-        resources=[
-            (child_container_a1, container_1_resource_slot),
-            (child_container_a2, container_2_resource_slot),
-        ],
+        name="Test Process Run", description="This is a test", template=process_template
     )
+    process_run.resources[container_1_resource_slot] = child_container_a1
+    process_run.resources[container_2_resource_slot] = child_container_a2
     db_session.add(process_run)
     db_session.commit()
 
@@ -76,5 +69,5 @@ def test_container(db_session):
         db_session.query(ProcessRun).filter_by(name="Test Process Run").first()
     )
 
-    assert any(r.name == "A1" for r in result.resources)
+    assert result.resources[container_1_resource_slot].name == "A1"
     assert result.steps[0].parameters["TestParamType"].values["volume"] == 4.0
