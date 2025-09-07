@@ -1,12 +1,16 @@
+from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
+
+
 def test_container(db_session):
-    from recap.models.attribute import Attribute
     from recap.models.step import StepTemplate
     from recap.models.resource import Resource, ResourceTemplate, ResourceType
     from recap.models.process import ProcessTemplate, ResourceSlot, ProcessRun
 
-    param_type = Attribute(
-        name="TestParamType", value_type="float", unit="uL", default_value="4.0"
+    param_type = AttributeTemplate(
+        name="TestParamType", 
     )
+    param_value_template = AttributeValueTemplate(name="volume", value_type="float", unit="uL", default_value="4.0")
+    param_type.value_templates.append(param_value_template)
     db_session.add(param_type)
     process_template = ProcessTemplate(name="TestProcessTemplate")
     container_type = ResourceType(name="container")
@@ -26,7 +30,7 @@ def test_container(db_session):
     process_template.resource_slots.append(container_2_resource_slot)
     step_template = StepTemplate(
         name="TestActionType",
-        attributes=[param_type],
+        attribute_templates=[param_type],
         process_template=process_template,
         resource_slots=[
             (container_1_resource_slot, "source_container"),
@@ -37,15 +41,17 @@ def test_container(db_session):
     db_session.add(step_template)
     db_session.commit()
 
-    child_prop_type = Attribute(
+    child_prop_type = AttributeValueTemplate(
         name="ChildPropTest", value_type="float", unit="mm", default_value="2.2"
     )
+    child_attr_template = AttributeTemplate(name="Child test")
+    child_attr_template.value_templates.append(child_prop_type)
     db_session.add(child_prop_type)
     child_container_template = ResourceTemplate(
         name="ChildTestContainerType",
         ref_name="ctc",
         type=container_type,
-        attributes=[child_prop_type],
+        attribute_templates=[child_attr_template],
     )
     db_session.add(child_container_template)
     db_session.commit()
@@ -69,4 +75,4 @@ def test_container(db_session):
     )
 
     assert any(r.name == "A1" for r in result.resources)
-    assert result.steps[0].parameters[0].value == 4.0
+    assert result.steps[0].parameters["TestParamType"].values["volume"] == 4.0

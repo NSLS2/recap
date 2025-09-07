@@ -1,15 +1,20 @@
+from recap.models.attribute import AttributeValueTemplate
+
+
 def test_attribute(db_session):
-    from recap.models.attribute import Attribute
+    from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
     from recap.models.resource import ResourceTemplate, ResourceType
 
-    prop_type = Attribute(name="TestProp", value_type="int", unit="kg")
+    prop_type = AttributeTemplate(name="TestProp") #, value_type="int", unit="kg")
+    prop_value_template = AttributeValueTemplate(name="test_value", value_type="int", unit="kg", default_value=3)
+    prop_type.value_templates.append(prop_value_template)
     db_session.add(prop_type)
 
     container_type = ResourceType(name="container")
     container_template = ResourceTemplate(
         name="TestContainer",
         ref_name="tct",
-        attributes=[prop_type],
+        attribute_templates=[prop_type],
         type=container_type,
     )
     db_session.add(container_type)
@@ -19,7 +24,7 @@ def test_attribute(db_session):
 
     result = db_session.query(ResourceTemplate).filter_by(name="TestContainer").first()
 
-    assert result.attributes[0].unit == "kg"
+    assert result.attribute_templates[0].value_templates[0].unit == "kg"
     assert result.type.name == "container"
 
 
@@ -36,18 +41,20 @@ def test_container_type(db_session):
 
 
 def test_container(db_session):
-    from recap.models.attribute import Attribute
+    from recap.models.attribute import AttributeTemplate
     from recap.models.resource import ResourceTemplate, Resource, ResourceType
 
-    prop_type = Attribute(
-        name="TestPropType", value_type="int", unit="kg", default_value="10"
+    prop_type = AttributeTemplate(
+        name="TestPropType" #, 
     )
+    prop_value_template = AttributeValueTemplate(name="test_prop_val", value_type="int", unit="kg", default_value="10")
+    prop_type.value_templates.append(prop_value_template)
     db_session.add(prop_type)
     container_type = ResourceType(name="container")
     container_template = ResourceTemplate(
         name="TestContainerType",
         ref_name="test",
-        attributes=[prop_type],
+        attribute_templates=[prop_type],
         type=container_type,
     )
     db_session.add(container_type)
@@ -62,17 +69,19 @@ def test_container(db_session):
 
     result = db_session.query(Resource).filter_by(name="TestContainer").first()
 
-    assert result.properties[0].value == 10
+    assert result.properties["TestPropType"].values["test_prop_val"] == 10
 
-    child_prop_type = Attribute(
-        name="ChildPropTest", value_type="float", unit="mm", default_value="2.2"
+    child_prop_type = AttributeTemplate(
+        name="ChildPropTest"
     )
+    child_value_template = AttributeValueTemplate(name="child_prop_test", value_type="float", unit="mm", default_value="2.2")
+    child_prop_type.value_templates.append(child_value_template)
     db_session.add(child_prop_type)
 
     child_container_type = ResourceTemplate(
         name="ChildTestContainerType",
         ref_name="ctct",
-        attributes=[child_prop_type],
+        attribute_templates=[child_prop_type],
         type=container_type,
     )
     db_session.add(child_container_type)
@@ -89,4 +98,4 @@ def test_container(db_session):
 
     assert len(result.children) == 2
     assert result.children[0].name == "A1"
-    assert result.children[1].properties[0].value == 2.2
+    assert result.children[1].properties["ChildPropTest"].values["child_prop_test"] == 2.2
