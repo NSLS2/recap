@@ -5,8 +5,7 @@ from recap.utils.general import generate_uppercase_alphabets
 
 
 def test_fragment_screening(db_session):
-    from recap.models.attribute import (AttributeTemplate,
-                                        AttributeValueTemplate)
+    from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
     from recap.models.resource import Resource, ResourceTemplate, ResourceType
 
     """
@@ -60,17 +59,24 @@ def test_fragment_screening(db_session):
     db_session.commit()
     statement = select(ResourceTemplate).where(ResourceTemplate.ref_name == "LP1536")
     lib_plate_1536_template = db_session.scalars(statement).one()
-    assert lib_plate_1536_template.attribute_templates[0].value_templates[0].default_value == "32"
+    assert (
+        lib_plate_1536_template.attribute_templates[0].value_templates[0].default_value
+        == "32"
+    )
 
     # Create library well templates and associate with plate template
     a_to_af = generate_uppercase_alphabets(32)
-    lib_well_type_names_1536 = [{"name": f"{i}{str(j).zfill(2)}"} for i in a_to_af for j in range(1, 49)]
+    lib_well_type_names_1536 = [
+        {"name": f"{i}{str(j).zfill(2)}"} for i in a_to_af for j in range(1, 49)
+    ]
 
     # Well attributes
     used = AttributeTemplate(
         name="well_status",
     )
-    used_value = AttributeValueTemplate(name="used", value_type="bool", default_value="true")
+    used_value = AttributeValueTemplate(
+        name="used", value_type="bool", default_value="true"
+    )
     used.value_templates.append(used_value)
     content_attr = AttributeTemplate(
         name="content",
@@ -78,15 +84,21 @@ def test_fragment_screening(db_session):
     catalog_id = AttributeValueTemplate(
         name="catalog_id", ref_name="catalog_id", value_type="str", default_value=""
     )
-    smiles = AttributeValueTemplate(name="SMILES", ref_name="SMILES", value_type="str", default_value="")
-    sequence = AttributeValueTemplate(name="sequence", ref_name="sequence", value_type="int", default_value="0")
+    smiles = AttributeValueTemplate(
+        name="SMILES", ref_name="SMILES", value_type="str", default_value=""
+    )
+    sequence = AttributeValueTemplate(
+        name="sequence", ref_name="sequence", value_type="int", default_value="0"
+    )
 
     content_attr.value_templates.append(catalog_id)
     content_attr.value_templates.append(smiles)
     content_attr.value_templates.append(sequence)
 
     for well_data in lib_well_type_names_1536:
-        well = ResourceTemplate(name=well_data["name"], ref_name=well_data["name"], types=[container_type])
+        well = ResourceTemplate(
+            name=well_data["name"], ref_name=well_data["name"], types=[container_type]
+        )
         well.attribute_templates.append(used)
         well.attribute_templates.append(content_attr)
         db_session.add(well)
@@ -112,12 +124,13 @@ def test_fragment_screening(db_session):
     assert lib_plate.children[0].template.name == "A01"
     assert lib_plate.properties["LB1536_dimensions"].values["rows"] == 32
 
-    from recap.models.attribute import (AttributeTemplate,
-                                        AttributeValueTemplate)
+    from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
     from recap.models.resource import Resource, ResourceTemplate, ResourceType
 
     # - Create an xtal plate template
-    xtal_plate_type = ResourceTemplate(name="SwissCI-MRC-2d", ref_name="swiss_ci", types=[container_type])
+    xtal_plate_type = ResourceTemplate(
+        name="SwissCI-MRC-2d", ref_name="swiss_ci", types=[container_type]
+    )
     a_to_h = generate_uppercase_alphabets(8)
     a_to_p = generate_uppercase_alphabets(16)
 
@@ -126,7 +139,9 @@ def test_fragment_screening(db_session):
     plate_maps = [{"echo": i, "shifter": j} for i, j in zip(echo, shifter)]
 
     well_position = AttributeTemplate(name="well_position")
-    well_pos_x = AttributeValueTemplate(name="x", ref_name="x", value_type="int", default_value="0")
+    well_pos_x = AttributeValueTemplate(
+        name="x", ref_name="x", value_type="int", default_value="0"
+    )
     well_pos_y_offset_0 = AttributeValueTemplate(
         name="y_0",
         ref_name="y_0",
@@ -170,7 +185,9 @@ def test_fragment_screening(db_session):
         xtal_plate_type.children.append(xtal_well_type)
 
     # - Create Xtal plate resource
-    xtal_plate = Resource(name="TestXtalPlate", ref_name="TestXtalPlate", template=xtal_plate_type)
+    xtal_plate = Resource(
+        name="TestXtalPlate", ref_name="TestXtalPlate", template=xtal_plate_type
+    )
     db_session.add(xtal_plate)
     db_session.commit()
 
@@ -181,7 +198,9 @@ def test_fragment_screening(db_session):
     # - Create Process template
     from recap.models.process import ProcessRun, ProcessTemplate, ResourceSlot
 
-    process_template = ProcessTemplate(name="Fragment Screening Sample Prep", version="1.0")
+    process_template = ProcessTemplate(
+        name="Fragment Screening Sample Prep", version="1.0"
+    )
     #     - Create resource slots
     lib_plate_resource_slot = ResourceSlot(
         process_template=process_template,
@@ -196,7 +215,10 @@ def test_fragment_screening(db_session):
         direction="input",
     )
     puck_tray_resource_slot = ResourceSlot(
-        process_template=process_template, resource_type=container_type, name="puck_tray", direction="output"
+        process_template=process_template,
+        resource_type=container_type,
+        name="puck_tray",
+        direction="output",
     )
     process_template.resource_slots.append(lib_plate_resource_slot)
     process_template.resource_slots.append(xtal_plate_resource_slot)
@@ -204,15 +226,21 @@ def test_fragment_screening(db_session):
     db_session.add(process_template)
     db_session.commit()
 
-    statement = select(ProcessTemplate).where(ProcessTemplate.name == "Fragment Screening Sample Prep")
+    statement = select(ProcessTemplate).where(
+        ProcessTemplate.name == "Fragment Screening Sample Prep"
+    )
     process_template: ProcessTemplate = db_session.scalars(statement).one()
     assert any(slot.name == "library_plate" for slot in process_template.resource_slots)
 
     puck_collection_template = ResourceTemplate(
-        name="Puck collection template", ref_name="puck_collection_template", types=[container_type]
+        name="Puck collection template",
+        ref_name="puck_collection_template",
+        types=[container_type],
     )
     puck_collection = Resource(
-        name="PuckCollection", ref_name="puck_collection", template=puck_collection_template
+        name="PuckCollection",
+        ref_name="puck_collection",
+        template=puck_collection_template,
     )
     db_session.add(puck_collection)
     db_session.commit()
@@ -220,20 +248,32 @@ def test_fragment_screening(db_session):
     #     - Create Step templates and connect them to resource slots
     # Steps for fragment screening
     # 1. Image plate
-    drop_volume_val = AttributeValueTemplate(name="volume", value_type="float", unit="nL", default_value=0)
-    drop_volume_attr = AttributeTemplate(name="drop_volume", value_templates=[drop_volume_val])
+    drop_volume_val = AttributeValueTemplate(
+        name="volume", value_type="float", unit="nL", default_value=0
+    )
+    drop_volume_attr = AttributeTemplate(
+        name="drop_volume", value_templates=[drop_volume_val]
+    )
     image_plate_template = StepTemplate(
-        name="Image plate", process_template=process_template, attribute_templates=[drop_volume_attr]
+        name="Image plate",
+        process_template=process_template,
+        attribute_templates=[drop_volume_attr],
     )
     image_plate_template.resource_slots["xtal_container"] = xtal_plate_resource_slot
 
     # 2. Echo transfer
-    volume_transferred_val = AttributeValueTemplate(name="volume", value_type="float", unit="nL", default_value=0)
+    volume_transferred_val = AttributeValueTemplate(
+        name="volume", value_type="float", unit="nL", default_value=0
+    )
     volume_transferred_attr = AttributeTemplate(
         name="volume_transferred", value_templates=[volume_transferred_val]
     )
-    batch_number_value = AttributeValueTemplate(name="batch", value_type="int", default_value=0)
-    batch_number_attr = AttributeTemplate(name="batch_number", value_templates=[batch_number_value])
+    batch_number_value = AttributeValueTemplate(
+        name="batch", value_type="int", default_value=0
+    )
+    batch_number_attr = AttributeTemplate(
+        name="batch_number", value_templates=[batch_number_value]
+    )
     echo_tx_template = StepTemplate(
         name="Echo Transfer",
         process_template=process_template,
@@ -243,27 +283,42 @@ def test_fragment_screening(db_session):
     echo_tx_template.resource_slots["dest_container"] = xtal_plate_resource_slot
 
     # 3. Harvesting
-    time_departure_val = AttributeValueTemplate(name="departure_time", value_type="datetime")
-    time_arrival_val = AttributeValueTemplate(name="arrival_time", value_type="datetime")
+    time_departure_val = AttributeValueTemplate(
+        name="departure_time", value_type="datetime"
+    )
+    time_arrival_val = AttributeValueTemplate(
+        name="arrival_time", value_type="datetime"
+    )
     lsdc_sample_val = AttributeValueTemplate(name="sample_name", value_type="str")
     comment_val = AttributeValueTemplate(name="comment", value_type="str")
     harvesting_status_val = AttributeValueTemplate(name="status", value_type="bool")
     harvesting_attr = AttributeTemplate(
         name="harvesting",
-        value_templates=[time_departure_val, time_arrival_val, comment_val, harvesting_status_val],
+        value_templates=[
+            time_departure_val,
+            time_arrival_val,
+            comment_val,
+            harvesting_status_val,
+        ],
     )
     lsdc_attr = AttributeTemplate(name="lsdc", value_templates=[lsdc_sample_val])
     harvesting_step_template = StepTemplate(
-        name="Harvesting", process_template=process_template, attribute_templates=[harvesting_attr, lsdc_attr]
+        name="Harvesting",
+        process_template=process_template,
+        attribute_templates=[harvesting_attr, lsdc_attr],
     )
-    harvesting_step_template.resource_slots["source_container"] = xtal_plate_resource_slot
+    harvesting_step_template.resource_slots["source_container"] = (
+        xtal_plate_resource_slot
+    )
     harvesting_step_template.resource_slots["dest_container"] = puck_tray_resource_slot
 
     db_session.add(image_plate_template)
     db_session.add(echo_tx_template)
     db_session.commit()
 
-    process_template.step_templates.extend([image_plate_template, echo_tx_template, harvesting_step_template])
+    process_template.step_templates.extend(
+        [image_plate_template, echo_tx_template, harvesting_step_template]
+    )
     db_session.add(process_template)
     db_session.commit()
 

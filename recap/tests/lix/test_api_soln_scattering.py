@@ -12,8 +12,13 @@ def test_client(db_session):
     with client.process_template("Test", "0.0.1") as ed:
         ed.add_resource_slot(
             "Input plate 1", "container", Direction.input, create_resource_type=True
-        ).add_resource_slot("Input plate 2", "container", Direction.input).add_resource_slot(
-            "Liquid transfer operator", "operator", Direction.input, create_resource_type=True
+        ).add_resource_slot(
+            "Input plate 2", "container", Direction.input
+        ).add_resource_slot(
+            "Liquid transfer operator",
+            "operator",
+            Direction.input,
+            create_resource_type=True,
         ).add_step(
             "Transfer"
         ).bind(
@@ -50,15 +55,35 @@ def test_client(db_session):
                 default="",
                 create_group=True,
             ).add_prop(
-                group_name="well_data", prop_name="buffer_name", value_type="str", unit="", default=""
+                group_name="well_data",
+                prop_name="buffer_name",
+                value_type="str",
+                unit="",
+                default="",
             ).add_prop(
-                group_name="well_data", prop_name="volume", value_type="int", unit="uL", default="0"
+                group_name="well_data",
+                prop_name="volume",
+                value_type="int",
+                unit="uL",
+                default="0",
             ).add_prop(
-                group_name="well_data", prop_name="mixing", value_type="str", unit="", default=""
+                group_name="well_data",
+                prop_name="mixing",
+                value_type="str",
+                unit="",
+                default="",
             ).add_prop(
-                group_name="well_data", prop_name="stock", value_type="bool", unit="", default="False"
+                group_name="well_data",
+                prop_name="stock",
+                value_type="bool",
+                unit="",
+                default="False",
             ).add_prop(
-                group_name="well_data", prop_name="notes", value_type="str", unit="", default=""
+                group_name="well_data",
+                prop_name="notes",
+                value_type="str",
+                unit="",
+                default="",
             ).complete_child()
 
     with client.resource_template("sample holder", ["container", "plate"]) as rt:
@@ -87,10 +112,14 @@ def test_client(db_session):
                 default="0",
             ).complete_child()
 
-    with client.process_run(name="test_run", template_name="Test", version="0.0.1") as run:
+    with client.process_run(
+        name="test_run", template_name="Test", version="0.0.1"
+    ) as run:
         run.create_resource("96 well plate", "96 well plate")
         run.create_resource("Test destination plate", "sample holder")
-        run.assign_resource("Input plate 1", resource_name="96 well plate").assign_resource(
+        run.assign_resource(
+            "Input plate 1", resource_name="96 well plate"
+        ).assign_resource(
             "Input plate 2", resource_name="Test destination plate"
         )  # .assign_resource("Liquid transfer operator", resource_name="Robot XYZ")
 

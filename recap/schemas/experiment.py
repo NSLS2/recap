@@ -27,7 +27,9 @@ class ActionTypeSchema(BaseModel):
     source_container: Optional[ContainerTypeSchema] = None
     dest_container: ContainerTypeSchema
     decomposable: bool = Field(default=False, description=decomposable_description)
-    custom_subactions: bool = Field(default=False, description=custom_subactions_description)
+    custom_subactions: bool = Field(
+        default=False, description=custom_subactions_description
+    )
 
 
 class ActionSchema(BaseModel):
@@ -40,7 +42,9 @@ class ActionSchema(BaseModel):
 
 class WorkflowTypeSchema(BaseModel):
     name: str = Field(..., description="Name of the experiment type")
-    action_types: List[ActionTypeSchema] = Field(..., description="List of ordered action steps")
+    action_types: List[ActionTypeSchema] = Field(
+        ..., description="List of ordered action steps"
+    )
 
 
 class WorkflowSchema(BaseModel):

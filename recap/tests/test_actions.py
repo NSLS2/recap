@@ -72,7 +72,9 @@ def test_container(db_session):
     db_session.add(process_run)
     db_session.commit()
 
-    result: ProcessRun = db_session.query(ProcessRun).filter_by(name="Test Process Run").first()
+    result: ProcessRun = (
+        db_session.query(ProcessRun).filter_by(name="Test Process Run").first()
+    )
 
     assert any(r.name == "A1" for r in result.resources)
     assert result.steps[0].parameters["TestParamType"].values["volume"] == 4.0

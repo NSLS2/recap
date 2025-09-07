@@ -1,0 +1,12 @@
+repos:
+  - repo: https://github.com/psf/black
+    rev: 25.1.0  # Pin to a stable version
+    hooks:
+      - id: black
+        args: [--line-length=88]  # Optional: customize line length
+
+  - repo: https://github.com/pycqa/isort
+    rev: 6.0.1
+    hooks:
+      - id: isort
+        args: ["--profile=black"]  # Make isort play nice with black

@@ -58,7 +58,9 @@ class ResourceTemplateBuilder:
     @property
     def template(self) -> ResourceTemplate:
         if self._template is None:
-            raise RuntimeError("Call .save() first or construct template via builder methods")
+            raise RuntimeError(
+                "Call .save() first or construct template via builder methods"
+            )
         return self._template
 
     def _ensure_template(self):
@@ -98,7 +100,9 @@ class ResourceTemplateBuilder:
             )
         ).scalar_one_or_none()
         if prop_value is not None:
-            warnings.warn(f"Property {prop_name} already exists for {group_name}", stacklevel=2)
+            warnings.warn(
+                f"Property {prop_name} already exists for {group_name}", stacklevel=2
+            )
         else:
             prop_value = AttributeValueTemplate(
                 name=prop_name,
@@ -116,7 +120,11 @@ class ResourceTemplateBuilder:
         prop_group = self.session.execute(
             select(AttributeTemplate)
             .filter_by(name=group_name)
-            .where(AttributeTemplate.resource_templates.any(ResourceTemplate.id == self._template.id))
+            .where(
+                AttributeTemplate.resource_templates.any(
+                    ResourceTemplate.id == self._template.id
+                )
+            )
         ).scalar_one_or_none()
 
         if prop_group is None:
@@ -124,7 +132,9 @@ class ResourceTemplateBuilder:
             return self
 
         prop_value = self.session.execute(
-            select(AttributeValueTemplate).filter_by(name=prop_name, attribute_template=prop_group)
+            select(AttributeValueTemplate).filter_by(
+                name=prop_name, attribute_template=prop_group
+            )
         ).scalar_one_or_none()
         if prop_value is None:
             warnings.warn(f"Property does not exist in group {group_name}: {prop_name}")
@@ -134,7 +144,9 @@ class ResourceTemplateBuilder:
         return self
 
     def add_child(self, name: str, type_names: list[str]):
-        child_builder = ResourceTemplateBuilder(self.session, name=name, type_names=type_names, parent=self)
+        child_builder = ResourceTemplateBuilder(
+            self.session, name=name, type_names=type_names, parent=self
+        )
         return child_builder
 
     def complete_child(self):

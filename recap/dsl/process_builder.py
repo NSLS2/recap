@@ -7,8 +7,12 @@ from pydantic import BaseModel, Field, create_model
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from recap.models import (AttributeTemplate, AttributeValueTemplate,
-                          ProcessTemplate, StepTemplate)
+from recap.models import (
+    AttributeTemplate,
+    AttributeValueTemplate,
+    ProcessTemplate,
+    StepTemplate,
+)
 from recap.models.process import Direction, ProcessRun, ResourceSlot
 from recap.models.resource import Resource, ResourceTemplate, ResourceType
 from recap.models.step import Parameter, Step, StepTemplate
@@ -46,7 +50,9 @@ class ProcessTemplateBuilder:
     @property
     def template(self) -> ProcessTemplate:
         if not self._template:
-            raise RuntimeError("Call .save() first or construct template via builder methods")
+            raise RuntimeError(
+                "Call .save() first or construct template via builder methods"
+            )
         return self._template
 
     def _ensure_template(self):
@@ -56,14 +62,22 @@ class ProcessTemplateBuilder:
         defaults = {}
         if hasattr(ProcessTemplate, "version"):
             defaults["version"] = self.version
-        tpl, _ = _get_or_create(self.session, ProcessTemplate, where=where, defaults=defaults)
+        tpl, _ = _get_or_create(
+            self.session, ProcessTemplate, where=where, defaults=defaults
+        )
         self._template = tpl
 
     def add_resource_slot(
-        self, name: str, resource_type: str, direction: Direction, create_resource_type=False
+        self,
+        name: str,
+        resource_type: str,
+        direction: Direction,
+        create_resource_type=False,
     ) -> "ProcessTemplateBuilder":
         self._ensure_template()
-        rt = self.session.execute(select(ResourceType).filter_by(name=resource_type)).scalar_one_or_none()
+        rt = self.session.execute(
+            select(ResourceType).filter_by(name=resource_type)
+        ).scalar_one_or_none()
         if rt is None:
             if create_resource_type == False:
                 raise ValueError(
@@ -79,7 +93,9 @@ class ProcessTemplateBuilder:
             defaults={"resource_type": rt, "direction": direction},
         )
         if slot.resource_type_id != rt.id and slot.direction != direction:
-            raise ValueError(f"ResourceSlot {name} already exists with different type/direction")
+            raise ValueError(
+                f"ResourceSlot {name} already exists with different type/direction"
+            )
         self._resource_slots[name] = slot
         return self
 
@@ -135,7 +151,10 @@ class StepTemplateBuilder:
             )
         ).scalar_one_or_none()
         if param_value is not None:
-            warnings.warn(f"Parameter {param_name} already exists for {group_name}. Nothing changed", stacklevel=2)
+            warnings.warn(
+                f"Parameter {param_name} already exists for {group_name}. Nothing changed",
+                stacklevel=2,
+            )
         else:
             param_value = AttributeValueTemplate(
                 name=param_name,
@@ -154,18 +173,28 @@ class StepTemplateBuilder:
         param_group = self.session.execute(
             select(AttributeTemplate)
             .filter_by(name=group_name)
-            .where(AttributeTemplate.step_templates.any(StepTemplate.id == self.step.id))
+            .where(
+                AttributeTemplate.step_templates.any(StepTemplate.id == self.step.id)
+            )
         ).scalar_one_or_none()
 
         if param_group is None:
-            warnings.warn(f"Parameter group: {group_name} does not exist in database", stacklevel=2)
+            warnings.warn(
+                f"Parameter group: {group_name} does not exist in database",
+                stacklevel=2,
+            )
             return self
 
         param_value = self.session.execute(
-            select(AttributeValueTemplate).filter_by(name=param_name, attribute_template=param_group)
+            select(AttributeValueTemplate).filter_by(
+                name=param_name, attribute_template=param_group
+            )
         ).scalar_one_or_none()
         if param_value is None:
-            warnings.warn(f"Parameter {param_name} does not exist in group {group_name}", stacklevel=2)
+            warnings.warn(
+                f"Parameter {param_name} does not exist in group {group_name}",
+                stacklevel=2,
+            )
             return self
 
         param_group.value_templates.remove(param_value)
@@ -174,11 +203,15 @@ class StepTemplateBuilder:
     def bind(self, slot_name: str, role: str):
         slot = self.session.scalars(
             select(ResourceSlot).where(
-                ResourceSlot.process_template_id == self.parent.template.id, ResourceSlot.name == slot_name
+                ResourceSlot.process_template_id == self.parent.template.id,
+                ResourceSlot.name == slot_name,
             )
         ).one_or_none()
         if slot is None:
-            warnings.warn(f"Did not find ResourceSlot named {slot_name}. Nothing added", stacklevel=2)
+            warnings.warn(
+                f"Did not find ResourceSlot named {slot_name}. Nothing added",
+                stacklevel=2,
+            )
             return self
 
         self.step.resource_slots[role] = slot
@@ -186,17 +219,29 @@ class StepTemplateBuilder:
 
 
 class ProcessRunBuilder:
-    def __init__(self, session: Session, name: str, template_name: str, version: Optional[str] = None):
+    def __init__(
+        self,
+        session: Session,
+        name: str,
+        template_name: str,
+        version: Optional[str] = None,
+    ):
         self.session = session
         self._tx = session.begin()
         self.name = name
         self.template_name = template_name
         self.version = version
-        statement = select(ProcessTemplate).filter_by(name=template_name, version=version)
+        statement = select(ProcessTemplate).filter_by(
+            name=template_name, version=version
+        )
         self._process_template = self.session.execute(statement).scalar_one_or_none()
         if self._process_template is None:
-            raise ValueError(f"Could not find process template by name {self.template_name}")
-        self._process_run = ProcessRun(name=name, template=self._process_template, description="Test")
+            raise ValueError(
+                f"Could not find process template by name {self.template_name}"
+            )
+        self._process_run = ProcessRun(
+            name=name, template=self._process_template, description="Test"
+        )
         self.session.add(self._process_run)
         self.session.flush()
         self._resources = {}
@@ -223,7 +268,9 @@ class ProcessRunBuilder:
     def process_run(self) -> ProcessRun:
         return self._process_run
 
-    def create_resource(self, resource_name: str, resource_template_name: str) -> "ProcessRunBuilder":
+    def create_resource(
+        self, resource_name: str, resource_template_name: str
+    ) -> "ProcessRunBuilder":
         statement = select(ResourceTemplate).filter_by(name=resource_template_name)
         resource_template = self.session.scalars(statement).one_or_none()
         if resource_template is None:
@@ -234,10 +281,14 @@ class ProcessRunBuilder:
         return self
 
     def assign_resource(
-        self, resource_slot_name: str, resource_name: str, resource_id: Optional[UUID] = None
+        self,
+        resource_slot_name: str,
+        resource_name: str,
+        resource_id: Optional[UUID] = None,
     ) -> "ProcessRunBuilder":
         statement = select(ResourceSlot).where(
-            ResourceSlot.process_template_id == self._process_template.id, ResourceSlot.name == resource_slot_name
+            ResourceSlot.process_template_id == self._process_template.id,
+            ResourceSlot.name == resource_slot_name,
         )
         _resource_slot = self.session.scalars(statement).one_or_none()
         if resource_name not in self._resources:
@@ -257,7 +308,9 @@ class ProcessRunBuilder:
         self,
         step_name: str,
     ) -> Type[BaseModel]:
-        statement = select(Step).where(Step.process_run_id == self._process_run.id, Step.name == step_name)
+        statement = select(Step).where(
+            Step.process_run_id == self._process_run.id, Step.name == step_name
+        )
         step: Optional[Step] = self.session.scalars(statement).one_or_none()
         if step is None:
             raise ValueError(f"Step not found: {step_name}")
@@ -280,7 +333,9 @@ class ProcessRunBuilder:
                     Optional[pytype],
                     Field(default=value, alias=value_template.name),
                 )
-                param_model = create_model(f"{val_name}", **param_fields, __base__=(AliasMixin, BaseModel))
+                param_model = create_model(
+                    f"{val_name}", **param_fields, __base__=(AliasMixin, BaseModel)
+                )
                 params[param.template.slug] = (
                     param_model,
                     Field(default_factory=param_model, alias=param.template.name),
@@ -296,7 +351,9 @@ class ProcessRunBuilder:
         for param in step.parameters.values():
             filled_param = filled_params.get(param.template.name)
             for value_name in step.parameters[param.template.name].values.keys():
-                step.parameters[param.template.name].values[value_name] = filled_param.get(value_name)
+                step.parameters[param.template.name].values[value_name] = (
+                    filled_param.get(value_name)
+                )
 
 
 def map_dtype_to_pytype(dtype: str):

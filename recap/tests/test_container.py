@@ -2,12 +2,13 @@ from recap.models.attribute import AttributeValueTemplate
 
 
 def test_attribute(db_session):
-    from recap.models.attribute import (AttributeTemplate,
-                                        AttributeValueTemplate)
+    from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
     from recap.models.resource import ResourceTemplate, ResourceType
 
     prop_type = AttributeTemplate(name="TestProp")  # , value_type="int", unit="kg")
-    prop_value_template = AttributeValueTemplate(name="test_value", value_type="int", unit="kg", default_value=3)
+    prop_value_template = AttributeValueTemplate(
+        name="test_value", value_type="int", unit="kg", default_value=3
+    )
     prop_type.value_templates.append(prop_value_template)
     db_session.add(prop_type)
 
@@ -61,7 +62,9 @@ def test_container(db_session):
     db_session.add(container_type)
     db_session.commit()
 
-    container = Resource(name="TestContainer", ref_name="blah", template=container_template)
+    container = Resource(
+        name="TestContainer", ref_name="blah", template=container_template
+    )
     db_session.add(container)
 
     db_session.commit()
@@ -97,4 +100,6 @@ def test_container(db_session):
 
     assert len(result.children) == 2
     assert result.children[0].name == "A1"
-    assert result.children[1].properties["ChildPropTest"].values["child_prop_test"] == 2.2
+    assert (
+        result.children[1].properties["ChildPropTest"].values["child_prop_test"] == 2.2
+    )

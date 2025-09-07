@@ -3,11 +3,13 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Column, ForeignKey, Table
 from sqlalchemy.ext.associationproxy import association_proxy
-from sqlalchemy.orm import (Mapped, mapped_collection, mapped_column,
-                            relationship)
+from sqlalchemy.orm import Mapped, mapped_collection, mapped_column, relationship
 
-from .attribute import (AttributeTemplate, AttributeValue,
-                        resource_template_attribute_association)
+from .attribute import (
+    AttributeTemplate,
+    AttributeValue,
+    resource_template_attribute_association,
+)
 
 if TYPE_CHECKING:
     from recap.models.process import ResourceAssignment
@@ -16,7 +18,10 @@ from .base import Base
 
 
 def _reject_new(key, _value):
-    raise KeyError(f"{key!r} is not a valid AttributeValue for this Parameter -" "keys are fixed by the template")
+    raise KeyError(
+        f"{key!r} is not a valid AttributeValue for this Parameter -"
+        "keys are fixed by the template"
+    )
 
 
 class Property(Base):  # , AttributeValueMixin):
@@ -26,7 +31,9 @@ class Property(Base):  # , AttributeValueMixin):
     resource_id: Mapped[UUID] = mapped_column(ForeignKey("resource.id"), nullable=False)
     resource: Mapped["Resource"] = relationship(back_populates="properties")
 
-    attribute_template_id: Mapped[UUID] = mapped_column(ForeignKey("attribute_template.id"))
+    attribute_template_id: Mapped[UUID] = mapped_column(
+        ForeignKey("attribute_template.id")
+    )
     template: Mapped[AttributeTemplate] = relationship(AttributeTemplate)
 
     # values: Mapped[List["AttributeValue"]] = relationship("AttributeValue", back_populates="property")
@@ -58,7 +65,9 @@ class Property(Base):  # , AttributeValueMixin):
 resource_template_type_association = Table(
     "resource_template_type_association",
     Base.metadata,
-    Column("resource_template_id", ForeignKey("resource_template.id"), primary_key=True),
+    Column(
+        "resource_template_id", ForeignKey("resource_template.id"), primary_key=True
+    ),
     Column("resource_type_id", ForeignKey("resource_type.id"), primary_key=True),
 )
 
@@ -74,12 +83,16 @@ class ResourceTemplate(Base):
         secondary=resource_template_type_association,
         back_populates="resource_templates",
     )
-    parent_id: Mapped[Optional[UUID]] = mapped_column(ForeignKey("resource_template.id"), nullable=True)
+    parent_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("resource_template.id"), nullable=True
+    )
     parent: Mapped["ResourceTemplate"] = relationship(
         "ResourceTemplate", back_populates="children", remote_side=[id]
     )
 
-    children: Mapped[List["ResourceTemplate"]] = relationship("ResourceTemplate", back_populates="parent")
+    children: Mapped[List["ResourceTemplate"]] = relationship(
+        "ResourceTemplate", back_populates="parent"
+    )
 
     attribute_templates: Mapped[List["AttributeTemplate"]] = relationship(
         back_populates="resource_templates",
@@ -102,13 +115,21 @@ class Resource(Base):
     name: Mapped[str] = mapped_column(unique=True, nullable=True)
     ref_name: Mapped[Optional[str]] = mapped_column(nullable=True)
 
-    resource_template_id: Mapped[UUID] = mapped_column(ForeignKey("resource_template.id"), nullable=True)
+    resource_template_id: Mapped[UUID] = mapped_column(
+        ForeignKey("resource_template.id"), nullable=True
+    )
     template: Mapped["ResourceTemplate"] = relationship()
 
-    parent_id: Mapped[Optional[UUID]] = mapped_column(ForeignKey("resource.id"), nullable=True)
-    parent: Mapped["Resource"] = relationship("Resource", back_populates="children", remote_side=[id])
+    parent_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("resource.id"), nullable=True
+    )
+    parent: Mapped["Resource"] = relationship(
+        "Resource", back_populates="children", remote_side=[id]
+    )
 
-    children: Mapped[List["Resource"]] = relationship("Resource", back_populates="parent")
+    children: Mapped[List["Resource"]] = relationship(
+        "Resource", back_populates="parent"
+    )
 
     # properties: Mapped[List["Property"]] = relationship(
     #     "Property", back_populates="resource"
@@ -143,7 +164,9 @@ class Resource(Base):
         super().__init__(*args, **kwargs)
 
         if resource_template and _init_children:
-            self._initialize_from_resource_template(resource_template, _visited_children, _max_depth)
+            self._initialize_from_resource_template(
+                resource_template, _visited_children, _max_depth
+            )
 
     def _initialize_from_resource_template(
         self,
