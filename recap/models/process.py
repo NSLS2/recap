@@ -1,5 +1,4 @@
 import enum
-from typing import List, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import Enum, ForeignKey, UniqueConstraint
@@ -14,7 +13,6 @@ from sqlalchemy.orm import (
 
 from recap.models.resource import Resource
 from recap.models.step import Step, StepTemplate, StepTemplateEdge
-from recap.schemas.common import StepStatus
 
 from .base import Base
 
@@ -30,7 +28,7 @@ class ProcessTemplate(Base):
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
     version: Mapped[str] = mapped_column(nullable=False)
     is_active: Mapped[bool] = mapped_column(nullable=False, default=False)
-    step_templates: Mapped[List["StepTemplate"]] = relationship(
+    step_templates: Mapped[list["StepTemplate"]] = relationship(
         back_populates="process_template"
     )
     edges: Mapped["StepTemplateEdge"] = relationship(
@@ -38,7 +36,7 @@ class ProcessTemplate(Base):
         primaryjoin=id == StepTemplateEdge.process_template_id,
         cascade="all, delete-orphan",
     )
-    resource_slots: Mapped[List["ResourceSlot"]] = relationship(
+    resource_slots: Mapped[list["ResourceSlot"]] = relationship(
         "ResourceSlot", back_populates="process_template"
     )
     __table_args__ = (
@@ -96,10 +94,10 @@ class ProcessRun(Base):
             resource_slot=res_slot, resource=resource
         ),
     )
-    steps: Mapped[List["Step"]] = relationship(back_populates="process_run")
+    steps: Mapped[list["Step"]] = relationship(back_populates="process_run")
 
     def __init__(self, *args, **kwargs):
-        template: Optional[ProcessTemplate] = kwargs.get("template", None)
+        template: ProcessTemplate | None = kwargs.get("template")
         if not template:
             return
         super().__init__(*args, **kwargs)

@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -22,9 +22,9 @@ custom_subactions_description = """
 
 class ActionTypeSchema(BaseModel):
     name: str = Field(..., description="Name of the action type")
-    attributes: Optional[List[Attribute]] = None
+    attributes: list[Attribute] | None = None
     action_types: Optional["ActionTypeSchema"] = None
-    source_container: Optional[ContainerTypeSchema] = None
+    source_container: ContainerTypeSchema | None = None
     dest_container: ContainerTypeSchema
     decomposable: bool = Field(default=False, description=decomposable_description)
     custom_subactions: bool = Field(
@@ -35,23 +35,23 @@ class ActionTypeSchema(BaseModel):
 class ActionSchema(BaseModel):
     name: str = Field(..., description="Action name")
     action_type: ActionTypeSchema
-    source_container: Optional[ContainerSchema] = None
+    source_container: ContainerSchema | None = None
     dest_container: ContainerSchema
-    subactions: Optional[List["ActionSchema"]] = None
+    subactions: list["ActionSchema"] | None = None
 
 
 class WorkflowTypeSchema(BaseModel):
     name: str = Field(..., description="Name of the experiment type")
-    action_types: List[ActionTypeSchema] = Field(
+    action_types: list[ActionTypeSchema] = Field(
         ..., description="List of ordered action steps"
     )
 
 
 class WorkflowSchema(BaseModel):
     name: str = Field(..., description="Name of the experiment")
-    actions: List[ActionSchema] = Field(..., description="Instance of an action")
+    actions: list[ActionSchema] = Field(..., description="Instance of an action")
 
 
 class WorkflowData(BaseModel):
-    container_types: Optional[List[ContainerTypeSchema]] = None
-    experiment_type: Optional[WorkflowTypeSchema] = None
+    container_types: list[ContainerTypeSchema] | None = None
+    experiment_type: WorkflowTypeSchema | None = None

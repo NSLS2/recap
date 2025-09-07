@@ -2,7 +2,7 @@ import warnings
 from typing import Optional
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, SessionTransaction
+from sqlalchemy.orm import Session
 
 from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
 from recap.models.resource import ResourceTemplate, ResourceType
@@ -76,7 +76,7 @@ class ResourceTemplateBuilder:
         prop_name: str,
         value_type: str,
         unit: str,
-        default: Optional[str] = None,
+        default: str | None = None,
         create_group=False,
     ) -> "ResourceTemplateBuilder":
         prop_group = self.session.execute(
@@ -128,7 +128,7 @@ class ResourceTemplateBuilder:
         ).scalar_one_or_none()
 
         if prop_group is None:
-            warnings.warn(f"Property group does not exist : {group_name}")
+            warnings.warn(f"Property group does not exist : {group_name}", stacklevel=2)
             return self
 
         prop_value = self.session.execute(
@@ -137,7 +137,10 @@ class ResourceTemplateBuilder:
             )
         ).scalar_one_or_none()
         if prop_value is None:
-            warnings.warn(f"Property does not exist in group {group_name}: {prop_name}")
+            warnings.warn(
+                f"Property does not exist in group {group_name}: {prop_name}",
+                stacklevel=2,
+            )
             return self
 
         prop_group.value_templates.remove(prop_value)

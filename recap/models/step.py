@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import ForeignKey, UniqueConstraint
@@ -16,7 +16,6 @@ from sqlalchemy.sql import func
 from recap.models.attribute import (
     AttributeTemplate,
     AttributeValue,
-    AttributeValueTemplate,
     step_template_attribute_association,
 )
 from recap.models.base import Base
@@ -75,7 +74,7 @@ class StepTemplate(Base):
     __tablename__ = "step_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(nullable=False)
-    attribute_templates: Mapped[List["AttributeTemplate"]] = relationship(
+    attribute_templates: Mapped[list["AttributeTemplate"]] = relationship(
         back_populates="step_templates", secondary=step_template_attribute_association
     )
 
@@ -204,17 +203,17 @@ class Step(Base):
     # )
 
     def __init__(self, *args, **kwargs):
-        template: Optional[StepTemplate] = kwargs.get("template", None)
+        template: StepTemplate | None = kwargs.get("template")
         if not template:
             return
         # If no name specified use the templates name
-        if not kwargs.get("name", None):
+        if not kwargs.get("name"):
             kwargs["name"] = template.name
         super().__init__(*args, **kwargs)
 
         self._initialize_from_step_type(template)
 
-    def _initialize_from_step_type(self, template: Optional[StepTemplate] = None):
+    def _initialize_from_step_type(self, template: StepTemplate | None = None):
         """
         Automatically initialize step from step_type
         - Only add parameters if not present

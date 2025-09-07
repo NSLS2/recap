@@ -1,5 +1,4 @@
 from enum import Enum
-from typing import Union
 
 from pydantic import BaseModel, model_validator
 
@@ -25,7 +24,8 @@ TYPE_MAP = {
     ValueType.FLOAT: float,
 }
 
-DefaultValue = Union[int, float, bool, str]
+# DefaultValue = Union[int, float, bool, str]
+DefaultValue = int | float | bool | str
 
 
 class Attribute(BaseModel):

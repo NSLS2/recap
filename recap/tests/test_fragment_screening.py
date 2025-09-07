@@ -5,8 +5,15 @@ from recap.utils.general import generate_uppercase_alphabets
 
 
 def test_fragment_screening(db_session):
-    from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
-    from recap.models.resource import Resource, ResourceTemplate, ResourceType
+    from recap.models.attribute import (
+        AttributeTemplate,
+        AttributeValueTemplate,
+    )  # noqa
+    from recap.models.resource import (
+        Resource,
+        ResourceTemplate,
+        ResourceType,
+    )  # noqa
 
     """
     Testing fragment screening
@@ -120,8 +127,11 @@ def test_fragment_screening(db_session):
     assert lib_plate.children[0].template.name == "A01"
     assert lib_plate.properties["LB1536_dimensions"].values["rows"] == 32
 
-    from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
-    from recap.models.resource import Resource, ResourceTemplate, ResourceType
+    from recap.models.attribute import (
+        AttributeTemplate,
+        AttributeValueTemplate,
+    )  # noqa
+    from recap.models.resource import Resource, ResourceTemplate  # noqa
 
     # - Create an xtal plate template
     xtal_plate_type = ResourceTemplate(name="SwissCI-MRC-2d", types=[container_type])
@@ -130,7 +140,9 @@ def test_fragment_screening(db_session):
 
     echo = [f"{i}{j}" for i in a_to_p for j in range(1, 13)]
     shifter = [f"{i}{k}{j}" for i in a_to_h for j in ["a", "b"] for k in range(1, 13)]
-    plate_maps = [{"echo": i, "shifter": j} for i, j in zip(echo, shifter)]
+    plate_maps = [
+        {"echo": i, "shifter": j} for i, j in zip(echo, shifter, strict=False)
+    ]
 
     well_position = AttributeTemplate(name="well_position")
     well_pos_x = AttributeValueTemplate(name="x", value_type="int", default_value="0")
@@ -182,7 +194,11 @@ def test_fragment_screening(db_session):
     assert xtal_plate.children[0].template.name == "A1a"
 
     # - Create Process template
-    from recap.models.process import ProcessRun, ProcessTemplate, ResourceSlot
+    from recap.models.process import (
+        ProcessRun,
+        ProcessTemplate,
+        ResourceSlot,
+    )  # noqa
 
     process_template = ProcessTemplate(
         name="Fragment Screening Sample Prep", version="1.0"

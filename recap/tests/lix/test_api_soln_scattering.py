@@ -1,7 +1,5 @@
 from itertools import product
 
-from sqlalchemy.sql.lambdas import AnalyzedCode
-
 from recap.client.base_client import RecapClient
 from recap.models.process import Direction
 
@@ -19,21 +17,13 @@ def test_client(db_session):
             "operator",
             Direction.input,
             create_resource_type=True,
-        ).add_step(
-            "Transfer"
-        ).bind(
-            "Input plate 1", "source"
-        ).bind(
+        ).add_step("Transfer").bind("Input plate 1", "source").bind(
             "Input plate 2", "dest"
-        ).bind(
-            "Liquid transfer operator", "operator"
-        ).add_param(
+        ).bind("Liquid transfer operator", "operator").add_param(
             "volume transfer", "volume", "float", "uL", "0.0", create_group=True
         ).add_param(
             "volume transfer", "rate", "float", "uL/sec", "0.0"
-        ).complete_step().add_step(
-            "Heat plate"
-        ).bind(
+        ).complete_step().add_step("Heat plate").bind(
             "Input plate 2", "target"
         ).add_param(
             "heat to", "temperature", "float", "degC", "0.0", create_group=True

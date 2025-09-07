@@ -1,6 +1,5 @@
 import warnings
-from collections import defaultdict
-from typing import Any, Literal, Optional, Type
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, create_model
@@ -11,23 +10,22 @@ from recap.models import (
     AttributeTemplate,
     AttributeValueTemplate,
     ProcessTemplate,
-    StepTemplate,
 )
 from recap.models.process import Direction, ProcessRun, ResourceSlot
 from recap.models.resource import Resource, ResourceTemplate, ResourceType
-from recap.models.step import Parameter, Step, StepTemplate
+from recap.models.step import Step, StepTemplate
 from recap.utils.dsl import AliasMixin, _get_or_create
 
 
 class ProcessTemplateBuilder:
-    def __init__(self, session: Session, name: str, version: Optional[str] = None):
+    def __init__(self, session: Session, name: str, version: str | None = None):
         self.session = session
         self._tx = session.begin()
         self.name = name
         self.version = version
-        self._template: Optional[ProcessTemplate] = None
+        self._template: ProcessTemplate | None = None
         self._resource_slots: dict[str, ResourceSlot] = {}
-        self._current_step_builder: Optional[StepTemplateBuilder] = None
+        self._current_step_builder: StepTemplateBuilder | None = None
 
     def __enter__(self):
         return self
@@ -79,7 +77,7 @@ class ProcessTemplateBuilder:
             select(ResourceType).filter_by(name=resource_type)
         ).scalar_one_or_none()
         if rt is None:
-            if create_resource_type == False:
+            if not create_resource_type:
                 raise ValueError(
                     f"Could not find resource_type named {resource_type}. Use create_resource_type=True to create one"
                 )
@@ -128,7 +126,7 @@ class StepTemplateBuilder:
         param_name: str,
         value_type: str,
         unit: str,
-        default: Optional[str] = None,
+        default: str | None = None,
         create_group=False,
     ) -> "StepTemplateBuilder":
         param_group = self.session.execute(
@@ -169,7 +167,6 @@ class StepTemplateBuilder:
         return self
 
     def remove_param(self, group_name: str, param_name: str) -> "StepTemplateBuilder":
-
         param_group = self.session.execute(
             select(AttributeTemplate)
             .filter_by(name=group_name)
@@ -224,7 +221,7 @@ class ProcessRunBuilder:
         session: Session,
         name: str,
         template_name: str,
-        version: Optional[str] = None,
+        version: str | None = None,
     ):
         self.session = session
         self._tx = session.begin()
@@ -284,7 +281,7 @@ class ProcessRunBuilder:
         self,
         resource_slot_name: str,
         resource_name: str,
-        resource_id: Optional[UUID] = None,
+        resource_id: UUID | None = None,
     ) -> "ProcessRunBuilder":
         statement = select(ResourceSlot).where(
             ResourceSlot.process_template_id == self._process_template.id,
@@ -307,18 +304,18 @@ class ProcessRunBuilder:
     def get_params(
         self,
         step_name: str,
-    ) -> Type[BaseModel]:
+    ) -> type[BaseModel]:
         statement = select(Step).where(
             Step.process_run_id == self._process_run.id, Step.name == step_name
         )
-        step: Optional[Step] = self.session.scalars(statement).one_or_none()
+        step: Step | None = self.session.scalars(statement).one_or_none()
         if step is None:
             raise ValueError(f"Step not found: {step_name}")
         params: dict[str, tuple] = {
             "step_name": (Literal[f"{step_name}"], Field(default=step_name)),
             "step_id": (UUID, Field(default=step.id)),
         }
-        for name, param in step.parameters.items():
+        for _name, param in step.parameters.items():
             param_fields: dict[str, tuple] = {}
             for val_name, value in param.values.items():
                 value_template = None
@@ -330,7 +327,7 @@ class ProcessRunBuilder:
                     raise ValueError(f"Could not find value with name {val_name}")
                 pytype = map_dtype_to_pytype(value_template.value_type)
                 param_fields[value_template.slug] = (
-                    Optional[pytype],
+                    pytype | None,
                     Field(default=value, alias=value_template.name),
                 )
                 param_model = create_model(
@@ -345,12 +342,12 @@ class ProcessRunBuilder:
 
     def set_params(self, filled_params):
         statement = select(Step).where(Step.id == filled_params.step_id)
-        step: Optional[Step] = self.session.scalars(statement).one_or_none()
+        step: Step | None = self.session.scalars(statement).one_or_none()
         if step is None:
             raise ValueError(f"Step not found in database: {filled_params.step_name}")
         for param in step.parameters.values():
             filled_param = filled_params.get(param.template.name)
-            for value_name in step.parameters[param.template.name].values.keys():
+            for value_name in step.parameters[param.template.name].values:
                 step.parameters[param.template.name].values[value_name] = (
                     filled_param.get(value_name)
                 )

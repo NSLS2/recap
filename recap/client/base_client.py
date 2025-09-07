@@ -1,5 +1,4 @@
 from contextlib import contextmanager
-from typing import Optional
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -9,7 +8,7 @@ from recap.dsl.resource_builder import ResourceTemplateBuilder
 
 
 class RecapClient:
-    def __init__(self, url: Optional[str] = None, echo: bool = False, session=None):
+    def __init__(self, url: str | None = None, echo: bool = False, session=None):
         if url is not None:
             self.engine = create_engine(url, echo=echo)
             self.Session = sessionmaker(

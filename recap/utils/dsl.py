@@ -30,13 +30,13 @@ class AliasMixin:
 
     def get(self, alias: str):
         for name, field in self.__class__.model_fields.items():
-            if field.alias == alias or name == alias:
+            if alias in (field.alias, name):
                 return getattr(self, name)
         raise KeyError(f"No field with alias '{alias}'")
 
     def set(self, alias: str, value):
         for name, field in self.__class__.model_fields.items():
-            if field.alias == alias or name == alias:
+            if alias in (field.alias, name):
                 setattr(self, name, value)
                 return
         raise KeyError(f"No field with alias '{alias}'")

@@ -1,5 +1,3 @@
-from typing import List, Optional
-
 from pydantic import BaseModel
 
 from recap.schemas.common import Attribute
@@ -16,16 +14,16 @@ class SubcontainerLevel(BaseModel):
 
 
 class SubcontainerGeneration(BaseModel):
-    levels: List[SubcontainerLevel]
+    levels: list[SubcontainerLevel]
     naming_pattern: str
 
 
 class ContainerTypeSchema(BaseModel):
     name: str
     ref_name: str
-    attributes: Optional[List[Attribute]] = None
-    subcontainer_generation: Optional[SubcontainerGeneration] = None
-    subcontainer_attributes: Optional[List[Attribute]] = None
+    attributes: list[Attribute] | None = None
+    subcontainer_generation: SubcontainerGeneration | None = None
+    subcontainer_attributes: list[Attribute] | None = None
 
 
 class ContainerSchema(BaseModel):

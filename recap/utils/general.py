@@ -1,4 +1,77 @@
+import json
+from datetime import datetime
+from typing import Any
+
 from slugify import slugify
+from sqlalchemy.ext.mutable import MutableList
+
+
+def _parse_array_like(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list | tuple):
+        return list(value)
+    if isinstance(value, str):
+        s = value.strip()
+        try:
+            loaded_json = json.loads(s)
+            if isinstance(loaded_json, list):
+                return loaded_json
+            return [loaded_json]
+        except Exception:
+            if "," in s:
+                return [part.strip() for part in s.split(",")]
+            return [s]
+    return [value]
+
+
+TRUE_STRS = {"true", "t", "yes", "1"}
+FALSE_STRS = {"false", "f", "no", "0"}
+
+
+def _to_bool(v):
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in TRUE_STRS:
+            return True
+        if s in FALSE_STRS:
+            return False
+    return bool(v)
+
+
+def _to_datetime(v):
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, str):
+        # matches your original strict format
+        return datetime.strptime(v, "%Y-%m-%dT%H:%M:%SZ")
+    if v is None:
+        return datetime.now()
+    raise ValueError("datetime_value accepts: ISO8601 string or datetime object")
+
+
+def _to_array(v):
+    items = _parse_array_like(v)  # your existing helper
+    return MutableList(items)
+
+
+CONVERTERS = {
+    "int": int,
+    "float": float,
+    "bool": _to_bool,
+    "str": str,
+    "datetime": _to_datetime,
+    "array": _to_array,
+}
+
+TARGET_FIELD = {
+    "int": "int_value",
+    "float": "float_value",
+    "bool": "bool_value",
+    "str": "str_value",
+    "datetime": "datetime_value",
+    "array": "array_value",
+}
 
 
 def generate_uppercase_alphabets(n: int) -> list:
