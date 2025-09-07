@@ -1,11 +1,11 @@
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "pyrecap"
-version = "0.0.1"  # overridden by versioneer
+dynamic = ["version"]
 description = "Scientific framework for Reproducible Experiment Capture and Provenance"
 authors = [{ name = "Venkateswaran Shekar", email = "vshekar1@bnl.gov" }]
 requires-python = ">=3.8"
@@ -17,25 +17,38 @@ dependencies = [
     "python-slugify"
 ]
 
+keywords = ["experiments", "provenance", "reproducibility"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent"
+]
+
 [project.optional-dependencies]
 dev = [
     "pytest"
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["recap*"]
+[tool.hatch.version]
+source = "vcs"
 
-[tool.versioneer]
-VCS = "git"
-style = "pep440"
-versionfile_source = "recap/_version.py"
-versionfile_build = "recap/_version.py"
-tag_prefix = ""
-parentdir_prefix_version = "recap-"
+[tool.hatch.build.hooks.vcs]
+version-file = "recap/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["recap"]
+
+[tool.hatch.build]
+include = [
+    "recap/**",
+    "README.rst",
+    "LICENSE*"
+]
 
 [tool.black]
 line-length = 115
