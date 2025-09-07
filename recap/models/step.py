@@ -1,18 +1,16 @@
-from typing import List, Optional, TYPE_CHECKING
-from uuid import UUID, uuid4
 from datetime import datetime
+from typing import TYPE_CHECKING, List, Optional
+from uuid import UUID, uuid4
 
 from sqlalchemy import ForeignKey, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_collection, mapped_column, relationship, attribute_mapped_collection
 from sqlalchemy.ext.associationproxy import association_proxy
+from sqlalchemy.orm import (Mapped, attribute_mapped_collection,
+                            mapped_collection, mapped_column, relationship)
 from sqlalchemy.sql import func
 
-from recap.models.attribute import (
-    AttributeTemplate,
-    AttributeValue,
-    AttributeValueTemplate,
-    step_template_attribute_association,
-)
+from recap.models.attribute import (AttributeTemplate, AttributeValue,
+                                    AttributeValueTemplate,
+                                    step_template_attribute_association)
 from recap.models.base import Base
 from recap.schemas.common import StepStatus
 

@@ -1,13 +1,14 @@
+import enum
 from typing import List, Optional
 from uuid import UUID, uuid4
-import enum
 
-from sqlalchemy import ForeignKey, Enum, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship, validates, attribute_mapped_collection
+from sqlalchemy import Enum, ForeignKey, UniqueConstraint
 from sqlalchemy.ext import associationproxy
+from sqlalchemy.orm import (Mapped, attribute_mapped_collection, mapped_column,
+                            relationship, validates)
 
-from recap.models.step import StepTemplate, StepTemplateEdge, Step
 from recap.models.resource import Resource
+from recap.models.step import Step, StepTemplate, StepTemplateEdge
 from recap.schemas.common import StepStatus
 
 from .base import Base

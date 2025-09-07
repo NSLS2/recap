@@ -1,23 +1,17 @@
-from typing import List, Optional, Set, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional, Set
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey, Column, Table
+from sqlalchemy import Column, ForeignKey, Table
 from sqlalchemy.ext.associationproxy import association_proxy
-from sqlalchemy.orm import (
-    Mapped,
-    mapped_collection,
-    mapped_column,
-    relationship,
-)
+from sqlalchemy.orm import (Mapped, mapped_collection, mapped_column,
+                            relationship)
 
-from .attribute import (
-    AttributeTemplate,
-    AttributeValue,
-    resource_template_attribute_association,
-)
+from .attribute import (AttributeTemplate, AttributeValue,
+                        resource_template_attribute_association)
 
 if TYPE_CHECKING:
     from recap.models.process import ResourceAssignment
+
 from .base import Base
 
 

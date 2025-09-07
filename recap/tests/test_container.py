@@ -2,7 +2,8 @@ from recap.models.attribute import AttributeValueTemplate
 
 
 def test_attribute(db_session):
-    from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
+    from recap.models.attribute import (AttributeTemplate,
+                                        AttributeValueTemplate)
     from recap.models.resource import ResourceTemplate, ResourceType
 
     prop_type = AttributeTemplate(name="TestProp")  # , value_type="int", unit="kg")
@@ -42,7 +43,7 @@ def test_container_type(db_session):
 
 def test_container(db_session):
     from recap.models.attribute import AttributeTemplate
-    from recap.models.resource import ResourceTemplate, Resource, ResourceType
+    from recap.models.resource import Resource, ResourceTemplate, ResourceType
 
     prop_type = AttributeTemplate(name="TestPropType")  # ,
     prop_value_template = AttributeValueTemplate(

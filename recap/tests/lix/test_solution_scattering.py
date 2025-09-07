@@ -1,9 +1,12 @@
-from recap.models.attribute import AttributeValueTemplate, AttributeTemplate
-from recap.models.process import ProcessTemplate, ResourceSlot, Direction, ProcessRun
-from recap.models.step import StepTemplate
-from recap.models.resource import ResourceType, ResourceTemplate, Resource
-from sqlalchemy import select
 from itertools import product
+
+from sqlalchemy import select
+
+from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
+from recap.models.process import (Direction, ProcessRun, ProcessTemplate,
+                                  ResourceSlot)
+from recap.models.resource import Resource, ResourceTemplate, ResourceType
+from recap.models.step import StepTemplate
 
 
 def test_solution_scattering_sample_prep(db_session):

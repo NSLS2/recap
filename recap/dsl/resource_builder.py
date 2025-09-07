@@ -1,5 +1,6 @@
-from typing import Optional
 import warnings
+from typing import Optional
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session, SessionTransaction
 

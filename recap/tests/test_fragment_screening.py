@@ -1,10 +1,12 @@
+from sqlalchemy import select
+
 from recap.models.step import StepTemplate
 from recap.utils.general import generate_uppercase_alphabets
-from sqlalchemy import select
 
 
 def test_fragment_screening(db_session):
-    from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
+    from recap.models.attribute import (AttributeTemplate,
+                                        AttributeValueTemplate)
     from recap.models.resource import Resource, ResourceTemplate, ResourceType
 
     """
@@ -110,7 +112,8 @@ def test_fragment_screening(db_session):
     assert lib_plate.children[0].template.name == "A01"
     assert lib_plate.properties["LB1536_dimensions"].values["rows"] == 32
 
-    from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
+    from recap.models.attribute import (AttributeTemplate,
+                                        AttributeValueTemplate)
     from recap.models.resource import Resource, ResourceTemplate, ResourceType
 
     # - Create an xtal plate template
@@ -176,7 +179,7 @@ def test_fragment_screening(db_session):
     assert xtal_plate.children[0].template.name == "A1a"
 
     # - Create Process template
-    from recap.models.process import ProcessTemplate, ResourceSlot, ProcessRun
+    from recap.models.process import ProcessRun, ProcessTemplate, ResourceSlot
 
     process_template = ProcessTemplate(name="Fragment Screening Sample Prep", version="1.0")
     #     - Create resource slots

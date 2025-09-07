@@ -1,13 +1,9 @@
-from .step import (
-    Step,
-    StepTemplate,
-    Parameter,
-    StepTemplateEdge,
-    StepTemplateResourceSlotBinding,
-)
-from .resource import ResourceTemplate, ResourceType, Resource, Property
-from .attribute import AttributeValueTemplate, AttributeTemplate, AttributeValue
-from .process import ProcessTemplate, ProcessRun
+from .attribute import (AttributeTemplate, AttributeValue,
+                        AttributeValueTemplate)
+from .process import ProcessRun, ProcessTemplate
+from .resource import Property, Resource, ResourceTemplate, ResourceType
+from .step import (Parameter, Step, StepTemplate, StepTemplateEdge,
+                   StepTemplateResourceSlotBinding)
 
 __all__ = [
     "Property",

@@ -1,7 +1,9 @@
-from pydantic import BaseModel, Field
 from typing import List, Optional
+
+from pydantic import BaseModel, Field
+
 from recap.schemas.common import Attribute
-from recap.schemas.container import ContainerTypeSchema, ContainerSchema
+from recap.schemas.container import ContainerSchema, ContainerTypeSchema
 
 decomposable_description = """
 A decomposable action that is repeated over sub containers

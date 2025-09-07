@@ -1,7 +1,9 @@
+from itertools import product
+
 from sqlalchemy.sql.lambdas import AnalyzedCode
+
 from recap.client.base_client import RecapClient
 from recap.models.process import Direction
-from itertools import product
 
 
 def test_client(db_session):

@@ -1,17 +1,18 @@
+import warnings
 from collections import defaultdict
 from typing import Any, Literal, Optional, Type
 from uuid import UUID
-import warnings
 
-from pydantic import BaseModel, create_model, Field
+from pydantic import BaseModel, Field, create_model
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from recap.models import ProcessTemplate, StepTemplate, AttributeTemplate, AttributeValueTemplate
+from recap.models import (AttributeTemplate, AttributeValueTemplate,
+                          ProcessTemplate, StepTemplate)
 from recap.models.process import Direction, ProcessRun, ResourceSlot
-from recap.models.resource import ResourceType, Resource, ResourceTemplate
-from recap.models.step import Parameter, StepTemplate, Step
-from recap.utils.dsl import _get_or_create, AliasMixin
+from recap.models.resource import Resource, ResourceTemplate, ResourceType
+from recap.models.step import Parameter, Step, StepTemplate
+from recap.utils.dsl import AliasMixin, _get_or_create
 
 
 class ProcessTemplateBuilder:

@@ -2,9 +2,9 @@ from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
 
 
 def test_container(db_session):
-    from recap.models.step import StepTemplate
+    from recap.models.process import ProcessRun, ProcessTemplate, ResourceSlot
     from recap.models.resource import Resource, ResourceTemplate, ResourceType
-    from recap.models.process import ProcessTemplate, ResourceSlot, ProcessRun
+    from recap.models.step import StepTemplate
 
     param_type = AttributeTemplate(
         name="TestParamType",

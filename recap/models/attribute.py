@@ -1,19 +1,15 @@
-from collections.abc import MutableSequence
-from typing import Any, List, Optional, TYPE_CHECKING
-from uuid import UUID, uuid4
-from datetime import datetime
-import sqlalchemy
 import json
-from sqlalchemy import JSON, Column, ForeignKey, Table, DateTime, func, event
+from collections.abc import MutableSequence
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, List, Optional
+from uuid import UUID, uuid4
+
+import sqlalchemy
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Table, event, func
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.ext.mutable import MutableList
-from sqlalchemy.orm import (
-    Mapped,
-    declared_attr,
-    mapped_column,
-    relationship,
-    validates,
-)
+from sqlalchemy.orm import (Mapped, declared_attr, mapped_column, relationship,
+                            validates)
 
 from recap.utils.general import make_slug
 
