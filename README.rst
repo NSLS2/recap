@@ -14,7 +14,8 @@ A scientific framework for Reproducible Experiment Capture, tracking, and metada
 * Free software: 3-clause BSD license
 * Documentation: In progress...
 
-# RECAP API Quickstart — End‑to‑End Example
+RECAP API Quickstart
+--------------------
 
 **Audience:** Experimental scientists and engineers who want to define, run, and track repeatable lab or data‑processing workflows using RECAP.
 
@@ -26,7 +27,8 @@ A scientific framework for Reproducible Experiment Capture, tracking, and metada
 
 This document explains each step and annotates a complete, runnable example.
 
-## Core Concepts (what maps to your lab work)
+Core Concepts
+-------------
 
 * **ProcessTemplate**: A reusable recipe for an experiment or operation (e.g., "Liquid transfer, then heat").
 * **StepTemplate**: One step in that recipe (e.g., `Transfer`, `Heat plate`). Steps can define **parameter groups** (like `volume_transfer` or `heat_to`) containing attributes such as `volume` or `temperature`.
@@ -35,8 +37,7 @@ This document explains each step and annotates a complete, runnable example.
 * **ProcessRun**: A concrete execution of a ProcessTemplate. You assign resources to slots and fill in step parameters.
 
 Deep dive: Resource Slots — why they exist
-
-```
+------------------------------------------
 
 Resource slots define the **interface** between a process template and the real world. They’re required for:
 
@@ -217,7 +218,7 @@ We’ll make two resource templates: a **96‑well plate** (with per‑well meta
 
 
 3) Instantiate a Process Run and Fill Parameters
-```
+
 
 Now create an actual run from the `Test:0.0.1` template, instantiate resources, assign them to the process slots, and set step parameters.
 
@@ -228,7 +229,7 @@ with client.process\_run(name="test\_run", template\_name="Test", version="0.0.1
 run.create\_resource("96 well plate", "96 well plate")
 run.create\_resource("Test destination plate", "sample holder")
 
-```
+
    # Assign resources to the process’s declared input slots
    run.assign_resource("Input plate 1", resource_name="96 well plate") \
       .assign_resource("Input plate 2", resource_name="Test destination plate")
@@ -243,11 +244,11 @@ run.create\_resource("Test destination plate", "sample holder")
    heat_params = run.get_params("Heat plate")
    heat_params.heat_to.temperature = 100
    run.set_params(heat_params)
-```
+
 
 About parameters: typed Pydantic models & validation
 
-```
+
 
 ``get_params(step_name)`` returns a **Pydantic model** that mirrors the template’s parameter groups and attributes. You can inspect its schema and fill fields with proper Python types. Calling ``set_params(model)`` will **validate** and persist the data for that step.
 
@@ -340,5 +341,5 @@ Next Steps
 
 *You’re ready to build richer templates and automate more of your lab workflow with RECAP.*
 
-```
+
 
