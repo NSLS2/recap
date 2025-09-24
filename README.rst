@@ -219,36 +219,33 @@ We’ll make two resource templates: a **96‑well plate** (with per‑well meta
 
 3) Instantiate a Process Run and Fill Parameters
 
-
 Now create an actual run from the `Test:0.0.1` template, instantiate resources, assign them to the process slots, and set step parameters.
 
 .. code-block:: python
 
-with client.process\_run(name="test\_run", template\_name="Test", version="0.0.1") as run:
-\# Create actual resources from templates (these become assignable to slots)
-run.create\_resource("96 well plate", "96 well plate")
-run.create\_resource("Test destination plate", "sample holder")
+    with client.process\_run(name="test\_run", template\_name="Test", version="0.0.1") as run:
+        \# Create actual resources from templates (these become assignable to slots)
+        run.create\_resource("96 well plate", "96 well plate")
+        run.create\_resource("Test destination plate", "sample holder")
 
 
-   # Assign resources to the process’s declared input slots
-   run.assign_resource("Input plate 1", resource_name="96 well plate") \
-      .assign_resource("Input plate 2", resource_name="Test destination plate")
+           # Assign resources to the process’s declared input slots
+           run.assign_resource("Input plate 1", resource_name="96 well plate") \
+              .assign_resource("Input plate 2", resource_name="Test destination plate")
 
-   # Read, edit, and persist step parameters
-   transfer_params = run.get_params("Transfer")             # returns a typed object
-   transfer_params.volume_transfer.volume = 50
-   transfer_params.volume_transfer.rate = 1
-   print(transfer_params)                                    # inspect before saving
-   run.set_params(transfer_params)                           # write back to the run
+           # Read, edit, and persist step parameters
+           transfer_params = run.get_params("Transfer")             # returns a typed object
+           transfer_params.volume_transfer.volume = 50
+           transfer_params.volume_transfer.rate = 1
+           print(transfer_params)                                    # inspect before saving
+           run.set_params(transfer_params)                           # write back to the run
 
-   heat_params = run.get_params("Heat plate")
-   heat_params.heat_to.temperature = 100
-   run.set_params(heat_params)
-
-
-About parameters: typed Pydantic models & validation
+           heat_params = run.get_params("Heat plate")
+           heat_params.heat_to.temperature = 100
+           run.set_params(heat_params)
 
 
+**About parameters: typed Pydantic models & validation**
 
 ``get_params(step_name)`` returns a **Pydantic model** that mirrors the template’s parameter groups and attributes. You can inspect its schema and fill fields with proper Python types. Calling ``set_params(model)`` will **validate** and persist the data for that step.
 
