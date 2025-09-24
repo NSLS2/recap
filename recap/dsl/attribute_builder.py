@@ -1,0 +1,102 @@
+import typing
+import warnings
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session, with_parent
+
+from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
+from recap.models.resource import ResourceTemplate
+from recap.models.step import StepTemplate
+
+if typing.TYPE_CHECKING:
+    from recap.dsl.process_builder import StepTemplateBuilder
+    from recap.dsl.resource_builder import ResourceTemplateBuilder
+
+
+class AttributeGroupBuilder:
+    def __init__(
+        self,
+        session: Session,
+        group_name: str,
+        parent: "ResourceTemplateBuilder | StepTemplateBuilder",
+    ):
+        self.session = session
+        self._tx = session.begin_nested()
+        self.group_name = group_name
+        self.parent = parent
+        self._template: AttributeTemplate | None = self.session.execute(
+            select(AttributeTemplate).filter_by(name=group_name)
+        ).scalar_one_or_none()
+        if self._template is None:
+            self._template = AttributeTemplate(name=group_name)
+            if isinstance(self.parent._template, ResourceTemplate):
+                self._template.resource_templates.append(self.parent._template)
+            elif isinstance(self.parent._template, StepTemplate):
+                self._template.step_templates.append(self.parent._template)
+            self.session.add(self._template)
+            self.session.flush()
+
+    def add_attribute(
+        self, attr_name: str, value_type: str, unit: str, default: Any
+    ) -> "AttributeGroupBuilder":
+        attribute = self.session.execute(
+            select(AttributeValueTemplate).filter_by(
+                name=attr_name, value_type=value_type, attribute_template=self._template
+            )
+        ).scalar_one_or_none()
+        # if attribute is not None:
+        #     warnings.warn(
+        #         f"Property {attr_name} already exists for {self.group_name}", stacklevel=2
+        #     )
+        # else:
+        if attribute is None:
+            attribute = AttributeValueTemplate(
+                name=attr_name,
+                value_type=value_type,
+                attribute_template=self._template,
+                default_value=default,
+                unit=unit,
+            )
+            self.session.add(attribute)
+            # self._template.value_templates.append(attribute)
+            self.session.flush()
+        return self
+
+    def remove_attribute(self, attr_name: str) -> "AttributeGroupBuilder":
+        q = (
+            select(AttributeTemplate)
+            .filter_by(name=self.group_name)
+            .where(
+                with_parent(
+                    self.parent._template,
+                    self.parent._template.__class__.attribute_templates,
+                )
+            )
+        )
+        attr_group = self.session.execute(q).scalar_one_or_none()
+
+        if attr_group is None:
+            warnings.warn(
+                f"Property group does not exist : {self.group_name}", stacklevel=2
+            )
+            return self
+
+        attribute = self.session.execute(
+            select(AttributeValueTemplate).filter_by(
+                name=attr_name, attribute_template=attr_group
+            )
+        ).scalar_one_or_none()
+        if attribute is None:
+            warnings.warn(
+                f"Property does not exist in group {self.group_name}: {attr_name}",
+                stacklevel=2,
+            )
+            return self
+
+        attr_group.value_templates.remove(attribute)
+        return self
+
+    def complete_attribute(self):
+        if self.parent:
+            return self.parent

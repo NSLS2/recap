@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, create_model
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from recap.dsl.attribute_builder import AttributeGroupBuilder
 from recap.models import (
     AttributeTemplate,
     AttributeValueTemplate,
@@ -115,63 +116,25 @@ class StepTemplateBuilder:
         self.parent = parent
         self.session = parent.session
         self.process_template = parent.template
-        self.step = step
+        self._template = step
 
     def complete_step(self) -> ProcessTemplateBuilder:
         return self.parent
 
-    def add_param(
-        self,
-        group_name: str,
-        param_name: str,
-        value_type: str,
-        unit: str,
-        default: str | None = None,
-        create_group=False,
-    ) -> "StepTemplateBuilder":
-        param_group = self.session.execute(
-            select(AttributeTemplate).filter_by(name=group_name)
-        ).scalar_one_or_none()
-
-        if param_group is None:
-            if create_group:
-                param_group = AttributeTemplate(name=group_name)
-                self.session.add(param_group)
-                self.session.flush()
-            else:
-                raise ValueError(
-                    f"Parameter group: {group_name} does not exist in database and create_group = False"
-                )
-
-        param_value = self.session.execute(
-            select(AttributeValueTemplate).filter_by(
-                name=param_name, value_type=value_type, attribute_template=param_group
-            )
-        ).scalar_one_or_none()
-        if param_value is not None:
-            warnings.warn(
-                f"Parameter {param_name} already exists for {group_name}. Nothing changed",
-                stacklevel=2,
-            )
-        else:
-            param_value = AttributeValueTemplate(
-                name=param_name,
-                value_type=value_type,
-                attribute_template=param_group,
-                default_value=default,
-                unit=unit,
-            )
-            self.session.add(param_value)
-            self.session.flush()
-        self.step.attribute_templates.append(param_group)
-        return self
+    def param_group(self, group_name: str) -> AttributeGroupBuilder:
+        attr_group_builder = AttributeGroupBuilder(
+            session=self.session, group_name=group_name, parent=self
+        )
+        return attr_group_builder
 
     def remove_param(self, group_name: str, param_name: str) -> "StepTemplateBuilder":
         param_group = self.session.execute(
             select(AttributeTemplate)
             .filter_by(name=group_name)
             .where(
-                AttributeTemplate.step_templates.any(StepTemplate.id == self.step.id)
+                AttributeTemplate.step_templates.any(
+                    StepTemplate.id == self._template.id
+                )
             )
         ).scalar_one_or_none()
 
@@ -211,7 +174,7 @@ class StepTemplateBuilder:
             )
             return self
 
-        self.step.resource_slots[role] = slot
+        self._template.resource_slots[role] = slot
         return self
 
 
