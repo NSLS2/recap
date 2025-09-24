@@ -105,12 +105,22 @@ pyrecap = { path = ".", editable = true }
 [tool.pixi.environments]
 default = { solve-group = "default" }
 dev = { features = ["lint", "test"], solve-group = "default" }
+docs = { features = ["docs"], solve-group = "default" }
 
 [tool.pixi.feature.test.dependencies]
 pytest = ">=8.4.2,<9"
 
 [tool.pixi.feature.lint.tasks]
 lint = { cmd = ["pre-commit", "run", "--all-files"] }
+
+[tool.pixi.feature.docs.dependencies]
+mkdocs-material = "*"
+mkdocstrings = "*"
+pymdown-extensions = "*"
+
+[tool.pixi.feature.docs.tasks]
+docs-build = { cmd = ["mkdocs", "build", "--strict"] }
+docs-deploy = { cmd = ["mkdocs", "gh-deploy", "--force"] }
 
 [tool.pixi.feature.test.tasks]
 test = { cmd = ["pytest", "-s", "-ra", "recap/tests"] }
