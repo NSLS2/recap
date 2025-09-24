@@ -118,7 +118,7 @@ class StepTemplateBuilder:
         self.process_template = parent.template
         self._template = step
 
-    def complete_step(self) -> ProcessTemplateBuilder:
+    def close_step(self) -> ProcessTemplateBuilder:
         return self.parent
 
     def param_group(self, group_name: str) -> AttributeGroupBuilder:

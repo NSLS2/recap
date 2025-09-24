@@ -25,11 +25,11 @@ def test_client(db_session):
             attr_name="volume", value_type="float", unit="uL", default=0.0
         ).add_attribute(
             attr_name="rate", value_type="float", unit="uL/sec", default=0.0
-        ).complete_attribute().complete_step().add_step("Heat plate").bind(
+        ).close_group().close_step().add_step("Heat plate").bind(
             "Input plate 2", "target"
         ).param_group("heat to").add_attribute(
             "temperature", "float", "degC", "0.0"
-        ).complete_attribute().complete_step()
+        ).close_group().close_step()
 
     with client.resource_template("96 well plate", ["container", "plate"]) as rt:
         rt.prop_group("dimensions").add_attribute("rows", "float", "", 8).add_attribute(
@@ -68,7 +68,7 @@ def test_client(db_session):
                 value_type="str",
                 unit="",
                 default="",
-            ).complete_attribute().complete_child()
+            ).close_group().close_child()
 
     with client.resource_template("sample holder", ["container", "plate"]) as rt:
         rt.prop_group("dimensions").add_attribute("rows", "int", "", 2).add_attribute(
@@ -92,7 +92,7 @@ def test_client(db_session):
                 value_type="float",
                 unit="uL",
                 default="0",
-            ).complete_attribute().complete_child()
+            ).close_group().close_child()
 
     with client.process_run(
         name="test_run", template_name="Test", version="0.0.1"

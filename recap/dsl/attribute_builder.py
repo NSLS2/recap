@@ -97,6 +97,6 @@ class AttributeGroupBuilder:
         attr_group.value_templates.remove(attribute)
         return self
 
-    def complete_attribute(self):
+    def close_group(self):
         if self.parent:
             return self.parent

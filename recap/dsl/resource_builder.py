@@ -80,7 +80,7 @@ class ResourceTemplateBuilder:
         )
         return child_builder
 
-    def complete_child(self):
+    def close_child(self):
         if self.parent:
             return self.parent
         else:
