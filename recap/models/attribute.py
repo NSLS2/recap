@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from recap.models.resource import ResourceTemplate
     from recap.models.step import StepTemplate
 
-from .base import Base
+from .base import Base, TimestampMixin
 
 resource_template_attribute_association = Table(
     "resource_template_attribute_association",
@@ -35,7 +35,7 @@ step_template_attribute_association = Table(
 )
 
 
-class AttributeTemplate(Base):
+class AttributeTemplate(TimestampMixin, Base):
     __tablename__ = "attribute_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(nullable=False)
@@ -66,7 +66,7 @@ def _before_update(mapper, connection, target: AttributeTemplate):
     target.slug = make_slug(target.name)
 
 
-class AttributeValueTemplate(Base):
+class AttributeValueTemplate(TimestampMixin, Base):
     __tablename__ = "attribute_value_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(nullable=False)
@@ -94,7 +94,7 @@ def _before_update(mapper, connection, target: AttributeValueTemplate):
     target.slug = make_slug(target.name)
 
 
-class AttributeValue(Base):
+class AttributeValue(TimestampMixin, Base):
     __tablename__ = "attribute_value"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
 
@@ -111,8 +111,6 @@ class AttributeValue(Base):
     property_id: Mapped[UUID] = mapped_column(ForeignKey("property.id"), nullable=True)
     property = relationship("Property", back_populates="_values")
 
-    # __abstract__ = True
-
     int_value: Mapped[int | None] = mapped_column(nullable=True)
     float_value: Mapped[float | None] = mapped_column(nullable=True)
     bool_value: Mapped[bool | None] = mapped_column(nullable=True)
@@ -123,14 +121,6 @@ class AttributeValue(Base):
     array_value: Mapped[list[Any] | None] = mapped_column(
         MutableList.as_mutable(JSON), nullable=True
     )
-    # attribute_id: Mapped[UUID] = mapped_column(
-    #     ForeignKey("attribute.id"), nullable=False
-    # )
-    # attribute: Mapped["Attribute"] = relationship("Attribute", back_populates="values")
-
-    # @declared_attr
-    # def attribute(cls):
-    #     return relationship("Attribute")
 
     def __init__(self, *args, **kwargs):
         value = kwargs.pop("value", None)
@@ -187,15 +177,6 @@ class AttributeValue(Base):
 
         vt = self.template.value_type
         return getattr(self, f"{vt}_value", None)
-
-    # @value.setter
-    # def value(self, v):
-    #     self.set_value(v)
-    #     if not self.template:
-    #         return None
-
-    #     vt = self.template.value_type
-    #     return getattr(self, f"{vt}_value", None)
 
     @value.setter
     def value(self, v):

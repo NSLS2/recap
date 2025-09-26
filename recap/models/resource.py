@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from recap.models.attribute import AttributeTemplate
     from recap.models.process import ResourceAssignment
 
-from .base import Base
+from .base import Base, TimestampMixin
 
 
 def _reject_new(key, _value):
@@ -19,7 +19,7 @@ def _reject_new(key, _value):
     )
 
 
-class Property(Base):  # , AttributeValueMixin):
+class Property(TimestampMixin, Base):  # , AttributeValueMixin):
     __tablename__ = "property"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
 
@@ -64,7 +64,7 @@ resource_template_type_association = Table(
 )
 
 
-class ResourceTemplate(Base):
+class ResourceTemplate(TimestampMixin, Base):
     __tablename__ = "resource_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
@@ -93,7 +93,7 @@ class ResourceTemplate(Base):
     )
 
 
-class ResourceType(Base):
+class ResourceType(TimestampMixin, Base):
     __tablename__ = "resource_type"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
@@ -104,7 +104,7 @@ class ResourceType(Base):
     )
 
 
-class Resource(Base):
+class Resource(TimestampMixin, Base):
     __tablename__ = "resource"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(unique=True, nullable=True)

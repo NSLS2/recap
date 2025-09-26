@@ -14,7 +14,7 @@ from sqlalchemy.orm import (
 from recap.models.resource import Resource
 from recap.models.step import Step, StepTemplate, StepTemplateEdge
 
-from .base import Base
+from .base import Base, TimestampMixin
 
 
 class Direction(str, enum.Enum):
@@ -22,7 +22,7 @@ class Direction(str, enum.Enum):
     output = "output"
 
 
-class ProcessTemplate(Base):
+class ProcessTemplate(TimestampMixin, Base):
     __tablename__ = "process_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
@@ -44,7 +44,7 @@ class ProcessTemplate(Base):
     )
 
 
-class ResourceSlot(Base):
+class ResourceSlot(TimestampMixin, Base):
     __tablename__ = "resource_slot"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column()
@@ -69,7 +69,7 @@ class ResourceSlot(Base):
     )
 
 
-class ProcessRun(Base):
+class ProcessRun(TimestampMixin, Base):
     __tablename__ = "process_run"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
 
@@ -125,7 +125,7 @@ class ProcessRun(Base):
         return resource
 
 
-class ResourceAssignment(Base):
+class ResourceAssignment(TimestampMixin, Base):
     __tablename__ = "resource_assignment"
     process_run_id: Mapped[UUID] = mapped_column(
         ForeignKey("process_run.id"), primary_key=True

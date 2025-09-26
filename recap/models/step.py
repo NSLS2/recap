@@ -18,7 +18,7 @@ from recap.models.attribute import (
     AttributeValue,
     step_template_attribute_association,
 )
-from recap.models.base import Base
+from recap.models.base import Base, TimestampMixin
 from recap.schemas.common import StepStatus
 
 if TYPE_CHECKING:
@@ -32,7 +32,7 @@ def _reject_new(key, _value):
     )
 
 
-class Parameter(Base):  # , AttributeValueMixin):
+class Parameter(TimestampMixin, Base):  # , AttributeValueMixin):
     __tablename__ = "parameter"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
 
@@ -44,7 +44,6 @@ class Parameter(Base):  # , AttributeValueMixin):
     )
     template: Mapped[AttributeTemplate] = relationship(AttributeTemplate)
 
-    # values: Mapped[List["AttributeValue"]] = relationship("AttributeValue", back_populates="parameter")
     _values = relationship(
         "AttributeValue",
         collection_class=mapped_collection(lambda av: av.template.name),
@@ -55,10 +54,6 @@ class Parameter(Base):  # , AttributeValueMixin):
     values = association_proxy(
         "_values",
         "value",
-        # creator=lambda key, val: AttributeValue(
-        #     template=get_value_template_by_name(key),
-        #     value=val,
-        # ),
         creator=_reject_new,
     )
 
@@ -67,10 +62,9 @@ class Parameter(Base):  # , AttributeValueMixin):
         for value_template in self.template.value_templates:
             av = AttributeValue(template=value_template, parameter=self)
             av.set_value(value_template.default_value)
-        # self.set_value(value)
 
 
-class StepTemplate(Base):
+class StepTemplate(TimestampMixin, Base):
     __tablename__ = "step_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(nullable=False)
@@ -105,7 +99,7 @@ class StepTemplate(Base):
     )
 
 
-class StepTemplateResourceSlotBinding(Base):
+class StepTemplateResourceSlotBinding(TimestampMixin, Base):
     __tablename__ = "step_template_resource_slot_binding"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     step_template_id: Mapped[UUID] = mapped_column(
@@ -125,7 +119,7 @@ class StepTemplateResourceSlotBinding(Base):
     )
 
 
-class StepTemplateEdge(Base):
+class StepTemplateEdge(TimestampMixin, Base):
     __tablename__ = "step_template_edge"
     process_template_id: Mapped[UUID] = mapped_column(
         ForeignKey("process_template.id"), primary_key=True
@@ -138,7 +132,7 @@ class StepTemplateEdge(Base):
     )
 
 
-class StepEdge(Base):
+class StepEdge(TimestampMixin, Base):
     __tablename__ = "step_edge"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     process_id: Mapped[UUID] = mapped_column(
@@ -148,7 +142,7 @@ class StepEdge(Base):
     to_step_id: Mapped[UUID] = mapped_column(ForeignKey("step.id"), nullable=False)
 
 
-class Step(Base):
+class Step(TimestampMixin, Base):
     __tablename__ = "step"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
@@ -170,37 +164,12 @@ class Step(Base):
         cascade="all, delete-orphan",
     )
 
-    # next_steps: Mapped[list["Step"]] = relationship("Step", secondary="step_edge",
-    #                                                 primaryjoin=id==StepEdge.from_step_id,
-    #                                                 secondaryjoin=id==StepEdge.to_step_id,
-    #                                                 viewonly=True, lazy="selectin")
-    # prev_steps: Mapped[list["Step"]] = relationship("Step", secondary="step_edge",
-    #                                                 primaryjoin=id==StepEdge.to_step_id,
-    #                                                 secondaryjoin=id==StepEdge.from_step_id,
-    #                                                 viewonly=True,
-    #                                                 lazy="selectin")
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now(), nullable=False
     )
     state: Mapped[StepStatus] = mapped_column(
         default=StepStatus.PENDING, nullable=False
     )
-    # parameters = association_proxy(
-    #     "_parameters",
-    #     "parameters",
-    #     creator=_reject_new
-    # )
-
-    # parent_id: Mapped[Optional[UUID]] = mapped_column(
-    #     ForeignKey("step.id"), nullable=True
-    # )
-    # parent: Mapped["Step"] = relationship(
-    #     "Step", back_populates="children", remote_side=[id], foreign_keys=[parent_id]
-    # )
-
-    # children: Mapped[List["Step"]] = relationship(
-    #     "Step", foreign_keys=[parent_id], back_populates="parent"
-    # )
 
     def __init__(self, *args, **kwargs):
         template: StepTemplate | None = kwargs.get("template")
@@ -234,7 +203,7 @@ class Step(Base):
         return not self.next_steps
 
 
-class StepResourceBinding(Base):
+class StepResourceBinding(TimestampMixin, Base):
     __tablename__ = "step_resource_binding"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     step_id: Mapped[UUID] = mapped_column(ForeignKey("step.id"), nullable=False)
