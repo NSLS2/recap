@@ -1,10 +1,13 @@
 from contextlib import contextmanager
+from typing import Any
+from uuid import UUID
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.resource_builder import ResourceTemplateBuilder
+from recap.models.campaign import Campaign
 
 
 class RecapClient:
@@ -16,6 +19,7 @@ class RecapClient:
             )
         if session is not None:
             self._session = session
+        self._campaign = None
 
     @contextmanager
     def session(self):
@@ -33,14 +37,42 @@ class RecapClient:
         return ProcessTemplateBuilder(session=session, name=name, version=version)
 
     def process_run(self, name: str, template_name: str, version: str):
-        return ProcessRunBuilder(
-            session=self._session,
-            name=name,
-            template_name=template_name,
-            version=version,
-        )
+        if self._campaign is not None:
+            return ProcessRunBuilder(
+                session=self._session,
+                name=name,
+                template_name=template_name,
+                version=version,
+            )
+        else:
+            raise ValueError(
+                "Campaign not set, cannot create process run. Use create_campaign() or set_campaign() first"
+            )
 
     def resource_template(self, name: str, type_names: list[str]):
         return ResourceTemplateBuilder(
             session=self._session, name=name, type_names=type_names
         )
+
+    def create_campaign(
+        self,
+        name: str,
+        proposal: str,
+        saf: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ):
+        self._campaign = Campaign(
+            name=name,
+            proposal=str(proposal),
+            saf=saf,
+            metadata=metadata,
+        )
+        self._session.add(self._campaign)
+        self._session.flush()
+        return self._campaign
+
+    def set_campaign(self, id: UUID):
+        statement = select(Campaign).filter_by(id=id)
+        self._campaign = self.session.execute(statement).scalar_one_or_none()
+        if self._campaign is None:
+            raise ValueError(f"Campaign with ID {id} not found")
