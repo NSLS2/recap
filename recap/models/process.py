@@ -11,6 +11,7 @@ from sqlalchemy.orm import (
     validates,
 )
 
+from recap.models.campaign import Campaign
 from recap.models.resource import Resource
 from recap.models.step import Step, StepTemplate, StepTemplateEdge
 
@@ -95,6 +96,8 @@ class ProcessRun(TimestampMixin, Base):
         ),
     )
     steps: Mapped[list["Step"]] = relationship(back_populates="process_run")
+    campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaign.id"), nullable=False)
+    campaign: Mapped[Campaign] = relationship()
 
     def __init__(self, *args, **kwargs):
         template: ProcessTemplate | None = kwargs.get("template")

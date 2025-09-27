@@ -16,7 +16,11 @@ class ResourceTemplateBuilder:
         parent: Optional["ResourceTemplateBuilder"] = None,
     ):
         self.session = session
-        self._tx = session.begin_nested()
+        self._tx = (
+            self.session.begin_nested()
+            if self.session.in_transaction()
+            else self.session.begin()
+        )
         self.name = name
         self.type_names = type_names
         self._children: list[ResourceTemplate] = []
@@ -42,16 +46,12 @@ class ResourceTemplateBuilder:
             self.save()
         else:
             self._tx.rollback()
-        self.close()
 
     def save(self):
         self.session.add(self._template)
         self.session.flush()
         self._tx.commit()
         return self
-
-    def close(self):
-        self.session.close()
 
     @property
     def template(self) -> ResourceTemplate:

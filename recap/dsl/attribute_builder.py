@@ -22,7 +22,11 @@ class AttributeGroupBuilder:
         parent: "ResourceTemplateBuilder | StepTemplateBuilder",
     ):
         self.session = session
-        self._tx = session.begin_nested()
+        self._tx = (
+            self.session.begin_nested()
+            if self.session.in_transaction()
+            else self.session.begin()
+        )
         self.group_name = group_name
         self.parent = parent
         self._template: AttributeTemplate | None = self.session.execute(
@@ -45,11 +49,6 @@ class AttributeGroupBuilder:
                 name=attr_name, value_type=value_type, attribute_template=self._template
             )
         ).scalar_one_or_none()
-        # if attribute is not None:
-        #     warnings.warn(
-        #         f"Property {attr_name} already exists for {self.group_name}", stacklevel=2
-        #     )
-        # else:
         if attribute is None:
             attribute = AttributeValueTemplate(
                 name=attr_name,
@@ -59,7 +58,6 @@ class AttributeGroupBuilder:
                 unit=unit,
             )
             self.session.add(attribute)
-            # self._template.value_templates.append(attribute)
             self.session.flush()
         return self
 

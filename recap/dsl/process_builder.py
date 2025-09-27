@@ -12,6 +12,7 @@ from recap.models import (
     AttributeValueTemplate,
     ProcessTemplate,
 )
+from recap.models.campaign import Campaign
 from recap.models.process import Direction, ProcessRun, ResourceSlot
 from recap.models.resource import Resource, ResourceTemplate, ResourceType
 from recap.models.step import Step, StepTemplate
@@ -21,7 +22,11 @@ from recap.utils.dsl import AliasMixin, _get_or_create
 class ProcessTemplateBuilder:
     def __init__(self, session: Session, name: str, version: str | None = None):
         self.session = session
-        self._tx = session.begin()
+        self._tx = (
+            self.session.begin_nested()
+            if self.session.in_transaction()
+            else self.session.begin()
+        )
         self.name = name
         self.version = version
         self._template: ProcessTemplate | None = None
@@ -36,7 +41,6 @@ class ProcessTemplateBuilder:
             self.save()
         else:
             self._tx.rollback()
-        self.close()
 
     def save(self):
         self.session.flush()
@@ -184,10 +188,11 @@ class ProcessRunBuilder:
         session: Session,
         name: str,
         template_name: str,
+        campaign: Campaign,
         version: str | None = None,
     ):
         self.session = session
-        self._tx = session.begin()
+        self._tx = session.begin_nested()
         self.name = name
         self.template_name = template_name
         self.version = version
@@ -200,7 +205,10 @@ class ProcessRunBuilder:
                 f"Could not find process template by name {self.template_name}"
             )
         self._process_run = ProcessRun(
-            name=name, template=self._process_template, description="Test"
+            name=name,
+            template=self._process_template,
+            description="Test",
+            campaign=campaign,
         )
         self.session.add(self._process_run)
         self.session.flush()

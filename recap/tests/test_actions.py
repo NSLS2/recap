@@ -1,4 +1,5 @@
 from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
+from recap.models.campaign import Campaign
 
 
 def test_container(db_session):
@@ -57,8 +58,12 @@ def test_container(db_session):
 
     child_container_a1 = Resource(name="A1", template=child_container_template)
     child_container_a2 = Resource(name="A2", template=child_container_template)
+    campaign = Campaign(name="Test campaign", proposal="123456")
     process_run = ProcessRun(
-        name="Test Process Run", description="This is a test", template=process_template
+        name="Test Process Run",
+        description="This is a test",
+        template=process_template,
+        campaign=campaign,
     )
     process_run.resources[container_1_resource_slot] = child_container_a1
     process_run.resources[container_2_resource_slot] = child_container_a2

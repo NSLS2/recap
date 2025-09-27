@@ -1,5 +1,6 @@
 from sqlalchemy import select
 
+from recap.models.campaign import Campaign
 from recap.models.step import StepTemplate
 from recap.utils.general import generate_uppercase_alphabets
 
@@ -323,8 +324,12 @@ def test_fragment_screening(db_session):
     db_session.add(process_template)
     db_session.commit()
 
+    campaign = Campaign(name="Test campaign", proposal=1)
+
     #     - Create Process from template
-    process_run = ProcessRun(name="FS1", description="Test", template=process_template)
+    process_run = ProcessRun(
+        name="FS1", description="Test", template=process_template, campaign=campaign
+    )
     #     - Add resources to the process
     for resource in [
         (lib_plate, lib_plate_resource_slot),

@@ -3,6 +3,7 @@ from itertools import product
 from sqlalchemy import select
 
 from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
+from recap.models.campaign import Campaign
 from recap.models.process import Direction, ProcessRun, ProcessTemplate, ResourceSlot
 from recap.models.resource import Resource, ResourceTemplate, ResourceType
 from recap.models.step import StepTemplate
@@ -175,8 +176,12 @@ def test_solution_scattering_sample_prep(db_session):
     db_session.add(destination_plate)
     db_session.add(source_plate)
     db_session.commit()
+    campaign = Campaign(name="Test campaign", proposal="123456")
     process_run1 = ProcessRun(
-        name="Test1", description="This is a test", template=sample_prep_process
+        name="Test1",
+        description="This is a test",
+        template=sample_prep_process,
+        campaign=campaign,
     )
 
     # process_run1.resources=[(source_plate, sample_plate_resource_slot),

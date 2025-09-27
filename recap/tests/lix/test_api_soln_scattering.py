@@ -94,6 +94,8 @@ def test_client(db_session):
                 default="0",
             ).close_group().close_child()
 
+    client.create_campaign(name="Test campaign", proposal="1")
+
     with client.process_run(
         name="test_run", template_name="Test", version="0.0.1"
     ) as run:
@@ -106,7 +108,6 @@ def test_client(db_session):
         transfer_params = run.get_params("Transfer")
         transfer_params.volume_transfer.volume = 50
         transfer_params.volume_transfer.rate = 1
-        print(transfer_params)
         run.set_params(transfer_params)
 
         heat_params = run.get_params("Heat plate")
