@@ -12,7 +12,7 @@ from sqlalchemy.orm import (
 )
 
 from recap.models.campaign import Campaign
-from recap.models.resource import Resource
+from recap.models.resource import Resource, ResourceType
 from recap.models.step import Step, StepTemplate, StepTemplateEdge
 
 from .base import Base, TimestampMixin
@@ -58,7 +58,7 @@ class ResourceSlot(TimestampMixin, Base):
     resource_type_id: Mapped[UUID] = mapped_column(
         ForeignKey("resource_type.id"), nullable=False
     )
-    resource_type: Mapped[UUID] = relationship("ResourceType")
+    resource_type: Mapped[ResourceType] = relationship("ResourceType")
     direction: Mapped[Direction] = mapped_column(
         Enum(Direction, name="direction_enum"), nullable=False
     )

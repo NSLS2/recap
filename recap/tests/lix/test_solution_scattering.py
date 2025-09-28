@@ -2,7 +2,7 @@ from itertools import product
 
 from sqlalchemy import select
 
-from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
+from recap.models.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.models.campaign import Campaign
 from recap.models.process import Direction, ProcessRun, ProcessTemplate, ResourceSlot
 from recap.models.resource import Resource, ResourceTemplate, ResourceType
@@ -33,17 +33,17 @@ def test_solution_scattering_sample_prep(db_session):
         name="96-well sample template",
         types=[container_resource_type],
     )
-    num_rows_attr_val = AttributeValueTemplate(
+    num_rows_attr_val = AttributeTemplate(
         name="rows", value_type="int", default_value=8
     )
-    num_cols_attr_val = AttributeValueTemplate(
+    num_cols_attr_val = AttributeTemplate(
         name="cols", value_type="int", default_value=12
     )
-    plate_dimensions_attr = AttributeTemplate(
+    plate_dimensions_attr = AttributeGroupTemplate(
         name="96_well_plate_dimesions",
-        value_templates=[num_rows_attr_val, num_cols_attr_val],
+        attribute_templates=[num_rows_attr_val, num_cols_attr_val],
     )
-    sample_plate_96_well.attribute_templates.append(plate_dimensions_attr)
+    sample_plate_96_well.attribute_group_templates.append(plate_dimensions_attr)
     db_session.add(sample_plate_96_well)
     db_session.commit()
 
@@ -52,28 +52,28 @@ def test_solution_scattering_sample_prep(db_session):
     )
     sample_plate_96_well: ResourceTemplate = db_session.scalars(statement).one()
     assert (
-        sample_plate_96_well.attribute_templates[0].value_templates[0].default_value
+        sample_plate_96_well.attribute_group_templates[0]
+        .attribute_templates[0]
+        .default_value
         == "8"
     )
 
     # Well attributes
-    sample_name = AttributeValueTemplate(
+    sample_name = AttributeTemplate(
         name="sample_name", value_type="str", default_value=""
     )
-    buffer_name = AttributeValueTemplate(
+    buffer_name = AttributeTemplate(
         name="buffer_name", value_type="str", default_value=""
     )
-    volume = AttributeValueTemplate(name="volume", value_type="int", default_value=0)
-    mixing_instruction = AttributeValueTemplate(
+    volume = AttributeTemplate(name="volume", value_type="int", default_value=0)
+    mixing_instruction = AttributeTemplate(
         name="mixing", value_type="str", default_value=""
     )
-    stock = AttributeValueTemplate(
-        name="stock", value_type="bool", default_value="False"
-    )
-    notes = AttributeValueTemplate(name="notes", value_type="str", default_value="")
-    well_data = AttributeTemplate(
+    stock = AttributeTemplate(name="stock", value_type="bool", default_value="False")
+    notes = AttributeTemplate(name="notes", value_type="str", default_value="")
+    well_data = AttributeGroupTemplate(
         name="well_data",
-        value_templates=[
+        attribute_templates=[
             sample_name,
             buffer_name,
             volume,
@@ -93,7 +93,7 @@ def test_solution_scattering_sample_prep(db_session):
         well_resource_template = ResourceTemplate(
             name=well_name, types=[well_resource_type]
         )
-        well_resource_template.attribute_templates.append(well_data)
+        well_resource_template.attribute_group_templates.append(well_data)
         db_session.add(well_resource_template)
         sample_plate_96_well.children.append(well_resource_template)
     db_session.add(sample_plate_96_well)
@@ -103,15 +103,15 @@ def test_solution_scattering_sample_prep(db_session):
         name="sample holder template", types=[container_resource_type]
     )
     # Well attributes
-    sample_well_data = AttributeTemplate(
+    sample_well_data = AttributeGroupTemplate(
         name="sample_holder_well_data",
-        value_templates=[sample_name, buffer_name, volume],
+        attribute_templates=[sample_name, buffer_name, volume],
     )
     for well_num in range(1, 19):
         well_resource_template = ResourceTemplate(
             name=str(well_num), types=[well_resource_type]
         )
-        well_resource_template.attribute_templates.append(sample_well_data)
+        well_resource_template.attribute_group_templates.append(sample_well_data)
         db_session.add(well_resource_template)
         sample_holder.children.append(well_resource_template)
     db_session.add(sample_holder)
@@ -137,22 +137,22 @@ def test_solution_scattering_sample_prep(db_session):
     db_session.add(holder_resource_slot)
     db_session.commit()
 
-    volume_attr_value = AttributeValueTemplate(
+    volume_attr_value = AttributeTemplate(
         name="volume",
         value_type="float",
         unit="uL",
         default_value="0",
     )
-    volume_transferred_template = AttributeTemplate(
+    volume_transferred_template = AttributeGroupTemplate(
         name="volume_transferred",
-        value_templates=[volume_attr_value],
+        attribute_templates=[volume_attr_value],
     )
 
     # Transfer action
     robot_transfer_action_template = StepTemplate(
         name="Robot transfer",
         process_template=sample_prep_process,
-        attribute_templates=[volume_transferred_template],
+        attribute_group_templates=[volume_transferred_template],
         # resource_slots=[(sample_plate_resource_slot, "source_container"),
         #                 (holder_resource_slot, "destination_container")]
     )

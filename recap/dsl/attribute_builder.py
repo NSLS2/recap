@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, with_parent
 
-from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
+from recap.models.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.models.resource import ResourceTemplate
 from recap.models.step import StepTemplate
 
@@ -29,11 +29,11 @@ class AttributeGroupBuilder:
         )
         self.group_name = group_name
         self.parent = parent
-        self._template: AttributeTemplate | None = self.session.execute(
-            select(AttributeTemplate).filter_by(name=group_name)
+        self._template: AttributeGroupTemplate | None = self.session.execute(
+            select(AttributeGroupTemplate).filter_by(name=group_name)
         ).scalar_one_or_none()
         if self._template is None:
-            self._template = AttributeTemplate(name=group_name)
+            self._template = AttributeGroupTemplate(name=group_name)
             if isinstance(self.parent._template, ResourceTemplate):
                 self._template.resource_templates.append(self.parent._template)
             elif isinstance(self.parent._template, StepTemplate):
@@ -45,12 +45,12 @@ class AttributeGroupBuilder:
         self, attr_name: str, value_type: str, unit: str, default: Any
     ) -> "AttributeGroupBuilder":
         attribute = self.session.execute(
-            select(AttributeValueTemplate).filter_by(
+            select(AttributeTemplate).filter_by(
                 name=attr_name, value_type=value_type, attribute_template=self._template
             )
         ).scalar_one_or_none()
         if attribute is None:
-            attribute = AttributeValueTemplate(
+            attribute = AttributeTemplate(
                 name=attr_name,
                 value_type=value_type,
                 attribute_template=self._template,
@@ -63,12 +63,12 @@ class AttributeGroupBuilder:
 
     def remove_attribute(self, attr_name: str) -> "AttributeGroupBuilder":
         q = (
-            select(AttributeTemplate)
+            select(AttributeGroupTemplate)
             .filter_by(name=self.group_name)
             .where(
                 with_parent(
                     self.parent._template,
-                    self.parent._template.__class__.attribute_templates,
+                    self.parent._template.__class__.attribute_group_templates,
                 )
             )
         )
@@ -81,7 +81,7 @@ class AttributeGroupBuilder:
             return self
 
         attribute = self.session.execute(
-            select(AttributeValueTemplate).filter_by(
+            select(AttributeTemplate).filter_by(
                 name=attr_name, attribute_template=attr_group
             )
         ).scalar_one_or_none()

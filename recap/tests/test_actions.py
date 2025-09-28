@@ -1,4 +1,4 @@
-from recap.models.attribute import AttributeTemplate, AttributeValueTemplate
+from recap.models.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.models.campaign import Campaign
 
 
@@ -7,13 +7,13 @@ def test_container(db_session):
     from recap.models.resource import Resource, ResourceTemplate, ResourceType
     from recap.models.step import StepTemplate
 
-    param_type = AttributeTemplate(
+    param_type = AttributeGroupTemplate(
         name="TestParamType",
     )
-    param_value_template = AttributeValueTemplate(
+    param_value_template = AttributeTemplate(
         name="volume", value_type="float", unit="uL", default_value="4.0"
     )
-    param_type.value_templates.append(param_value_template)
+    param_type.attribute_templates.append(param_value_template)
     db_session.add(param_type)
     process_template = ProcessTemplate(name="TestProcessTemplate", version="1.0")
     container_type = ResourceType(name="container")
@@ -33,7 +33,7 @@ def test_container(db_session):
     process_template.resource_slots.append(container_2_resource_slot)
     step_template = StepTemplate(
         name="TestActionType",
-        attribute_templates=[param_type],
+        attribute_group_templates=[param_type],
         process_template=process_template,
     )
     step_template.resource_slots["source_container"] = container_1_resource_slot
@@ -42,16 +42,16 @@ def test_container(db_session):
     db_session.add(step_template)
     db_session.commit()
 
-    child_prop_type = AttributeValueTemplate(
+    child_prop_type = AttributeTemplate(
         name="ChildPropTest", value_type="float", unit="mm", default_value="2.2"
     )
-    child_attr_template = AttributeTemplate(name="Child test")
-    child_attr_template.value_templates.append(child_prop_type)
+    child_attr_template = AttributeGroupTemplate(name="Child test")
+    child_attr_template.attribute_templates.append(child_prop_type)
     db_session.add(child_prop_type)
     child_container_template = ResourceTemplate(
         name="ChildTestContainerType",
         types=[container_type],
-        attribute_templates=[child_attr_template],
+        attribute_group_templates=[child_attr_template],
     )
     db_session.add(child_container_template)
     db_session.commit()

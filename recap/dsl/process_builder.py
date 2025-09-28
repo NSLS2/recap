@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 
 from recap.dsl.attribute_builder import AttributeGroupBuilder
 from recap.models import (
+    AttributeGroupTemplate,
     AttributeTemplate,
-    AttributeValueTemplate,
     ProcessTemplate,
 )
 from recap.models.campaign import Campaign
@@ -133,10 +133,10 @@ class StepTemplateBuilder:
 
     def remove_param(self, group_name: str, param_name: str) -> "StepTemplateBuilder":
         param_group = self.session.execute(
-            select(AttributeTemplate)
+            select(AttributeGroupTemplate)
             .filter_by(name=group_name)
             .where(
-                AttributeTemplate.step_templates.any(
+                AttributeGroupTemplate.step_templates.any(
                     StepTemplate.id == self._template.id
                 )
             )
@@ -150,7 +150,7 @@ class StepTemplateBuilder:
             return self
 
         param_value = self.session.execute(
-            select(AttributeValueTemplate).filter_by(
+            select(AttributeTemplate).filter_by(
                 name=param_name, attribute_template=param_group
             )
         ).scalar_one_or_none()
@@ -161,7 +161,7 @@ class StepTemplateBuilder:
             )
             return self
 
-        param_group.value_templates.remove(param_value)
+        param_group.attribute_templates.remove(param_value)
         return self
 
     def bind(self, slot_name: str, role: str):
@@ -290,7 +290,7 @@ class ProcessRunBuilder:
             param_fields: dict[str, tuple] = {}
             for val_name, value in param.values.items():
                 value_template = None
-                for vt in param.template.value_templates:
+                for vt in param.template.attribute_templates:
                     if vt.name == val_name:
                         value_template = vt
                         break

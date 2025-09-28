@@ -35,23 +35,51 @@ step_template_attribute_association = Table(
 )
 
 
-class AttributeTemplate(TimestampMixin, Base):
+class AttributeGroupTemplate(TimestampMixin, Base):
     __tablename__ = "attribute_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(nullable=False)
     slug: Mapped[str | None] = mapped_column(nullable=True)
-    value_templates: Mapped[list["AttributeValueTemplate"]] = relationship(
+    attribute_templates: Mapped[list["AttributeTemplate"]] = relationship(
         back_populates="attribute_template",
     )
 
     resource_templates: Mapped[list["ResourceTemplate"]] = relationship(
         "ResourceTemplate",
-        back_populates="attribute_templates",
+        back_populates="attribute_group_templates",
         secondary=resource_template_attribute_association,
     )
     step_templates: Mapped[list["StepTemplate"]] = relationship(
-        back_populates="attribute_templates",
+        back_populates="attribute_group_templates",
         secondary=step_template_attribute_association,
+    )
+
+
+# --- Keep slug always in sync with name ---
+@event.listens_for(AttributeGroupTemplate, "before_insert", propagate=True)
+def _before_insert(mapper, connection, target: AttributeGroupTemplate):
+    target.slug = make_slug(target.name)
+
+
+@event.listens_for(AttributeGroupTemplate, "before_update", propagate=True)
+def _before_update(mapper, connection, target: AttributeGroupTemplate):
+    target.slug = make_slug(target.name)
+
+
+class AttributeTemplate(TimestampMixin, Base):
+    __tablename__ = "attribute_value_template"
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(nullable=False)
+    slug: Mapped[str | None] = mapped_column(nullable=True)
+    value_type: Mapped[str] = mapped_column(nullable=False)
+    unit: Mapped[str | None] = mapped_column(nullable=True)
+    default_value: Mapped[str | None] = mapped_column(nullable=True)
+
+    attribute_template_id: Mapped[UUID] = mapped_column(
+        ForeignKey("attribute_template.id")
+    )
+    attribute_template = relationship(
+        AttributeGroupTemplate, back_populates="attribute_templates"
     )
 
 
@@ -66,34 +94,6 @@ def _before_update(mapper, connection, target: AttributeTemplate):
     target.slug = make_slug(target.name)
 
 
-class AttributeValueTemplate(TimestampMixin, Base):
-    __tablename__ = "attribute_value_template"
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    name: Mapped[str] = mapped_column(nullable=False)
-    slug: Mapped[str | None] = mapped_column(nullable=True)
-    value_type: Mapped[str] = mapped_column(nullable=False)
-    unit: Mapped[str | None] = mapped_column(nullable=True)
-    default_value: Mapped[str | None] = mapped_column(nullable=True)
-
-    attribute_template_id: Mapped[UUID] = mapped_column(
-        ForeignKey("attribute_template.id")
-    )
-    attribute_template = relationship(
-        AttributeTemplate, back_populates="value_templates"
-    )
-
-
-# --- Keep slug always in sync with name ---
-@event.listens_for(AttributeValueTemplate, "before_insert", propagate=True)
-def _before_insert(mapper, connection, target: AttributeValueTemplate):
-    target.slug = make_slug(target.name)
-
-
-@event.listens_for(AttributeValueTemplate, "before_update", propagate=True)
-def _before_update(mapper, connection, target: AttributeValueTemplate):
-    target.slug = make_slug(target.name)
-
-
 class AttributeValue(TimestampMixin, Base):
     __tablename__ = "attribute_value"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -101,7 +101,7 @@ class AttributeValue(TimestampMixin, Base):
     attribute_value_template_id: Mapped[UUID] = mapped_column(
         ForeignKey("attribute_value_template.id")
     )
-    template = relationship(AttributeValueTemplate)
+    template = relationship(AttributeTemplate)
 
     parameter_id: Mapped[UUID] = mapped_column(
         ForeignKey("parameter.id"), nullable=True

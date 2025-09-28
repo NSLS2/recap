@@ -6,7 +6,7 @@ from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import Mapped, mapped_collection, mapped_column, relationship
 
 if TYPE_CHECKING:
-    from recap.models.attribute import AttributeTemplate
+    from recap.models.attribute import AttributeGroupTemplate
     from recap.models.process import ResourceAssignment
 
 from .base import Base, TimestampMixin
@@ -29,7 +29,7 @@ class Property(TimestampMixin, Base):  # , AttributeValueMixin):
     attribute_template_id: Mapped[UUID] = mapped_column(
         ForeignKey("attribute_template.id")
     )
-    template: Mapped["AttributeTemplate"] = relationship("AttributeTemplate")
+    template: Mapped["AttributeGroupTemplate"] = relationship("AttributeGroupTemplate")
 
     _values = relationship(
         "AttributeValue",
@@ -47,9 +47,9 @@ class Property(TimestampMixin, Base):  # , AttributeValueMixin):
     def __init__(self, *args, **kwargs):
         from .attribute import AttributeValue  # noqa
 
-        template: AttributeTemplate = kwargs.get("template")
+        template: AttributeGroupTemplate = kwargs.get("template")
         super().__init__(*args, **kwargs)
-        for vt in template.value_templates:
+        for vt in template.attribute_templates:
             av = AttributeValue(template=vt, property=self)
             av.set_value(vt.default_value)
 
@@ -86,8 +86,8 @@ class ResourceTemplate(TimestampMixin, Base):
         "ResourceTemplate", back_populates="parent"
     )
 
-    attribute_templates: Mapped[list["AttributeTemplate"]] = relationship(
-        "AttributeTemplate",
+    attribute_group_templates: Mapped[list["AttributeGroupTemplate"]] = relationship(
+        "AttributeGroupTemplate",
         back_populates="resource_templates",
         secondary="resource_template_attribute_association",
     )
@@ -178,7 +178,7 @@ class Resource(TimestampMixin, Base):
             return
 
         visited.add(resource_template.id)
-        for prop in self.template.attribute_templates:
+        for prop in self.template.attribute_group_templates:
             if not any(p.template.id == prop.id for name, p in self.properties.items()):
                 self.properties[prop.name] = Property(template=prop)
 

@@ -14,7 +14,7 @@ from sqlalchemy.orm import (
 from sqlalchemy.sql import func
 
 from recap.models.attribute import (
-    AttributeTemplate,
+    AttributeGroupTemplate,
     AttributeValue,
     step_template_attribute_association,
 )
@@ -42,7 +42,7 @@ class Parameter(TimestampMixin, Base):  # , AttributeValueMixin):
     attribute_template_id: Mapped[UUID] = mapped_column(
         ForeignKey("attribute_template.id")
     )
-    template: Mapped[AttributeTemplate] = relationship(AttributeTemplate)
+    template: Mapped[AttributeGroupTemplate] = relationship(AttributeGroupTemplate)
 
     _values = relationship(
         "AttributeValue",
@@ -59,7 +59,7 @@ class Parameter(TimestampMixin, Base):  # , AttributeValueMixin):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        for value_template in self.template.value_templates:
+        for value_template in self.template.attribute_templates:
             av = AttributeValue(template=value_template, parameter=self)
             av.set_value(value_template.default_value)
 
@@ -68,17 +68,15 @@ class StepTemplate(TimestampMixin, Base):
     __tablename__ = "step_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(nullable=False)
-    attribute_templates: Mapped[list["AttributeTemplate"]] = relationship(
+    attribute_group_templates: Mapped[list["AttributeGroupTemplate"]] = relationship(
         back_populates="step_templates", secondary=step_template_attribute_association
     )
-
     process_template_id: Mapped[UUID] = mapped_column(
         ForeignKey("process_template.id"),
         nullable=False,
         index=True,
     )
     process_template = relationship("ProcessTemplate", back_populates="step_templates")
-
     bindings: Mapped[dict[str, "StepTemplateResourceSlotBinding"]] = relationship(
         "StepTemplateResourceSlotBinding",
         back_populates="step_template",
@@ -190,7 +188,7 @@ class Step(TimestampMixin, Base):
         if not template:
             return
 
-        for param in self.template.attribute_templates:
+        for param in self.template.attribute_group_templates:
             if not any(
                 p.template.id == param.id for name, p in self.parameters.items()
             ):
