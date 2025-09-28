@@ -1,6 +1,8 @@
+from datetime import datetime
 from enum import Enum
+from uuid import UUID
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class ValueType(str, Enum):
@@ -42,4 +44,11 @@ class Attribute(BaseModel):
                 f"got {type(self.default_value).__name__} instead.",
             )
         return self
-        return self
+
+
+class CommonFields(BaseModel):
+    id: UUID
+    create_date: datetime
+    modified_date: datetime
+
+    model_config = ConfigDict(from_attributes=True)

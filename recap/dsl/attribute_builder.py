@@ -92,7 +92,7 @@ class AttributeGroupBuilder:
             )
             return self
 
-        attr_group.value_templates.remove(attribute)
+        attr_group.attribute_templates.remove(attribute)
         return self
 
     def close_group(self):
