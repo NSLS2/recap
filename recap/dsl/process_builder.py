@@ -14,8 +14,10 @@ from recap.models import (
 )
 from recap.models.campaign import Campaign
 from recap.models.process import Direction, ProcessRun, ResourceSlot
-from recap.models.resource import Resource, ResourceTemplate, ResourceType
+from recap.models.resource import Resource, ResourceType
 from recap.models.step import Step, StepTemplate
+from recap.schemas.step import StepSchema
+from recap.utils.database import _load_single
 from recap.utils.dsl import AliasMixin, _get_or_create
 
 
@@ -125,9 +127,13 @@ class StepTemplateBuilder:
     def close_step(self) -> ProcessTemplateBuilder:
         return self.parent
 
-    def param_group(self, group_name: str) -> AttributeGroupBuilder:
-        attr_group_builder = AttributeGroupBuilder(
-            session=self.session, group_name=group_name, parent=self
+    def param_group(
+        self, group_name: str
+    ) -> "AttributeGroupBuilder[StepTemplateBuilder]":
+        attr_group_builder: AttributeGroupBuilder[StepTemplateBuilder] = (
+            AttributeGroupBuilder(
+                session=self.session, group_name=group_name, parent=self
+            )
         )
         return attr_group_builder
 
@@ -164,7 +170,7 @@ class StepTemplateBuilder:
         param_group.attribute_templates.remove(param_value)
         return self
 
-    def bind(self, slot_name: str, role: str):
+    def bind_slot(self, role: str, slot_name: str):
         slot = self.session.scalars(
             select(ResourceSlot).where(
                 ResourceSlot.process_template_id == self.parent.template.id,
@@ -212,6 +218,7 @@ class ProcessRunBuilder:
         )
         self.session.add(self._process_run)
         self.session.flush()
+        self._steps = None
         self._resources = {}
 
     def __enter__(self):
@@ -236,52 +243,72 @@ class ProcessRunBuilder:
     def process_run(self) -> ProcessRun:
         return self._process_run
 
-    def create_resource(
-        self, resource_name: str, resource_template_name: str
-    ) -> "ProcessRunBuilder":
-        statement = select(ResourceTemplate).filter_by(name=resource_template_name)
-        resource_template = self.session.scalars(statement).one_or_none()
-        if resource_template is None:
-            raise ValueError(f"Resource template not found: {resource_template_name}")
-        resource = Resource(name=resource_name, template=resource_template)
-        self.session.add(resource)
-        self._resources[resource_name] = resource
-        return self
-
     def assign_resource(
         self,
         resource_slot_name: str,
-        resource_name: str,
+        resource_name: str | None = None,
         resource_id: UUID | None = None,
     ) -> "ProcessRunBuilder":
         statement = select(ResourceSlot).where(
-            ResourceSlot.process_template_id == self._process_template.id,
-            ResourceSlot.name == resource_slot_name,
+            ResourceSlot.process_template_id == self._process_template.id
         )
-        _resource_slot = self.session.scalars(statement).one_or_none()
-        if resource_name not in self._resources:
-            if resource_id is None:
-                raise ValueError(
-                    f"Resource name not found in builder and no resource id provided: {resource_name}"
-                )
-            else:
-                statement = select(Resource).where(Resource.id == resource_id)
-                resource = self.session.scalars(statement).one_or_none()
-                if resource is None:
-                    raise ValueError(f"Resource not found with id: {resource_id}")
-        self._process_run.resources[_resource_slot] = self._resources[resource_name]
+        if resource_slot_name:
+            statement = statement.where(
+                ResourceSlot.name == resource_slot_name,
+            )
+        if resource_id:
+            statement = statement.where(ResourceSlot.id == resource_id)
+        # with self.session() as session:
+        resource_statement = select(Resource).where(
+            Resource.name == resource_name, Resource.active
+        )
+        # _resource_slot = self.session.scalars(statement).one_or_none()
+        # if _resource_slot is None:
+        #     raise LookupError("Resource slot not found")
+        _resource_slot = _load_single(self.session, statement, label="ResourceSlot")
+        _resource = _load_single(self.session, resource_statement, label="Resource")
+
+        self._process_run.resources[_resource_slot] = _resource
         return self
+
+    def _check_resource_assignment(self):
+        statement = select(ResourceSlot).where(
+            ResourceSlot.process_template_id == self._process_template.id,
+        )
+        _resource_slots = self.session.scalars(statement).all()
+        expected_ids = {slot.id for slot in _resource_slots}
+        assigned_ids = {slot.id for slot in self._process_run.resources}
+
+        missing_ids = expected_ids - assigned_ids
+        if not missing_ids:
+            return
+
+        missing_names = [
+            slot.name for slot in _resource_slots if slot.id in missing_ids
+        ]
+        raise ValueError(
+            f"Process run {self._process_run.name} is missing resources for slots: "
+            f"{', '.join(missing_names)}"
+        )
+
+    def steps(self) -> list[StepSchema]:
+        self._check_resource_assignment()
+        if self._steps is None:
+            statement = select(Step).where(Step.process_run_id == self._process_run.id)
+            self._steps = self.session.scalars(statement).all()
+        return [StepSchema.model_validate(step) for step in self._steps]
 
     def get_params(
         self,
         step_name: str,
     ) -> type[BaseModel]:
+        self._check_resource_assignment()
         statement = select(Step).where(
             Step.process_run_id == self._process_run.id, Step.name == step_name
         )
         step: Step | None = self.session.scalars(statement).one_or_none()
         if step is None:
-            raise ValueError(f"Step not found: {step_name}")
+            raise LookupError(f"Step not found: {step_name}")
         params: dict[str, tuple] = {
             "step_name": (Literal[f"{step_name}"], Field(default=step_name)),
             "step_id": (UUID, Field(default=step.id)),
@@ -295,7 +322,7 @@ class ProcessRunBuilder:
                         value_template = vt
                         break
                 if value_template is None:
-                    raise ValueError(f"Could not find value with name {val_name}")
+                    raise LookupError(f"Could not find value with name {val_name}")
                 pytype = map_dtype_to_pytype(value_template.value_type)
                 param_fields[value_template.slug] = (
                     pytype | None,
@@ -315,7 +342,7 @@ class ProcessRunBuilder:
         statement = select(Step).where(Step.id == filled_params.step_id)
         step: Step | None = self.session.scalars(statement).one_or_none()
         if step is None:
-            raise ValueError(f"Step not found in database: {filled_params.step_name}")
+            raise LookupError(f"Step not found in database: {filled_params.step_name}")
         for param in step.parameters.values():
             filled_param = filled_params.get(param.template.name)
             for value_name in step.parameters[param.template.name].values:
@@ -333,18 +360,3 @@ def map_dtype_to_pytype(dtype: str):
         "datetime": str,
         "array": list,
     }[dtype]
-
-
-# class ProcessRunWizard:
-#     def __init__(self, session: Session):
-#         self.session = session
-
-#     def current(self, run_id: str) -> Prompt:
-#         try:
-#             run = self.session.get(ProcessRun, run_id)
-#             step = compute_current_step(run)
-#             if not step:
-#                 return Prompt(
-#                     meta=StepMeta(ordinal=0, name="Finished", slug="__done__"),
-#                     model=create_model("Empty", )
-#                 )

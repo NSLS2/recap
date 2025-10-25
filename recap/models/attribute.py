@@ -123,10 +123,8 @@ class AttributeValue(TimestampMixin, Base):
     )
 
     def __init__(self, *args, **kwargs):
-        value = kwargs.pop("value", None)
         super().__init__(*args, **kwargs)
-        if value is None:
-            value = self.template.default_value
+        value = kwargs.pop("value", self.template.default_value)
         self.set_value(value)
 
     @validates(

@@ -32,7 +32,7 @@ DefaultValue = int | float | bool | str
 
 class Attribute(BaseModel):
     name: str
-    ref_name: str
+    slug: str
     value_type: ValueType
     default_value: DefaultValue
 

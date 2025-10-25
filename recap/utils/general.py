@@ -39,15 +39,32 @@ def _to_bool(v):
     return bool(v)
 
 
-def _to_datetime(v):
-    if isinstance(v, datetime):
-        return v
-    if isinstance(v, str):
-        # matches your original strict format
-        return datetime.strptime(v, "%Y-%m-%dT%H:%M:%SZ")
-    if v is None:
-        return datetime.now()
-    raise ValueError("datetime_value accepts: ISO8601 string or datetime object")
+ISO_FORMATS = (
+    "%Y-%m-%dT%H:%M:%S.%fZ",
+    "%Y-%m-%dT%H:%M:%SZ",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d",
+)
+
+
+def _to_datetime(value):
+    if value is None:
+        return None  # store NULL in the column
+
+    if isinstance(value, datetime):
+        return value  # already a datetime
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not value or value.lower() == "now":
+            return datetime.now()
+        for fmt in ISO_FORMATS:
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+        raise ValueError(f"Could not parse datetime string {value!r}")
+    raise TypeError("datetime_value accepts None, datetime, or ISO8601 string")
 
 
 def _to_array(v):

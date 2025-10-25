@@ -1,9 +1,11 @@
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, ForeignKey, Table
+from sqlalchemy import Column, ForeignKey, Table, event
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import Mapped, mapped_collection, mapped_column, relationship
+
+from recap.utils.general import make_slug
 
 if TYPE_CHECKING:
     from recap.models.attribute import AttributeGroupTemplate
@@ -107,32 +109,28 @@ class ResourceType(TimestampMixin, Base):
 class Resource(TimestampMixin, Base):
     __tablename__ = "resource"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    name: Mapped[str] = mapped_column(unique=True, nullable=True)
-    ref_name: Mapped[str | None] = mapped_column(nullable=True)
-
+    name: Mapped[str] = mapped_column(nullable=False)
+    slug: Mapped[str | None] = mapped_column(nullable=True)
+    active: Mapped[bool] = mapped_column(nullable=False, default=True)
     resource_template_id: Mapped[UUID] = mapped_column(
         ForeignKey("resource_template.id"), nullable=True
     )
     template: Mapped["ResourceTemplate"] = relationship()
-
     parent_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("resource.id"), nullable=True
     )
     parent: Mapped["Resource"] = relationship(
         "Resource", back_populates="children", remote_side=[id]
     )
-
     children: Mapped[list["Resource"]] = relationship(
         "Resource", back_populates="parent"
     )
-
     properties = relationship(
         "Property",
         collection_class=mapped_collection(lambda p: p.template.name),
         back_populates="resource",
         cascade="all, delete-orphan",
     )
-
     assignments: Mapped[list["ResourceAssignment"]] = relationship(
         "ResourceAssignment", back_populates="resource", cascade="all, delete-orphan"
     )
@@ -186,9 +184,39 @@ class Resource(TimestampMixin, Base):
             if child_ct in visited:
                 continue
             child_resource = Resource(
+                name=child_ct.name,
                 template=child_ct,
                 parent=self,
                 _visited_children=visited,
                 _max_depth=max_depth - 1,
             )
             self.children.append(child_resource)
+
+
+# --- Keep slug always in sync with name ---
+@event.listens_for(Resource, "before_insert", propagate=True)
+def _before_insert(mapper, connection, target: Resource):
+    target.slug = make_slug(target.name)
+    # Set active as True
+    if target.active is None:
+        target.active = True
+
+    # Update all other copies of the resource to active = False
+    if target.active and target.name:
+        tbl = Resource.__table__
+        connection.execute(
+            tbl.update().where(tbl.c.name == target.name).values(active=False)
+        )
+
+
+@event.listens_for(Resource, "before_update", propagate=True)
+def _before_update(mapper, connection, target: Resource):
+    target.slug = make_slug(target.name)
+    # If this resource is set to active, set others as inactive
+    if target.active and target.name:
+        tbl = Resource.__table__
+        connection.execute(
+            tbl.update()
+            .where(tbl.c.name == target.name, tbl.c.id != target.id)
+            .values(active=False)
+        )

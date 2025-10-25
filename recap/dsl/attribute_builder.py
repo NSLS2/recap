@@ -1,6 +1,6 @@
 import typing
 import warnings
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, with_parent
@@ -13,13 +13,17 @@ if typing.TYPE_CHECKING:
     from recap.dsl.process_builder import StepTemplateBuilder
     from recap.dsl.resource_builder import ResourceTemplateBuilder
 
+ParentType = TypeVar(
+    "ParentType", bound="ResourceTemplateBuilder | StepTemplateBuilder"
+)
 
-class AttributeGroupBuilder:
+
+class AttributeGroupBuilder(Generic[ParentType]):
     def __init__(
         self,
         session: Session,
         group_name: str,
-        parent: "ResourceTemplateBuilder | StepTemplateBuilder",
+        parent: ParentType,
     ):
         self.session = session
         self._tx = (
@@ -28,7 +32,7 @@ class AttributeGroupBuilder:
             else self.session.begin()
         )
         self.group_name = group_name
-        self.parent = parent
+        self.parent: ParentType = parent
         self._template: AttributeGroupTemplate | None = self.session.execute(
             select(AttributeGroupTemplate).filter_by(name=group_name)
         ).scalar_one_or_none()
@@ -43,7 +47,7 @@ class AttributeGroupBuilder:
 
     def add_attribute(
         self, attr_name: str, value_type: str, unit: str, default: Any
-    ) -> "AttributeGroupBuilder":
+    ) -> "AttributeGroupBuilder[ParentType]":
         attribute = self.session.execute(
             select(AttributeTemplate).filter_by(
                 name=attr_name, value_type=value_type, attribute_template=self._template
@@ -95,6 +99,5 @@ class AttributeGroupBuilder:
         attr_group.attribute_templates.remove(attribute)
         return self
 
-    def close_group(self):
-        if self.parent:
-            return self.parent
+    def close_group(self) -> ParentType:
+        return self.parent

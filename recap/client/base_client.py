@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from contextlib import contextmanager
 from typing import Any
 from uuid import UUID
@@ -6,7 +7,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
-from recap.dsl.resource_builder import ResourceTemplateBuilder
+from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
 from recap.models.campaign import Campaign
 
 
@@ -54,9 +55,19 @@ class RecapClient:
             )
 
     def resource_template(self, name: str, type_names: list[str]):
+        if isinstance(type_names, str) or not isinstance(type_names, Iterable):
+            raise TypeError("type_names must be a collection, not a string")
+        if not all(isinstance(item, str) for item in type_names):
+            raise TypeError("type_names must only contain strings")
         with self.session() as session:
             return ResourceTemplateBuilder(
                 session=session, name=name, type_names=type_names
+            )
+
+    def create_resource(self, name: str, template_name: str):
+        with self.session() as session:
+            return ResourceBuilder(
+                session=session, name=name, template_name=template_name, create=True
             )
 
     def create_campaign(
