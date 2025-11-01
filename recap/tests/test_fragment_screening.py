@@ -1,16 +1,16 @@
 from sqlalchemy import select
 
-from recap.models.campaign import Campaign
-from recap.models.step import StepTemplate
+from recap.db.campaign import Campaign
+from recap.db.step import StepTemplate
 from recap.utils.general import generate_uppercase_alphabets
 
 
 def test_fragment_screening(db_session):
-    from recap.models.attribute import (
+    from recap.db.attribute import (
         AttributeGroupTemplate,
         AttributeTemplate,
     )  # noqa
-    from recap.models.resource import (
+    from recap.db.resource import (
         Resource,
         ResourceTemplate,
         ResourceType,
@@ -126,11 +126,11 @@ def test_fragment_screening(db_session):
     assert lib_plate.children[0].template.name == "A01"
     assert lib_plate.properties["LB1536_dimensions"].values["rows"] == 32
 
-    from recap.models.attribute import (
+    from recap.db.attribute import (
         AttributeGroupTemplate,
         AttributeTemplate,
     )  # noqa
-    from recap.models.resource import Resource, ResourceTemplate  # noqa
+    from recap.db.resource import Resource, ResourceTemplate  # noqa
 
     # - Create an xtal plate template
     xtal_plate_type = ResourceTemplate(name="SwissCI-MRC-2d", types=[container_type])
@@ -193,7 +193,7 @@ def test_fragment_screening(db_session):
     assert xtal_plate.children[0].template.name == "A1a"
 
     # - Create Process template
-    from recap.models.process import (
+    from recap.db.process import (
         ProcessRun,
         ProcessTemplate,
         ResourceSlot,

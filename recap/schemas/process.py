@@ -1,4 +1,6 @@
-from typing import Any
+from typing import Annotated, Any, Self
+
+from pydantic import Field, SkipValidation
 
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
@@ -26,11 +28,14 @@ class ProcessTemplateSchema(CommonFields):
 
 class ResourceTemplateSchema(CommonFields):
     name: str
-    slug: str
-    types: list[ResourceTypeSchema]
-    parent: "ResourceTemplateSchema | None"
-    children: list["ResourceTemplateSchema"]
+    slug: "str | None"
+    types: list[ResourceTypeSchema] = Field(default_factory=list)
+    parent: Annotated[Self | None, SkipValidation] = Field(default=None, exclude=True)
+    children: list[Self] = Field(default_factory=list)
     attribute_group_templates: list[AttributeGroupTemplateSchema]
+
+
+ResourceTypeSchema.model_rebuild()
 
 
 class PropertySchema(CommonFields):

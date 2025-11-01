@@ -5,9 +5,9 @@ from typing import Any, Generic, TypeVar
 from sqlalchemy import select
 from sqlalchemy.orm import Session, with_parent
 
-from recap.models.attribute import AttributeGroupTemplate, AttributeTemplate
-from recap.models.resource import ResourceTemplate
-from recap.models.step import StepTemplate
+from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
+from recap.db.resource import ResourceTemplate
+from recap.db.step import StepTemplate
 
 if typing.TYPE_CHECKING:
     from recap.dsl.process_builder import StepTemplateBuilder

@@ -11,8 +11,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from recap.utils.general import CONVERTERS, TARGET_FIELD, make_slug
 
 if TYPE_CHECKING:
-    from recap.models.resource import ResourceTemplate
-    from recap.models.step import StepTemplate
+    from recap.db.resource import ResourceTemplate
+    from recap.db.step import StepTemplate
 
 from .base import Base, TimestampMixin
 

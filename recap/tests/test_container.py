@@ -1,9 +1,9 @@
-from recap.models.attribute import AttributeTemplate
+from recap.db.attribute import AttributeTemplate
 
 
 def test_attribute(db_session):
-    from recap.models.attribute import AttributeGroupTemplate, AttributeTemplate
-    from recap.models.resource import ResourceTemplate, ResourceType
+    from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
+    from recap.db.resource import ResourceTemplate, ResourceType
 
     prop_type = AttributeGroupTemplate(
         name="TestProp"
@@ -32,7 +32,7 @@ def test_attribute(db_session):
 
 
 def test_container_type(db_session):
-    from recap.models.resource import ResourceTemplate, ResourceType
+    from recap.db.resource import ResourceTemplate, ResourceType
 
     container_type = ResourceType(name="container")
     container = ResourceTemplate(name="test", types=[container_type])
@@ -45,8 +45,8 @@ def test_container_type(db_session):
 
 
 def test_container(db_session):
-    from recap.models.attribute import AttributeGroupTemplate
-    from recap.models.resource import Resource, ResourceTemplate, ResourceType
+    from recap.db.attribute import AttributeGroupTemplate
+    from recap.db.resource import Resource, ResourceTemplate, ResourceType
 
     prop_type = AttributeGroupTemplate(name="TestPropType")  # ,
     prop_value_template = AttributeTemplate(

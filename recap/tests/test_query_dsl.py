@@ -6,12 +6,12 @@ import pytest
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm.exc import DetachedInstanceError
 
+from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
+from recap.db.campaign import Campaign
+from recap.db.process import Direction, ProcessRun, ProcessTemplate, ResourceSlot
+from recap.db.resource import Resource, ResourceTemplate, ResourceType
+from recap.db.step import StepTemplate
 from recap.dsl.query import QueryDSL
-from recap.models.attribute import AttributeGroupTemplate, AttributeTemplate
-from recap.models.campaign import Campaign
-from recap.models.process import Direction, ProcessRun, ProcessTemplate, ResourceSlot
-from recap.models.resource import Resource, ResourceTemplate, ResourceType
-from recap.models.step import StepTemplate
 
 
 def make_query(db_session):

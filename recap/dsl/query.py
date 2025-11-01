@@ -5,7 +5,7 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel
 from sqlalchemy import Select, select
 
-from recap.schemas.process import ProcessRunSchema
+from recap.schemas.process import ProcessRunSchema, ResourceTemplateSchema
 
 try:
     from typing import Self
@@ -14,10 +14,10 @@ except ModuleNotFoundError:
 
 from sqlalchemy.orm import selectinload
 
-from recap.models.campaign import Campaign
-from recap.models.process import ProcessRun, ResourceAssignment
-from recap.models.resource import Resource
-from recap.models.step import Parameter, Step
+from recap.db.campaign import Campaign
+from recap.db.process import ProcessRun, ResourceAssignment
+from recap.db.resource import Resource, ResourceTemplate, ResourceType
+from recap.db.step import Parameter, Step
 
 ModelT = TypeVar("ModelT")
 
@@ -174,6 +174,22 @@ class ResourceQuery(BaseQuery[Resource]):
         return self.include(selectinload(Resource.template))
 
 
+class ResourceTemplateQuery(BaseQuery[ResourceTemplate]):
+    model = ResourceTemplate
+    default_schema = None
+
+    def schema_factory(self, rows):
+        return [ResourceTemplateSchema.model_validate(r) for r in rows]
+
+    def filter_by_types(self, type_list: list[str]) -> "ResourceTemplateQuery":
+        stmt = (
+            self._statement.join(ResourceTemplate.types)
+            .where(ResourceType.name.in_(type_list))
+            .group_by(ResourceTemplate.id)
+        )
+        return self._clone(statement=stmt)
+
+
 class QueryDSL:
     def __init__(self, session_factory):
         self._session_factory = session_factory
@@ -194,3 +210,6 @@ class QueryDSL:
 
     def resources(self) -> ResourceQuery:
         return ResourceQuery(self._session_scope)
+
+    def resource_templates(self) -> ResourceTemplateQuery:
+        return ResourceTemplateQuery(self._session_scope)

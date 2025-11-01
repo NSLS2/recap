@@ -6,9 +6,10 @@ from uuid import UUID
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from recap.db.campaign import Campaign
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
+from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
-from recap.models.campaign import Campaign
 
 
 class RecapClient:
@@ -94,3 +95,10 @@ class RecapClient:
             self._campaign = session.execute(statement).scalar_one_or_none()
         if self._campaign is None:
             raise ValueError(f"Campaign with ID {id} not found")
+
+    def query_maker(self):
+        if self._session:
+            SessionLocal = sessionmaker(bind=self._session.get_bind())
+            return QueryDSL(lambda: SessionLocal())
+        else:
+            return QueryDSL(self._sessionmaker)

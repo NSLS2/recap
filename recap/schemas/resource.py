@@ -1,4 +1,4 @@
-from recap.models.process import Direction
+from recap.db.process import Direction
 from recap.schemas.common import CommonFields
 
 

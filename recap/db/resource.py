@@ -8,8 +8,8 @@ from sqlalchemy.orm import Mapped, mapped_collection, mapped_column, relationshi
 from recap.utils.general import make_slug
 
 if TYPE_CHECKING:
-    from recap.models.attribute import AttributeGroupTemplate
-    from recap.models.process import ResourceAssignment
+    from recap.db.attribute import AttributeGroupTemplate
+    from recap.db.process import ResourceAssignment
 
 from .base import Base, TimestampMixin
 

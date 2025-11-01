@@ -6,16 +6,16 @@ from pydantic import BaseModel, Field, create_model
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from recap.dsl.attribute_builder import AttributeGroupBuilder
-from recap.models import (
+from recap.db import (
     AttributeGroupTemplate,
     AttributeTemplate,
     ProcessTemplate,
 )
-from recap.models.campaign import Campaign
-from recap.models.process import Direction, ProcessRun, ResourceSlot
-from recap.models.resource import Resource, ResourceType
-from recap.models.step import Step, StepTemplate
+from recap.db.campaign import Campaign
+from recap.db.process import Direction, ProcessRun, ResourceSlot
+from recap.db.resource import Resource, ResourceType
+from recap.db.step import Step, StepTemplate
+from recap.dsl.attribute_builder import AttributeGroupBuilder
 from recap.schemas.step import StepSchema
 from recap.utils.database import _load_single
 from recap.utils.dsl import AliasMixin, _get_or_create

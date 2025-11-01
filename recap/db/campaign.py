@@ -6,10 +6,10 @@ from sqlalchemy import JSON, UniqueConstraint
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from recap.models.base import Base, TimestampMixin
+from recap.db.base import Base, TimestampMixin
 
 if typing.TYPE_CHECKING:
-    from recap.models.process import ProcessRun
+    from recap.db.process import ProcessRun
 
 
 class Campaign(TimestampMixin, Base):

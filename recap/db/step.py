@@ -13,16 +13,16 @@ from sqlalchemy.orm import (
 )
 from sqlalchemy.sql import func
 
-from recap.models.attribute import (
+from recap.db.attribute import (
     AttributeGroupTemplate,
     AttributeValue,
     step_template_attribute_association,
 )
-from recap.models.base import Base, TimestampMixin
+from recap.db.base import Base, TimestampMixin
 from recap.schemas.common import StepStatus
 
 if TYPE_CHECKING:
-    from recap.models.process import ProcessRun, ResourceSlot
+    from recap.db.process import ProcessRun, ResourceSlot
 
 
 def _reject_new(key, _value):

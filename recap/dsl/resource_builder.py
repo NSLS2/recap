@@ -1,13 +1,14 @@
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, create_model
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.dsl.attribute_builder import AttributeGroupBuilder
 from recap.dsl.process_builder import map_dtype_to_pytype
-from recap.models.resource import Resource, ResourceTemplate, ResourceType
+from recap.schemas.attribute import AttributeValidator
 from recap.utils.database import _load_single
 from recap.utils.dsl import AliasMixin, _get_or_create
 
@@ -200,6 +201,32 @@ class ResourceTemplateBuilder:
             session=self.session, group_name=group_name, parent=self
         )
         return agb
+
+    def add_properties(
+        self, prop_def: dict[str, list[dict[str, Any]]]
+    ) -> "ResourceTemplateBuilder":
+        """
+        Add properties in the form of a dictionary, first level of keys
+        represents groups which have a list of dictionaries representing properties
+        {
+            "content": [
+                {"name": "catalog_id",
+                "type": "str",
+                "unit": "",
+                "default": ""}
+            ]
+        }
+        """
+
+        for group_key, props in prop_def.items():
+            agb = AttributeGroupBuilder(
+                session=self.session, group_name=group_key, parent=self
+            )
+            for prop in props:
+                attr = AttributeValidator.model_validate(prop)
+                agb.add_attribute(attr.name, attr.type, attr.unit, attr.default)
+            agb.close_group()
+        return self
 
     def add_child(self, name: str, type_names: list[str]) -> "ResourceTemplateBuilder":
         child_builder = ResourceTemplateBuilder(

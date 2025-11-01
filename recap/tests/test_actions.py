@@ -1,11 +1,11 @@
-from recap.models.attribute import AttributeGroupTemplate, AttributeTemplate
-from recap.models.campaign import Campaign
+from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
+from recap.db.campaign import Campaign
 
 
 def test_container(db_session):
-    from recap.models.process import ProcessRun, ProcessTemplate, ResourceSlot
-    from recap.models.resource import Resource, ResourceTemplate, ResourceType
-    from recap.models.step import StepTemplate
+    from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
+    from recap.db.resource import Resource, ResourceTemplate, ResourceType
+    from recap.db.step import StepTemplate
 
     param_type = AttributeGroupTemplate(
         name="TestParamType",

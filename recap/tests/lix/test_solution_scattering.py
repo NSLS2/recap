@@ -2,11 +2,11 @@ from itertools import product
 
 from sqlalchemy import select
 
-from recap.models.attribute import AttributeGroupTemplate, AttributeTemplate
-from recap.models.campaign import Campaign
-from recap.models.process import Direction, ProcessRun, ProcessTemplate, ResourceSlot
-from recap.models.resource import Resource, ResourceTemplate, ResourceType
-from recap.models.step import StepTemplate
+from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
+from recap.db.campaign import Campaign
+from recap.db.process import Direction, ProcessRun, ProcessTemplate, ResourceSlot
+from recap.db.resource import Resource, ResourceTemplate, ResourceType
+from recap.db.step import StepTemplate
 
 
 def test_solution_scattering_sample_prep(db_session):

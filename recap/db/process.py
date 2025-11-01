@@ -11,9 +11,9 @@ from sqlalchemy.orm import (
     validates,
 )
 
-from recap.models.campaign import Campaign
-from recap.models.resource import Resource, ResourceType
-from recap.models.step import Step, StepTemplate, StepTemplateEdge
+from recap.db.campaign import Campaign
+from recap.db.resource import Resource, ResourceType
+from recap.db.step import Step, StepTemplate, StepTemplateEdge
 
 from .base import Base, TimestampMixin
 
