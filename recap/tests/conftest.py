@@ -3,15 +3,21 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from recap.client.base_client import RecapClient
 from recap.db.base import Base
-
-TEST_DATABASE_URL = "sqlite+pysqlite:///:memory:"
 
 
 @pytest.fixture(scope="session")
-def engine():
+def db_url(tmp_path_factory):
+    db_dir = tmp_path_factory.mktemp("data")
+    db_path = db_dir / "test.db"
+    return f"sqlite:///{db_path}"
+
+
+@pytest.fixture(scope="session")
+def engine(db_url):
     engine = create_engine(
-        TEST_DATABASE_URL,
+        db_url,
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
@@ -47,3 +53,14 @@ def db_session(engine, setup_database):
     session.close()
     transcaction.rollback()
     connection.close()
+
+
+@pytest.fixture(scope="function")
+def client(db_url, setup_database):
+    # client = RecapClient(url=db_url)
+    # try:
+    #     yield client
+    # finally:
+    #     client.close()
+    with RecapClient(url=db_url) as client:
+        yield client
