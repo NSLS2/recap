@@ -5,13 +5,20 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 from recap.schemas.common import CommonFields
 from recap.utils.general import CONVERTERS
 
+TypeName = Literal["int", "float", "bool", "str", "datetime", "array"]
+
 
 class AttributeTemplateSchema(CommonFields):
     name: str
     slug: str
-    value_type: str
+    value_type: TypeName
     unit: str
-    default_value: str | None
+    default_value: Any
+
+
+class AttributeGroupRef(CommonFields):
+    name: str
+    slug: str
 
 
 class AttributeGroupTemplateSchema(CommonFields):
@@ -20,10 +27,7 @@ class AttributeGroupTemplateSchema(CommonFields):
     attribute_templates: list[AttributeTemplateSchema]
 
 
-TypeName = Literal["int", "float", "bool", "str", "datetime", "array"]
-
-
-class AttributeValidator(BaseModel):
+class AttributeTemplateValidator(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     name: str
     type: TypeName

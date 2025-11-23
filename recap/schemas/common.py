@@ -51,4 +51,4 @@ class CommonFields(BaseModel):
     create_date: datetime
     modified_date: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
