@@ -31,13 +31,13 @@ class RecapClient:
                 self._sessionmaker = sessionmaker(
                     bind=self.engine, expire_on_commit=False, future=True
                 )
-                self.backend = LocalBackend(self._sessionmaker())
+                self.backend = LocalBackend(self._sessionmaker)
 
     def close(self):
         """Close the underlying session/engine to release SQLite locks."""
         backend = getattr(self, "backend", None)
-        if backend and hasattr(backend, "session"):
-            backend.session.close()
+        if backend and hasattr(backend, "close"):
+            backend.close()
         engine = getattr(self, "engine", None)
         if engine:
             engine.dispose()
@@ -98,10 +98,22 @@ class RecapClient:
         saf: str | None = None,
         metadata: dict[str, Any] | None = None,
     ):
-        self._campaign = self.backend.create_campaign(name, proposal, saf, metadata)
+        uow = self.backend.begin()
+        try:
+            self._campaign = self.backend.create_campaign(name, proposal, saf, metadata)
+            uow.commit()
+        except Exception:
+            uow.rollback()
+            raise
 
     def set_campaign(self, id: UUID):
-        self._campaign = self.backend.set_campaign(id)
+        uow = self.backend.begin()
+        try:
+            self._campaign = self.backend.set_campaign(id)
+            uow.commit()
+        except Exception:
+            uow.rollback()
+            raise
 
     def query_maker(self):
         # if self._session:

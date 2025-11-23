@@ -1,4 +1,5 @@
 import warnings
+from contextlib import contextmanager
 from typing import Any, Literal
 from uuid import UUID
 
@@ -52,28 +53,66 @@ SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
 
 
 class SQLUnitOfWork(UnitOfWork):
-    def __init__(self, session: Session, tx):
+    def __init__(self, backend: "LocalBackend", session: Session, tx):
+        self._backend = backend
         self._session = session
         self._tx = tx
 
     def commit(self):
         self._tx.commit()
+        self._backend._clear_session(self._session)
 
     def rollback(self):
         self._tx.rollback()
+        self._backend._clear_session(self._session)
 
 
 class LocalBackend(Backend):
-    def __init__(self, session: Session):
-        self.session = session
+    def __init__(self, session_factory):
+        self._session_factory = session_factory
+        self._session: Session | None = None
+
+    def _get_session(self) -> Session:
+        if self._session is None:
+            raise RuntimeError("No active session; call begin() first")
+        return self._session
+
+    @property
+    def session(self) -> Session:
+        return self._get_session()
+
+    def _clear_session(self, session: Session):
+        if self._session is session:
+            session.close()
+            self._session = None
+
+    def close(self):
+        """Close any active session if it is still open."""
+        if self._session is not None:
+            self._session.close()
+            self._session = None
+
+    @contextmanager
+    def _session_scope(self):
+        """Yield a session, closing it if we had to create one."""
+        if self._session is not None:
+            yield self._session
+            return
+        session = self._session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
 
     def begin(self) -> UnitOfWork:
-        tx = (
-            self.session.begin_nested()
-            if self.session.in_transaction()
-            else self.session.begin()
-        )
-        return SQLUnitOfWork(self.session, tx)
+        if self._session is not None:
+            raise RuntimeError(
+                "An active session already exists; nested begin() calls are not supported"
+            )
+        session = self._session_factory()
+        tx = session.begin()
+        self._session = session
+        return SQLUnitOfWork(self, session, tx)
 
     def create_campaign(
         self,
@@ -525,10 +564,11 @@ class LocalBackend(Backend):
         if spec.offset is not None:
             stmt = stmt.offset(spec.offset)
 
-        return [
-            schema.model_validate(obj)
-            for obj in list(self.session.scalars(stmt).unique())
-        ]
+        with self._session_scope() as session:
+            return [
+                schema.model_validate(obj)
+                for obj in list(session.scalars(stmt).unique())
+            ]
 
     def count(self, schema: type[SchemaT], spec: QuerySpec) -> int:
         model = SCHEMA_MODEL_MAPPING[schema]
@@ -539,7 +579,8 @@ class LocalBackend(Backend):
         for pred in spec.predicates:
             stmt = stmt.where(pred)
 
-        return self.session.execute(stmt.count()).scalar_one()
+        with self._session_scope() as session:
+            return session.execute(stmt.count()).scalar_one()
 
     def _relationship_loaders(self, schema: type[SchemaT], preloads: list[str]):
         model = SCHEMA_MODEL_MAPPING[schema]
