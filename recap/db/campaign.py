@@ -10,6 +10,7 @@ from recap.db.base import Base, TimestampMixin
 
 if typing.TYPE_CHECKING:
     from recap.db.process import ProcessRun
+    from recap.db.resource import Resource
 
 
 class Campaign(TimestampMixin, Base):
@@ -23,6 +24,9 @@ class Campaign(TimestampMixin, Base):
     )
     process_runs: Mapped[list["ProcessRun"]] = relationship(
         "ProcessRun", back_populates="campaign"
+    )
+    resources: Mapped[list["Resource"]] = relationship(
+        "Resource", back_populates="campaigns"
     )
     __table_args__ = (
         UniqueConstraint("name", "proposal", name="uq_campaign_name_proposal"),

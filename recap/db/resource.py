@@ -1,15 +1,16 @@
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, ForeignKey, Table, event
+from sqlalchemy import Column, ForeignKey, Table, UniqueConstraint, event, join
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import Mapped, mapped_collection, mapped_column, relationship
 
+from recap.db.campaign import Campaign
+from recap.db.process import ProcessRun, ResourceAssignment
 from recap.utils.general import make_slug
 
 if TYPE_CHECKING:
     from recap.db.attribute import AttributeGroupTemplate
-    from recap.db.process import ResourceAssignment
 
 from .base import Base, TimestampMixin
 
@@ -110,7 +111,7 @@ class Resource(TimestampMixin, Base):
     __tablename__ = "resource"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(nullable=False)
-    slug: Mapped[str | None] = mapped_column(nullable=True)
+    slug: Mapped[str | None] = mapped_column(nullable=True, index=True)
     active: Mapped[bool] = mapped_column(nullable=False, default=True)
     resource_template_id: Mapped[UUID] = mapped_column(
         ForeignKey("resource_template.id"), nullable=True
@@ -133,6 +134,18 @@ class Resource(TimestampMixin, Base):
     )
     assignments: Mapped[list["ResourceAssignment"]] = relationship(
         "ResourceAssignment", back_populates="resource", cascade="all, delete-orphan"
+    )
+    campaigns: Mapped[list["Campaign"]] = relationship(
+        "Campaign",
+        secondary=lambda: join(
+            ResourceAssignment.__table__,
+            ProcessRun.__table__,
+            ResourceAssignment.process_run_id == ProcessRun.id,
+        ),
+        primaryjoin=lambda: Resource.id == ResourceAssignment.resource_id,
+        secondaryjoin=lambda: Campaign.id == ProcessRun.__table__.c.campaign_id,
+        viewonly=True,
+        lazy="selectin",
     )
 
     def __init__(
@@ -191,6 +204,13 @@ class Resource(TimestampMixin, Base):
                 _max_depth=max_depth - 1,
             )
             self.children.append(child_resource)
+
+    __table_args__ = (
+        # Check that a resource name is unique per resource_template
+        UniqueConstraint(
+            "resource_template_id", "name", name="uq_resource_name_per_template"
+        )
+    )
 
 
 # --- Keep slug always in sync with name ---

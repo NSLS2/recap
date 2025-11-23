@@ -107,25 +107,28 @@ class ProcessRun(TimestampMixin, Base):
         for step_template in template.step_templates:
             Step(process_run=self, template=step_template)
 
-    @validates("resources")
-    def _check_resource(self, key, resource):
-        # 1) type must match one of the slots
-        acceptable_slots = {
-            slot.id
-            for slot in self.template.resource_slots
-            if slot.resource_type_id == resource.resource_type_id
-        }
-        if resource.resource_slot_id not in acceptable_slots:
-            raise ValueError(f"Resource {resource.id} has wrong type/slot")
+    @validates("assignments")
+    def _check_assignment(self, key, assignment: "ResourceAssignment"):
+        slot = assignment.resource_slot
+        resource = assignment.resource
 
-        # 2) slot must not already be used
-        used_slots = {res.resource_slot_id for res in self.resources}
-        if resource.resource_slot_id in used_slots:
+        # Resource must advertise the slot's type via its template's types
+        resource_type_ids = {rt.id for rt in resource.template.types}
+        if slot.resource_type_id not in resource_type_ids:
             raise ValueError(
-                f"Slot {resource.resource_slot_id} is already occupied in run {self.id}"
+                f"Resource {resource.name} does not match required type for slot {slot.name}"
             )
 
-        return resource
+        # Slot must not already be used in this run
+        for existing in self.assignments.values():
+            if existing is assignment:
+                continue
+            if existing.resource_slot_id == slot.id:
+                raise ValueError(
+                    f"Slot {slot.name} is already occupied in run {self.id}"
+                )
+
+        return assignment
 
 
 class ResourceAssignment(TimestampMixin, Base):
