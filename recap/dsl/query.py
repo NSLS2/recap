@@ -1,44 +1,57 @@
-from collections.abc import Callable, Sequence
-from contextlib import contextmanager
-from typing import Any, Generic, TypeVar
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pydantic import BaseModel
-from sqlalchemy import Select, select
 
-from recap.schemas.process import ProcessRunSchema, ResourceTemplateSchema
+if TYPE_CHECKING:
+    from recap.adapter import Backend
+from recap.schemas.process import (
+    CampaignSchema,
+    ProcessRunSchema,
+    ResourceSchema,
+    ResourceTemplateSchema,
+)
 
 try:
     from typing import Self
 except ModuleNotFoundError:
     from typing import Self
 
-from sqlalchemy.orm import selectinload
 
-from recap.db.campaign import Campaign
-from recap.db.process import ProcessRun, ResourceAssignment
-from recap.db.resource import Resource, ResourceTemplate, ResourceType
-from recap.db.step import Parameter, Step
-
+SchemaT = TypeVar("SchemaT", bound=BaseModel)
 ModelT = TypeVar("ModelT")
 
 
-class BaseQuery(Generic[ModelT]):
-    model: type[ModelT]
-    schema_factory: Callable[[Sequence[ModelT]], Sequence[BaseModel]]
+class QuerySpec(BaseModel):
+    filters: dict[str, Any] = {}
+    predicates: Sequence[Any] = ()
+    orderings: Sequence[Any] = ()
+    preloads: Sequence[str] = ()
+    limit: int | None = None
+    offset: int | None = None
+
+
+class BaseQuery(Generic[SchemaT]):
+    schema: type[SchemaT]
 
     def __init__(
         self: Self,
-        session_scope,
-        statement: Select | None = None,
-        preloads: list[Any] | None = None,
+        backend: "Backend",
+        *,
+        filters: dict[str, Any] | None = None,
+        predicates: list[Any] | None = None,
+        orderings: list[Any] | None = None,
+        preloads: list[str] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
     ):
-        self._session_scope = session_scope
-        self._statement: Select = (
-            statement if statement is not None else select(self.model)
-        )
+        self._backend = backend
+        self._filters = filters or {}
+        self._predicates = predicates or []
+        self._orderings = orderings or []
         self._preloads = preloads or []
-        self._limit: int | None = None
-        self._offset: int | None = None
+        self._limit = limit
+        self._offset = offset
 
     def _clone(self: Self, **overrides) -> "Self":
         """
@@ -46,170 +59,126 @@ class BaseQuery(Generic[ModelT]):
         So for now we clone the sqlalchemy object and pass it
         to the user
         """
-        params = {
-            "session_scope": self._session_scope,
-            "statement": self._statement,
-            "preloads": list(self._preloads),
-        }
+        params = dict(
+            backend=self._backend,
+            filters=dict(self._filters),
+            predicates=list(self._predicates),
+            orderings=list(self._orderings),
+            preloads=list(self._preloads),
+            limit=self._limit,
+            offset=self._offset,
+        )
         params.update(overrides)
         clone = self.__class__(**params)
-        clone._limit = self._limit
-        clone._offset = self._offset
+        # clone._limit = self._limit
+        # clone._offset = self._offset
         return clone
 
     def filter(self, **kwargs) -> "Self":
-        stmt = self._statement.filter_by(**kwargs)
-        return self._clone(statement=stmt)
+        # stmt = self._statement.filter_by(**kwargs)
+        new_filters = dict(self._filters)
+        new_filters.update(kwargs)
+        return self._clone(filters=new_filters)
 
     def where(self, *predicates) -> "Self":
-        stmt = self._statement.where(*predicates)
-        return self._clone(statement=stmt)
+        # stmt = self._statement.where(*predicates)
+        return self._clone(predicates=self._predicates + list(predicates))
 
     def order_by(self, *orderings) -> "Self":
-        stmt = self._statement.order_by(*orderings)
-        return self._clone(statement=stmt)
+        # stmt = self._statement.order_by(*orderings)
+        return self._clone(orderings=self._orderings + list(orderings))
 
     def limit(self, value: int) -> "Self":
-        clone = self._clone()
-        clone._limit = value
-        return clone
+        # clone = self._clone()
+        # clone._limit = value
+        return self._clone(limit=value)
 
     def offset(self, value: int) -> "Self":
-        clone = self._clone()
-        clone._offset = value
-        return clone
+        # clone = self._clone()
+        # clone._offset = value
+        return self._clone(offset=value)
 
-    def include(self, loader) -> "Self":
-        clone = self._clone()
-        clone._preloads.append(loader)
-        return clone
+    def include(self, relation_name) -> "Self":
+        # clone = self._clone()
+        # clone._preloads.append(loader)
+        return self._clone(preloads=self._preloads + [relation_name])
 
-    def _apply_window(self, stmt: Select) -> Select:
-        if self._limit is not None:
-            stmt = stmt.limit(self._limit)
-        if self._offset is not None:
-            stmt = stmt.offset(self._offset)
-        # for loader in self._preloads:
-        if self._preloads:
-            stmt = stmt.options(*self._preloads)
-        return stmt
+    @property
+    def _spec(self) -> QuerySpec:
+        return QuerySpec(
+            filters=self._filters,
+            predicates=self._predicates,
+            orderings=self._orderings,
+            preloads=self._preloads,
+            limit=self._limit,
+            offset=self._offset,
+        )
 
-    def _execute(self, schema_transformer=None) -> list[ModelT]:
-        with self._session_scope() as session:
-            stmt = self._apply_window(self._statement)
-            rows = list(session.scalars(stmt).unique())
-            if schema_transformer:
-                return schema_transformer(rows)
-            return rows
+    def _execute(self) -> list[SchemaT]:
+        rows = self._backend.query(self.model, self._spec)
+        return rows
 
-    def all(self) -> Sequence[ModelT] | Sequence[BaseModel]:
-        # return self._to_schema(self._execute())
-        if not self.schema_factory:
-            return self._execute()
-        return self._execute(self.schema_factory)
+    def all(self) -> Sequence[SchemaT] | Sequence[BaseModel]:
+        return self._execute()
 
-    def _to_schema(self, rows) -> Sequence[ModelT] | Sequence[BaseModel]:
-        if not self.schema_factory:
-            return rows
-        return self.schema_factory(rows)
-
-    def first(self) -> ModelT | None:
+    def first(self) -> SchemaT | None:
         return next(iter(self.limit(1)._execute()), None)
 
     def count(self) -> int:
-        with self._session_scope() as session:
-            return session.execute(
-                self._statement.with_only_columns(self.model.id).count()
-            )
-
-    def as_models(self) -> Sequence[ModelT]:
-        return self._execute()
+        return self._backend.count(self.model, self._spec)
 
 
-class CampaignQuery(BaseQuery[Campaign]):
-    model = Campaign
+class CampaignQuery(BaseQuery[CampaignSchema]):
+    model = CampaignSchema
     default_schema = None  # e.g. recap.schemas.campaign.CampaignSchema
 
     def include_process_runs(
         self,
-        configurator: Callable[["ProcessRunQuery"], "ProcessRunQuery"] | None = None,
     ) -> "CampaignQuery":
-        loader = selectinload(Campaign.process_runs)
-        if configurator:
-            pr_query = configurator(ProcessRunQuery(self._session_scope))
-            for option in pr_query._preloads:
-                loader = loader.options(option)
-        return self.include(loader)
+        return self.include("process_run")
 
 
-class ProcessRunQuery(BaseQuery[ProcessRun]):
-    model = ProcessRun
+class ProcessRunQuery(BaseQuery[ProcessRunSchema]):
+    model = ProcessRunSchema
     default_schema = None
 
-    def schema_factory(self, rows):
-        return [ProcessRunSchema.model_validate(r) for r in rows]
-
     def include_steps(self, *, include_parameters: bool = False) -> "ProcessRunQuery":
-        loader = selectinload(ProcessRun.steps)
         if include_parameters:
-            loader = loader.options(
-                selectinload(Step.parameters).selectinload(
-                    Parameter._values
-                )  # e.g., to pull AttributeValue rows
-            )
-        return self.include(loader)
+            self.include("steps.parameters")
+        return self.include("steps")
 
     def include_resources(self) -> "ProcessRunQuery":
-        loaders = selectinload(ProcessRun.assignments).selectinload(
-            ResourceAssignment.resource
-        )
-        return self.include(loaders)
+        return self.include("resources")
 
 
-class ResourceQuery(BaseQuery[Resource]):
-    model = Resource
+class ResourceQuery(BaseQuery[ResourceSchema]):
+    model = ResourceSchema
     default_schema = None
 
     def include_template(self) -> "ResourceQuery":
-        return self.include(selectinload(Resource.template))
+        return self.include("template")
 
 
-class ResourceTemplateQuery(BaseQuery[ResourceTemplate]):
-    model = ResourceTemplate
+class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema]):
+    model = ResourceTemplateSchema
     default_schema = None
 
-    def schema_factory(self, rows):
-        return [ResourceTemplateSchema.model_validate(r) for r in rows]
-
     def filter_by_types(self, type_list: list[str]) -> "ResourceTemplateQuery":
-        stmt = (
-            self._statement.join(ResourceTemplate.types)
-            .where(ResourceType.name.in_(type_list))
-            .group_by(ResourceTemplate.id)
-        )
-        return self._clone(statement=stmt)
+        return self.filter(types__names_in=type_list)
 
 
 class QueryDSL:
-    def __init__(self, session_factory):
-        self._session_factory = session_factory
-
-    @contextmanager
-    def _session_scope(self):
-        session = self._session_factory()
-        try:
-            yield session
-        finally:
-            session.close()
+    def __init__(self, backend: "Backend"):
+        self.backend = backend
 
     def campaigns(self) -> CampaignQuery:
-        return CampaignQuery(self._session_scope)
+        return CampaignQuery(self.backend)
 
     def process_runs(self) -> ProcessRunQuery:
-        return ProcessRunQuery(self._session_scope)
+        return ProcessRunQuery(self.backend)
 
     def resources(self) -> ResourceQuery:
-        return ResourceQuery(self._session_scope)
+        return ResourceQuery(self.backend)
 
     def resource_templates(self) -> ResourceTemplateQuery:
-        return ResourceTemplateQuery(self._session_scope)
+        return ResourceTemplateQuery(self.backend)

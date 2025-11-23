@@ -2,73 +2,69 @@ from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, create_model
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from recap.db.resource import Resource, ResourceTemplate, ResourceType
+from recap.adapter import Backend
+from recap.db.resource import Resource, ResourceTemplate
 from recap.dsl.attribute_builder import AttributeGroupBuilder
 from recap.dsl.process_builder import map_dtype_to_pytype
-from recap.schemas.attribute import AttributeValidator
-from recap.utils.database import _load_single
-from recap.utils.dsl import AliasMixin, _get_or_create
+from recap.schemas.attribute import AttributeTemplateValidator
+from recap.schemas.process import (
+    ResourceSchema,
+    ResourceTemplateRef,
+)
+from recap.utils.dsl import AliasMixin
 
 
 class ResourceBuilder:
     def __init__(
         self,
-        session: Session,
+        # session: Session,
         name: str,
         template_name: str,
+        backend: Backend,
         create: bool = False,
         parent: Optional["ResourceBuilder"] = None,
     ):
-        self.session = session
-        self._tx = (
-            self.session.begin_nested()
-            if self.session.in_transaction()
-            else self.session.begin()
-        )
         self.name = name
         self._children: list[Resource] = []
         self.parent = parent
-        statement = select(ResourceTemplate).where(
-            ResourceTemplate.name == template_name
-        )
-        # self._template = self.session.scalars(statement).one()
-        self._template = _load_single(session, statement, label="ResourceTemplate")
-        if create:
-            self._resource = Resource(name=self.name, template=self._template)
-        else:
-            statement = (
-                select(Resource)
-                .join(Resource.template)
-                .where(
-                    Resource.name == name,
-                    ResourceTemplate.name == template_name,
-                    Resource.active.is_(True),
-                )
-            )
-            # self._resource = self.session.scalars(statement).one()
-            self._resource = _load_single(session, statement, label="Resource")
-        self.session.add(self._resource)
+        self.parent_resource = parent._resource if parent else None
+        self.backend = backend
+        self.create = create
+        self.template_name = template_name
+
+    @classmethod
+    def create(cls, name: str, template_name: str, backend: Backend, parent=None):
+        with cls(name, template_name, backend, create=True, parent=parent) as rb:
+            return rb.resource
 
     def __enter__(self):
+        self._uow = self.backend.begin()
+
+        if self.create:
+            template = self.backend.get_resource_template(name=self.template_name)
+            self._resource = self.backend.create_resource(
+                self.name,
+                resource_template=template,
+                parent_resource=self.parent_resource,
+                expand=True,
+            )
+        else:
+            self._resource = self.backend.get_resource(self.name, self.template_name)
         return self
 
     def __exit__(self, exc_type, exc, tb):
         if exc_type is None:
             self.save()
         else:
-            self._tx.rollback()
+            self._uow.rollback()
 
     def save(self):
-        self.session.add(self._resource)
-        self.session.flush()
-        self._tx.commit()
+        self._uow.commit()
         return self
 
     @property
-    def resource(self) -> Resource:
+    def resource(self) -> ResourceSchema:
         if self._resource is None:
             raise RuntimeError(
                 "Call .save() first or construct resource via builder methods"
@@ -77,7 +73,11 @@ class ResourceBuilder:
 
     def add_child(self, name: str, template_name: str) -> "ResourceBuilder":
         child_builder = ResourceBuilder(
-            self.session, name=name, template_name=template_name, parent=self
+            name=name,
+            template_name=template_name,
+            parent=self,
+            backend=self.backend,
+            create=True,
         )
         return child_builder
 
@@ -136,33 +136,30 @@ class ResourceBuilder:
 class ResourceTemplateBuilder:
     def __init__(
         self,
-        session: Session,
         name: str,
         type_names: list[str],
         parent: Optional["ResourceTemplateBuilder"] = None,
+        backend: Backend | None = None,
     ):
-        self.session = session
-        self._tx = (
-            self.session.begin_nested()
-            if self.session.in_transaction()
-            else self.session.begin()
-        )
+        if backend:
+            self.backend = backend
+            self._uow = self.backend.begin()
+        elif parent:
+            self.backend = parent.backend
+        else:
+            raise ValueError("No parent builder or backend provided")
         self.name = name
         self.type_names = type_names
         self._children: list[ResourceTemplate] = []
         self.parent = parent
         self.resource_types = {}
-        for type_name in self.type_names:
-            where = {"name": type_name}
-            resource_type, _ = _get_or_create(self.session, ResourceType, where=where)
-            self.resource_types[type_name] = resource_type
-        self._template: ResourceTemplate = ResourceTemplate(
-            name=name,
-            types=[rt for rt in self.resource_types.values()],
+        for rt_schema in self.backend.add_resource_types(type_names):
+            self.resource_types[rt_schema.name] = rt_schema
+        self._template: ResourceTemplateRef = self.backend.add_resource_template(
+            name, list(self.resource_types.values())
         )
         if self.parent:
             self._template.parent = self.parent._template
-        self.session.add(self._template)
 
     def __enter__(self):
         return self
@@ -171,34 +168,25 @@ class ResourceTemplateBuilder:
         if exc_type is None:
             self.save()
         else:
-            self._tx.rollback()
+            self._uow.rollback()
 
     def save(self):
-        self.session.add(self._template)
-        self.session.flush()
-        self._tx.commit()
+        self._uow.commit()
         return self
 
     @property
-    def template(self) -> ResourceTemplate:
+    def template(self) -> ResourceTemplateRef:
         if self._template is None:
             raise RuntimeError(
                 "Call .save() first or construct template via builder methods"
             )
         return self._template
 
-    def _ensure_template(self):
-        if self._template:
-            return
-        where = {"name": self.name}
-        template, _ = _get_or_create(self.session, ResourceTemplate, where=where)
-        self._template = template
-
     def prop_group(
         self, group_name: str
     ) -> AttributeGroupBuilder["ResourceTemplateBuilder"]:
-        agb = AttributeGroupBuilder(
-            session=self.session, group_name=group_name, parent=self
+        agb: AttributeGroupBuilder[ResourceTemplateBuilder] = AttributeGroupBuilder(
+            group_name=group_name, parent=self
         )
         return agb
 
@@ -219,18 +207,16 @@ class ResourceTemplateBuilder:
         """
 
         for group_key, props in prop_def.items():
-            agb = AttributeGroupBuilder(
-                session=self.session, group_name=group_key, parent=self
-            )
+            agb = AttributeGroupBuilder(group_name=group_key, parent=self)
             for prop in props:
-                attr = AttributeValidator.model_validate(prop)
+                attr = AttributeTemplateValidator.model_validate(prop)
                 agb.add_attribute(attr.name, attr.type, attr.unit, attr.default)
             agb.close_group()
         return self
 
     def add_child(self, name: str, type_names: list[str]) -> "ResourceTemplateBuilder":
         child_builder = ResourceTemplateBuilder(
-            self.session, name=name, type_names=type_names, parent=self
+            name=name, type_names=type_names, parent=self
         )
         return child_builder
 
