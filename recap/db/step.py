@@ -16,7 +16,6 @@ from sqlalchemy.sql import func
 from recap.db.attribute import (
     AttributeGroupTemplate,
     AttributeValue,
-    step_template_attribute_association,
 )
 from recap.db.base import Base, TimestampMixin
 from recap.schemas.common import StepStatus
@@ -39,8 +38,8 @@ class Parameter(TimestampMixin, Base):  # , AttributeValueMixin):
     step_id: Mapped[UUID] = mapped_column(ForeignKey("step.id"), nullable=False)
     step: Mapped["Step"] = relationship(back_populates="parameters")
 
-    attribute_template_id: Mapped[UUID] = mapped_column(
-        ForeignKey("attribute_template.id")
+    attribute_group_template_id: Mapped[UUID] = mapped_column(
+        ForeignKey("attribute_group_template.id")
     )
     template: Mapped[AttributeGroupTemplate] = relationship(AttributeGroupTemplate)
 
@@ -69,7 +68,9 @@ class StepTemplate(TimestampMixin, Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(nullable=False)
     attribute_group_templates: Mapped[list["AttributeGroupTemplate"]] = relationship(
-        back_populates="step_templates", secondary=step_template_attribute_association
+        "AttributeGroupTemplate",
+        back_populates="step_template",
+        cascade="all, delete-orphan",
     )
     process_template_id: Mapped[UUID] = mapped_column(
         ForeignKey("process_template.id"),

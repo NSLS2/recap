@@ -2,8 +2,15 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-import sqlalchemy
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, Table, event, func
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    UniqueConstraint,
+    event,
+    func,
+)
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
@@ -16,42 +23,49 @@ if TYPE_CHECKING:
 
 from .base import Base, TimestampMixin
 
-resource_template_attribute_association = Table(
-    "resource_template_attribute_association",
-    Base.metadata,
-    Column("resource_template_id", sqlalchemy.UUID, ForeignKey("resource_template.id")),
-    Column(
-        "attribute_template_id", sqlalchemy.UUID, ForeignKey("attribute_template.id")
-    ),
-)
-
-step_template_attribute_association = Table(
-    "step_template_parameter_template_association",
-    Base.metadata,
-    Column("step_template_id", sqlalchemy.UUID, ForeignKey("step_template.id")),
-    Column(
-        "attribute_template_id", sqlalchemy.UUID, ForeignKey("attribute_template.id")
-    ),
-)
-
 
 class AttributeGroupTemplate(TimestampMixin, Base):
-    __tablename__ = "attribute_template"
+    __tablename__ = "attribute_group_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(nullable=False)
     slug: Mapped[str | None] = mapped_column(nullable=True)
     attribute_templates: Mapped[list["AttributeTemplate"]] = relationship(
-        back_populates="attribute_template",
+        back_populates="attribute_group_template",
     )
 
-    resource_templates: Mapped[list["ResourceTemplate"]] = relationship(
+    resource_template_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("resource_template.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    step_template_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("step_template.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+
+    resource_template: Mapped["ResourceTemplate"] = relationship(
         "ResourceTemplate",
         back_populates="attribute_group_templates",
-        secondary=resource_template_attribute_association,
+        foreign_keys=resource_template_id,
     )
-    step_templates: Mapped[list["StepTemplate"]] = relationship(
+    step_template: Mapped["StepTemplate"] = relationship(
+        "StepTemplate",
         back_populates="attribute_group_templates",
-        secondary=step_template_attribute_association,
+        foreign_keys=step_template_id,
+    )
+
+    __table_args__ = (
+        # Enforce XOR: exactly one FK must be non-null
+        CheckConstraint(
+            "(resource_template_id IS NOT NULL) <> (step_template_id IS NOT NULL)",
+            name="ck_attr_group_exactly_one_owner",
+        ),
+        # Optional but handy: keep names unique per owner
+        UniqueConstraint(
+            "resource_template_id", "name", name="uq_attr_group_name_per_resource"
+        ),
+        UniqueConstraint(
+            "step_template_id", "name", name="uq_attr_group_name_per_step"
+        ),
     )
 
 
@@ -67,7 +81,7 @@ def _before_update(mapper, connection, target: AttributeGroupTemplate):
 
 
 class AttributeTemplate(TimestampMixin, Base):
-    __tablename__ = "attribute_value_template"
+    __tablename__ = "attribute_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(nullable=False)
     slug: Mapped[str | None] = mapped_column(nullable=True)
@@ -75,10 +89,10 @@ class AttributeTemplate(TimestampMixin, Base):
     unit: Mapped[str | None] = mapped_column(nullable=True)
     default_value: Mapped[str | None] = mapped_column(nullable=True)
 
-    attribute_template_id: Mapped[UUID] = mapped_column(
-        ForeignKey("attribute_template.id")
+    attribute_group_template_id: Mapped[UUID] = mapped_column(
+        ForeignKey("attribute_group_template.id")
     )
-    attribute_template = relationship(
+    attribute_group_template = relationship(
         AttributeGroupTemplate, back_populates="attribute_templates"
     )
 
@@ -98,8 +112,8 @@ class AttributeValue(TimestampMixin, Base):
     __tablename__ = "attribute_value"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
 
-    attribute_value_template_id: Mapped[UUID] = mapped_column(
-        ForeignKey("attribute_value_template.id")
+    attribute_template_id: Mapped[UUID] = mapped_column(
+        ForeignKey("attribute_template.id")
     )
     template = relationship(AttributeTemplate)
 

@@ -21,15 +21,15 @@ def _reject_new(key, _value):
     )
 
 
-class Property(TimestampMixin, Base):  # , AttributeValueMixin):
+class Property(TimestampMixin, Base):
     __tablename__ = "property"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
 
     resource_id: Mapped[UUID] = mapped_column(ForeignKey("resource.id"), nullable=False)
     resource: Mapped["Resource"] = relationship(back_populates="properties")
 
-    attribute_template_id: Mapped[UUID] = mapped_column(
-        ForeignKey("attribute_template.id")
+    attribute_group_template_id: Mapped[UUID] = mapped_column(
+        ForeignKey("attribute_group_template.id")
     )
     template: Mapped["AttributeGroupTemplate"] = relationship("AttributeGroupTemplate")
 
@@ -90,8 +90,8 @@ class ResourceTemplate(TimestampMixin, Base):
 
     attribute_group_templates: Mapped[list["AttributeGroupTemplate"]] = relationship(
         "AttributeGroupTemplate",
-        back_populates="resource_templates",
-        secondary="resource_template_attribute_association",
+        back_populates="resource_template",
+        cascade="all, delete-orphan",
     )
 
 

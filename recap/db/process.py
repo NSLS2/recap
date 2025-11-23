@@ -100,10 +100,10 @@ class ProcessRun(TimestampMixin, Base):
     campaign: Mapped[Campaign] = relationship()
 
     def __init__(self, *args, **kwargs):
-        template: ProcessTemplate | None = kwargs.get("template")
-        if not template:
-            return
         super().__init__(*args, **kwargs)
+        template: ProcessTemplate | None = kwargs.get("template")
+        if template is None:
+            raise ValueError("Missing template for ProcessRun")
         for step_template in template.step_templates:
             Step(process_run=self, template=step_template)
 
