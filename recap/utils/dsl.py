@@ -14,6 +14,7 @@ def _get_or_create(session: Session, model, where: dict, defaults: dict | None =
         return obj, False
     obj = model(**{**where, **(defaults or {})})
     session.add(obj)
+    session.flush()
     return obj, True
 
 
