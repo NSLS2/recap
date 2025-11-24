@@ -25,13 +25,15 @@ class RecapClient:
         if url is not None:
             parsed = urlparse(url)
             if parsed.scheme in ("http", "https"):
-                pass
+                raise NotImplementedError("Rest api via HTTP(S) is not yet implemented")
             elif "sqlite" in parsed.scheme:
                 self.engine = create_engine(url, echo=echo)
                 self._sessionmaker = sessionmaker(
                     bind=self.engine, expire_on_commit=False, future=True
                 )
                 self.backend = LocalBackend(self._sessionmaker)
+            else:
+                raise ValueError(f"Unknown scheme: {parsed.scheme}")
 
     def close(self):
         """Close the underlying session/engine to release SQLite locks."""
