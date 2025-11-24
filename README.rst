@@ -306,7 +306,4 @@ Roadmap
 
 - REST API backend  
 - Web UI for campaign/process management  
-- Automated execution engines  
-- Integration with beamline/robot systems  
-- GraphQL provenance explorer  
 
