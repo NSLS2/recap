@@ -3,6 +3,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import JSON, UniqueConstraint
+from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -10,7 +11,6 @@ from recap.db.base import Base, TimestampMixin
 
 if typing.TYPE_CHECKING:
     from recap.db.process import ProcessRun
-    from recap.db.resource import Resource
 
 
 class Campaign(TimestampMixin, Base):
@@ -25,9 +25,7 @@ class Campaign(TimestampMixin, Base):
     process_runs: Mapped[list["ProcessRun"]] = relationship(
         "ProcessRun", back_populates="campaign"
     )
-    resources: Mapped[list["Resource"]] = relationship(
-        "Resource", back_populates="campaigns"
-    )
+    resources = association_proxy("process_runs", "resources")
     __table_args__ = (
         UniqueConstraint("name", "proposal", name="uq_campaign_name_proposal"),
     )

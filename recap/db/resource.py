@@ -1,12 +1,11 @@
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, ForeignKey, Table, UniqueConstraint, event, join
+from sqlalchemy import Column, ForeignKey, Table, UniqueConstraint, event
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import Mapped, mapped_collection, mapped_column, relationship
 
-from recap.db.campaign import Campaign
-from recap.db.process import ProcessRun, ResourceAssignment
+from recap.db.process import ResourceAssignment
 from recap.utils.general import make_slug
 
 if TYPE_CHECKING:
@@ -135,18 +134,7 @@ class Resource(TimestampMixin, Base):
     assignments: Mapped[list["ResourceAssignment"]] = relationship(
         "ResourceAssignment", back_populates="resource", cascade="all, delete-orphan"
     )
-    campaigns: Mapped[list["Campaign"]] = relationship(
-        "Campaign",
-        secondary=lambda: join(
-            ResourceAssignment.__table__,
-            ProcessRun.__table__,
-            ResourceAssignment.process_run_id == ProcessRun.id,
-        ),
-        primaryjoin=lambda: Resource.id == ResourceAssignment.resource_id,
-        secondaryjoin=lambda: Campaign.id == ProcessRun.__table__.c.campaign_id,
-        viewonly=True,
-        lazy="selectin",
-    )
+    campaigns = association_proxy("assignments", "process_run.campaign")
 
     def __init__(
         self,
@@ -209,7 +197,7 @@ class Resource(TimestampMixin, Base):
         # Check that a resource name is unique per resource_template
         UniqueConstraint(
             "resource_template_id", "name", name="uq_resource_name_per_template"
-        )
+        ),
     )
 
 

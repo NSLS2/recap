@@ -1,4 +1,5 @@
 import enum
+import typing
 from uuid import UUID, uuid4
 
 from sqlalchemy import Enum, ForeignKey, UniqueConstraint
@@ -12,10 +13,12 @@ from sqlalchemy.orm import (
 )
 
 from recap.db.campaign import Campaign
-from recap.db.resource import Resource, ResourceType
 from recap.db.step import Step, StepTemplate, StepTemplateEdge
 
 from .base import Base, TimestampMixin
+
+if typing.TYPE_CHECKING:
+    from recap.db.resource import Resource, ResourceType
 
 
 class Direction(str, enum.Enum):
@@ -58,7 +61,7 @@ class ResourceSlot(TimestampMixin, Base):
     resource_type_id: Mapped[UUID] = mapped_column(
         ForeignKey("resource_type.id"), nullable=False
     )
-    resource_type: Mapped[ResourceType] = relationship("ResourceType")
+    resource_type: Mapped["ResourceType"] = relationship("ResourceType")
     direction: Mapped[Direction] = mapped_column(
         Enum(Direction, name="direction_enum"), nullable=False
     )
@@ -97,7 +100,7 @@ class ProcessRun(TimestampMixin, Base):
     )
     steps: Mapped[list["Step"]] = relationship(back_populates="process_run")
     campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaign.id"), nullable=False)
-    campaign: Mapped[Campaign] = relationship()
+    campaign: Mapped[Campaign] = relationship("Campaign", back_populates="process_runs")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
