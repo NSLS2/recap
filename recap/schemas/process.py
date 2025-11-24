@@ -1,4 +1,5 @@
 from typing import Annotated, Any, Self
+from uuid import UUID
 
 from pydantic import Field, SkipValidation, model_validator
 
@@ -16,6 +17,7 @@ class CampaignSchema(CommonFields):
     proposal: str
     saf: str | None
     meta_data: dict[str, Any] | None
+    process_runs: list["ProcessRunSchema"]
 
 
 class ProcessTemplateRef(CommonFields):
@@ -102,7 +104,8 @@ class ResourceSchema(CommonFields):
 class ProcessRunSchema(CommonFields):
     name: str
     description: str
-    campaign: CampaignSchema
+    # campaign: CampaignSchema
+    campaign_id: UUID
     template: ProcessTemplateSchema
     steps: list[StepSchema]
     resources: dict[str, ResourceSchema]
