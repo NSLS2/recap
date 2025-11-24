@@ -1,342 +1,312 @@
-======================================================
 RECAP (Reproducible Experiment Capture and Provenance)
-======================================================
+=====================================================
 
-.. image:: https://github.com/NSLS2/recap/actions/workflows/testing.yml/badge.svg
-   :target: https://github.com/NSLS2/recap/actions/workflows/testing.yml
+.. image:: docs/img/recap_logo.png
+   :alt: recap logo
+   :align: center
+   :width: 240px
 
-.. image:: docs/source/_static/recap_logo.png
-   :alt: Project Logo
-   :width: 220
+A scientific framework for reproducible experiment capture, tracking, and metadata management.
 
-A scientific framework for Reproducible Experiment Capture, tracking, and metadata management
+Overview
+--------
 
-* Free software: 3-clause BSD license
-* Documentation: In progress...
+RECAP is a Python framework that captures **experimental provenance** using a SQL database backend (via SQLAlchemy 2.0+). It provides:
 
-RECAP API Quickstart
---------------------
+- Pydantic validators  
+- A DSL builder API  
+- SQLAlchemy ORM persistence  
+- A unified provenance graph connecting *campaigns → runs → steps → resources*
 
-**Audience:** Experimental scientists and engineers who want to define, run, and track repeatable lab or data‑processing workflows using RECAP.
+Resources
+---------
 
-**Goal:** Start with zero context and walk through creating:
+In RECAP any trackable entity is called a **Resource**.
 
-1. a **Process Template** (the recipe),
-2. **Resource Templates** (the things your process uses or produces), then
-3. a **Process Run** (an actual instance with parameters filled in).
+A ``Resource`` may be:
 
-This document explains each step and annotates a complete, runnable example.
+- A physical item (samples, plates, robots)
+- A digital item (raw detector files, processed datasets)
+- A logical item (intermediate computation results)
 
-Core Concepts
--------------
+Resources are treated as **first-class objects**: they have identity, metadata, lineage and hierarchical structure.
 
-* **ProcessTemplate**: A reusable recipe for an experiment or operation (e.g., "Liquid transfer, then heat").
-* **StepTemplate**: One step in that recipe (e.g., `Transfer`, `Heat plate`). Steps can define **parameter groups** (like `volume_transfer` or `heat_to`) containing attributes such as `volume` or `temperature`.
-* **Resource Types & Resource Templates**: Describe allowable inputs/outputs (e.g., a *96‑well plate* with rows/columns and per‑well attributes). Resources are typed (e.g., `container`, `plate`, `operator`) to control compatibility.
-* **Resource Slots**: Named inputs/outputs required by a ProcessTemplate (e.g., `Input plate 1` of type `container`). In a run, you **assign** actual resources to these slots.
-* **ProcessRun**: A concrete execution of a ProcessTemplate. You assign resources to slots and fill in step parameters.
+Resource Hierarchy
+~~~~~~~~~~~~~~~~~~
 
-Deep dive: Resource Slots — why they exist
-------------------------------------------
-
-Resource slots define the **interface** between a process template and the real world. They’re required for:
-
-- **Decoupling recipe from inventory (late binding).** Templates stay reusable because they don’t hard‑code specific plates/files/instruments. At run time, you *assign* whatever concrete resource matches the slot’s type (e.g., any ``container`` with a compatible template).
-- **Type‑safe compatibility.** Each slot declares allowed **resource type tags** (e.g., ``container``, ``operator``, ``file``). Assignment is validated so a ``pipette`` can’t be plugged into a ``plate`` slot. This prevents subtle lab/runtime errors.
-- **Role binding inside steps.** Steps refer to resources by **role** (``source``, ``dest``, ``operator``) rather than instance names. A slot is bound to a role (via ``.bind(...)``), so your step logic is stable while concrete resources vary per run.
-- **Provenance & audit.** The run records exactly *which* resource filled each slot (e.g., which 96‑well plate and which operator). This makes results reproducible and traceable.
-- **Portability and versioning.** Slots act like a stable **contract** for the template. You can upgrade internals while preserving slot names/types so downstream tooling and campaigns don’t break.
-- **Workflow composition.** Slots make **I/O explicit**. Output slots can produce resources that feed into downstream processes in a **Campaign**, giving you a clear DAG of resources and processes.
-- **Automation & scheduling.** Robots/LIMS can reserve and stage resources to satisfy slots before execution (e.g., ensure the specified ``operator`` and correct ``container`` are available).
-
-**Common patterns**
-
-- **Input vs Output:** Use ``Direction.input`` for required inputs; mirror with ``Direction.output`` for produced artifacts.
-- **Single vs multiple:** A template can model one‑to‑one or one‑to‑many by defining distinct slots (e.g., ``Input plate 1``, ``Input plate 2``) or a collection pattern if supported.
-- **Human‑readable names:** Make slot names descriptive (``Destination plate``, ``Transfer operator``). These appear in UIs and logs.
-
-**Anti‑patterns**
-
-- Binding steps directly to concrete resource *names* instead of slots. This couples a template to a specific inventory item and kills reuse.
-
-**Mini example (with an output)**
-
-.. code-block:: python
-
-   with client.process_template("QC Measure", "1.0.0") as ed:
-       (
-           ed.add_resource_slot("Sample plate", "container", Direction.input)
-             .add_resource_slot("Detector", "instrument", Direction.input)
-             .add_resource_slot("QC report", "file", Direction.output)
-             .add_step("Measure").bind("Sample plate", "target").bind("Detector", "reader")
-             .param_group("acquisition").add_attribute("exposure", "float", "s", 0.5)
-             .close_group().close_step()
-       )
-
-.. tip::
-
-   **Mental model:** **Template** = blueprint, **Run** = a specific experiment. **Resource Template** = template for a physical/virtual thing, **Resource** = the actual thing.
-
-
-Prerequisites
--------------
-
-- Python 3.10+
-- SQLAlchemy 2.0+
-- Pydantic 2.0+
-- A configured database session (``db_session``) and a working RECAP install.
-
-
-End‑to‑End Example (annotated)
-------------------------------
-
-1) Create a Process Template
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-We’ll define a simple two‑step process:
-
-1. Transfer liquid from one plate to another using an operator.
-2. Heat the destination plate.
-
-.. code-block:: python
-
-   from itertools import product
-
-   from recap.client.base_client import RecapClient
-   from recap.db.process import Direction
-
-   client = RecapClient(session=db_session)
-
-   # Create or update a Process Template named "Test" version "0.0.1".
-   with client.process_template("Test", "0.0.1") as ed:
-       # Define required input resource slots for the process (typed and named).
-       (
-           ed.add_resource_slot(
-               "Input plate 1",            # a human‑readable slot name
-               "container",                # required resource type
-               Direction.input,             # input vs. output
-               create_resource_type=True    # auto‑create the resource type tag if missing
-           )
-           .add_resource_slot("Input plate 2", "container", Direction.input)
-           .add_resource_slot(
-               "Liquid transfer operator", "operator", Direction.input,
-               create_resource_type=True
-           )
-
-           # Step 1: Transfer
-           .add_step("Transfer")
-               .bind("Input plate 1", "source")     # role binding inside the step
-               .bind("Input plate 2", "dest")
-               .bind("Liquid transfer operator", "operator")
-               .param_group("volume transfer")        # group logical parameters
-                   .add_attribute(
-                       attr_name="volume", value_type="float", unit="uL", default=0.0
-                   )
-                   .add_attribute(
-                       attr_name="rate", value_type="float", unit="uL/sec", default=0.0
-                   )
-               .close_group()
-           .close_step()
-
-           # Step 2: Heat
-           .add_step("Heat plate")
-               .bind("Input plate 2", "target")
-               .param_group("heat to")
-                   .add_attribute("temperature", "float", "degC", "0.0")
-               .close_group()
-           .close_step()
-       )
-
-**What happened here?**
-
-- You created a process blueprint ``Test:0.0.1`` with three **input slots** and two **steps**.
-- Each step binds the slots to roles that the step expects (e.g., ``source``, ``dest``, ``operator``).
-- Each step defines a **parameter group** with typed attributes and optional defaults.
-
-.. tip::
-
-   Choose stable **template names** and **versions**. Changing versions lets you evolve protocols while preserving historical runs.
-
-
-2) Create Resource Templates
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-We’ll make two resource templates: a **96‑well plate** (with per‑well metadata) and a simpler **sample holder**.
-
-.. code-block:: python
-
-   # 96‑well plate template: global properties + per‑well children
-   with client.resource_template("96 well plate", ["container", "plate"]) as rt:
-       rt.prop_group("dimensions") \
-         .add_attribute("rows", "float", "", 8) \
-         .add_attribute("columns", "float", "", 12)
-
-       well_cols = "ABCDEFGH"
-       well_rows = [i for i in range(1, 13)]
-       well_names = [f"{wn[0]}{wn[1]}" for wn in product(well_cols, well_rows)]
-
-       for well_name in well_names:
-           (
-               rt.add_child(well_name, ["container", "well"])    # define a child resource
-                 .prop_group(group_name="well_data")
-                   .add_attribute("sample_name", "str", "", "")
-                   .add_attribute("buffer_name", "str", "", "")
-                   .add_attribute("volume", "int", "uL", "0")
-                   .add_attribute("mixing", "str", "", "")
-                   .add_attribute("stock", "bool", "", "False")
-                   .add_attribute("notes", "str", "", "")
-                 .close_group()
-               .close_child()
-           )
-
-   # Sample holder template: 2×9 with simpler per‑well metadata
-   with client.resource_template("sample holder", ["container", "plate"]) as rt:
-       rt.prop_group("dimensions") \
-         .add_attribute("rows", "int", "", 2) \
-         .add_attribute("columns", "int", "", 9)
-
-       for well_num in range(1, 19):
-           (
-               rt.add_child(str(well_num), ["container", "well"]) \
-                 .prop_group("sample_holder_well_data") \
-                   .add_attribute("sample_name", "str", "", "") \
-                   .add_attribute("buffer_name", "str", "", "") \
-                   .add_attribute("volume", "float", "uL", "0") \
-                 .close_group() \
-               .close_child()
-           )
-
-**What happened here?**
-
-- You registered two **resource templates** with types (``container``, ``plate``, ``well``).
-- The 96‑well plate defines **children** for each well and groups per‑well metadata under ``well_data``.
-- These templates control what attributes exist when you later create actual resources in a run.
-
-.. tip::
-
-   Use **tags** (like ``container``, ``well``, ``operator``) consistently. Your process steps will bind to these resource types, preventing invalid assignments.
-
-
-3) Instantiate a Process Run and Fill Parameters
-
-Now create an actual run from the `Test:0.0.1` template, instantiate resources, assign them to the process slots, and set step parameters.
-
-.. code-block:: python
-
-    with client.process\_run(name="test\_run", template\_name="Test", version="0.0.1") as run:
-        \# Create actual resources from templates (these become assignable to slots)
-        run.create\_resource("96 well plate", "96 well plate")
-        run.create\_resource("Test destination plate", "sample holder")
-
-
-           # Assign resources to the process’s declared input slots
-           run.assign_resource("Input plate 1", resource_name="96 well plate") \
-              .assign_resource("Input plate 2", resource_name="Test destination plate")
-
-           # Read, edit, and persist step parameters
-           transfer_params = run.get_params("Transfer")             # returns a typed object
-           transfer_params.volume_transfer.volume = 50
-           transfer_params.volume_transfer.rate = 1
-           print(transfer_params)                                    # inspect before saving
-           run.set_params(transfer_params)                           # write back to the run
-
-           heat_params = run.get_params("Heat plate")
-           heat_params.heat_to.temperature = 100
-           run.set_params(heat_params)
-
-
-**About parameters: typed Pydantic models & validation**
-
-``get_params(step_name)`` returns a **Pydantic model** that mirrors the template’s parameter groups and attributes. You can inspect its schema and fill fields with proper Python types. Calling ``set_params(model)`` will **validate** and persist the data for that step.
-
-.. code-block:: python
-
-   from pydantic import ValidationError
-
-   # Inspect the model returned by get_params
-   params = run.get_params("Transfer")
-   print(params.model_dump())               # current values (defaults + any edits)
-   print(params.model_json_schema())        # full JSON schema (types, required, etc.)
-
-   # Fill with correct types
-   params.volume_transfer.volume = 50.0     # float
-   params.volume_transfer.rate = 1.0        # float
-
-   # Persist with validation
-   try:
-       run.set_params(params)
-   except ValidationError as e:
-       # If types/constraints don't match the template, you'll see a detailed error
-       print("Parameter validation failed:", e)
-
-*Key points*
-
-- The parameter object is **strongly typed** (via Pydantic) per your template.
-- ``set_params(...)`` runs **validation**; if values don’t conform (e.g., wrong type/unit/required missing), a ``ValidationError`` is raised.
-- Use ``.model_dump()`` for current state and ``.model_json_schema()`` to programmatically discover structure and constraints.
-
-**What happened here?**
-
-- ``process_run(...)`` created a **ProcessRun** linked to your template.
-- ``create_resource(name, template)`` materialized actual resources from your **resource templates**.
-- ``assign_resource(slot, resource_name=...)`` bound those resources to the template’s input **slots**.
-- ``get_params(step)`` returned a typed parameter model for that step; you edited values and wrote them back with ``set_params(...)``.
-- Exiting the ``with`` block commits the run and all related objects to the database.
-
-.. tip::
-
-   If you see validation errors, check that your **value types** (``int``, ``float``, ``str``, ``bool``) and **units** match what the template expects, and that required assignments (slots) are complete.
-
-
-How This Relates to RECAP’s Data Flow
--------------------------------------
+Resources may contain child resources.  
+For example, a 96-well plate includes 96 wells:
 
 ::
 
-   RECAP DSL Builders (your code above)
-           ↓
-   SQLAlchemy ORM Models
-           ↓
-   Database (auditable templates & runs)
+    Plate  
+     ├── A01  
+     ├── A02  
+     ├── …  
+     └── H12  
 
-- You can feed RECAP with YAML/JSON to parameterize templates and runs; Pydantic validates shapes and types.
-- The builder DSL (what you used) gives a readable, chainable Python interface for scientists.
+Each child is also a Resource with its own attributes.
 
+Example: creating a plate template with child wells:
 
-Troubleshooting & FAQs
-----------------------
+.. code-block:: python
 
-**Q: My resource won’t assign to a slot. Why?**
-  A: Check the slot’s required **type** (e.g., ``container``) and your resource’s tags. They must be compatible.
+    with client.build_resource_template("96 Well Plate", ["container", "plate"]) as t:
+        t.add_properties({
+            "dimensions": [
+                {"name": "rows", "type": "int", "default": 8},
+                {"name": "columns", "type": "int", "default": 12},
+            ]
+        })
 
-**Q: ``get_params`` returns a model, but ``set_params`` fails.**
-  A: Ensure you didn’t remove required groups/attributes, and that values conform to the declared ``value_type``.
-
-**Q: How do I version changes safely?**
-  A: Bump the **template version** (e.g., ``0.0.2``) when you change step structure, slots, or parameter schemas. Old runs keep their original version.
-
-**Q: Where is commit handled?**
-  A: The context managers (``with ...``) manage lifecycle and commit on successful exit. Exceptions inside the block will roll back.
-
-
-Best Practices
---------------
-
-- **Name things for humans.** Slots like ``Input plate 1`` are clearer than ``ip1``.
-- **Group parameters logically.** Keep related attributes together (``volume_transfer``, ``heat_to``).
-- **Prefer templates first.** Define resource and process templates before runs to maximize reuse.
-- **Tag consistently.** Use a stable set of resource type tags (``container``, ``well``, ``operator``, etc.).
-- **Use defaults thoughtfully.** Defaults enable quick prototyping; record actual values in runs for provenance.
+        for row in "ABCDEFGH":
+            for col in range(1, 13):
+                t.add_child(f"{row}{col:02d}", ["container", "well"])\
+                 .add_properties({
+                     "capacity": [
+                         {"name": "volume_uL", "type": "float", "default": 360.0}
+                     ]
+                 })\
+                 .close_child()
 
 
-Next Steps
+Properties and Property Groups
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Resources carry metadata organized into **PropertyGroup** containers.
+
+Example: modifying well content after instantiating a plate:
+
+.. code-block:: python
+
+    with client.build_resource("Library Plate A", "96 Well Plate") as plate:
+        for well in plate.resource.children:
+            well.properties["content"].values["catalog_id"] = ""
+            well.properties["content"].values["SMILES"] = ""
+
+
+ProcessRun
 ----------
 
-- Add outputs by declaring **output** slots in your ProcessTemplate (mirrors ``Direction.input``).
-- Chain processes into a **Campaign** to capture multi‑step experimental programs.
-- Drive runs from **YAML/JSON** to reduce boilerplate in Python notebooks.
+A ``ProcessRun`` captures the execution of a workflow that manipulates resources.
 
-*You’re ready to build richer templates and automate more of your lab workflow with RECAP.*
+- Each run contains a series of **Steps**.
+- Each Step contains **Parameters**.
+- Resources are assigned into slots defined by the process template.
+- Runs form the core provenance trail.
+
+::
+
+    Campaign
+      └── ProcessRun
+             ├── Step 1
+             ├── Step 2
+             └── Step 3
 
 
+Campaign
+--------
+
+A **Campaign** stores the scientific context:
+
+- Proposal identifiers
+- SAF/regulatory details
+- Arbitrary metadata
+- All ``ProcessRun`` objects belonging to the project
+
+Creating a campaign:
+
+.. code-block:: python
+
+    campaign = client.create_campaign(
+        name="Beamline Proposal 4321",
+        proposal_id="4321",
+        saf_id="A12-7"
+    )
+
+
+Templates and Types
+-------------------
+
+Templates must be created before instantiating resources or process runs.
+
+Resource Templates
+~~~~~~~~~~~~~~~~~~
+
+A ``ResourceTemplate`` defines:
+
+- Canonical property groups
+- Expected child resources
+- Semantic ``ResourceType`` tags
+
+Example:
+
+.. code-block:: python
+
+    with client.build_resource_template(
+        "CLS3922-96", ["container", "plate", "vendor_cls3922"]
+    ) as t:
+        t.add_properties({
+            "dimensions": [
+                {"name": "rows", "type": "int", "default": 8},
+                {"name": "cols", "type": "int", "default": 12},
+            ]
+        })
+
+
+Process Templates
+~~~~~~~~~~~~~~~~~
+
+A ``ProcessTemplate`` is a multi-step workflow with slots for resources.
+
+Example definition:
+
+.. code-block:: python
+
+    from recap.db.process import Direction
+
+    with client.build_process_template("Simple Heat/Shake/Transfer", "1.0") as pt:
+        pt.add_resource_slot("source", "container", Direction.input)
+        pt.add_resource_slot("dest", "container", Direction.output)
+
+        # Step 1
+        pt.add_step("Heat")\
+          .param_group("heat")\
+          .add_attribute("temperature", "float", "C", 0)\
+          .add_attribute("duration_min", "float", "min", 0)\
+          .close_group()\
+          .bind_slot("vessel", "source")\
+          .close_step()
+
+        # Step 2
+        pt.add_step("Shake")\
+          .param_group("shake")\
+          .add_attribute("rpm", "int", "", 0)\
+          .add_attribute("time_min", "float", "min", 0)\
+          .close_group()\
+          .bind_slot("vessel", "source")\
+          .close_step()
+
+        # Step 3
+        pt.add_step("Transfer")\
+          .param_group("transfer")\
+          .add_attribute("volume_ml", "float", "mL", 0)\
+          .close_group()\
+          .bind_slot("from", "source")\
+          .bind_slot("to", "dest")\
+          .close_step()
+
+
+Instantiating a ProcessRun
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    with client.build_process_run(
+        "Run 001",
+        "Heating and shaking test run",
+        "Simple Heat/Shake/Transfer",
+        "1.0"
+    ) as run:
+        pass
+
+Assigning resources:
+
+.. code-block:: python
+
+    run.assign_resource("source", tubeA)
+    run.assign_resource("dest", tubeB)
+
+Updating step parameters:
+
+.. code-block:: python
+
+    step = run.steps[0]
+    step.parameters["heat"].values["temperature"] = 80
+    step.parameters["heat"].values["duration_min"] = 5
+
+
+Relating Resources, Campaigns, and Processes
+--------------------------------------------
+
+A resource enters a campaign once assigned to any process run belonging to it.
+
+You may traverse provenance in both directions:
+
+.. code-block:: python
+
+    sample.campaigns
+    campaign.resources
+    run.resources
+    resource.process_runs
+
+
+Steps and Parameters
+--------------------
+
+Steps are created from ``StepTemplate`` definitions and carry param groups, for example:
+
+.. code-block:: python
+
+    step.parameters["heat"].values["temperature"]
+    step.parameters["transfer"].values["volume_ml"]
+
+
+Entity Relationships In Practice
+--------------------------------
+
+1. Model inventory using ``ResourceTemplate`` objects.
+2. Define workflows using ``ProcessTemplate`` and ``StepTemplate`` objects.
+3. Execute experiments by creating ``Campaign`` → ``ProcessRun`` and assigning resources.
+4. Query provenance from any direction:
+
+::
+
+    campaign → runs → steps → parameters  
+    resource → assignments → runs → campaigns
+
+
+Example: End-to-End Mini Workflow
+---------------------------------
+
+.. code-block:: python
+
+    # 1. Create template
+    with client.build_resource_template("Tube", ["container"]) as t:
+        t.add_properties({"dims": [{"name": "volume_uL", "type": "float", "default": 1500}]})
+
+    # 2. Instantiate resources
+    tubeA = client.create_resource("Tube A", "Tube")
+    tubeB = client.create_resource("Tube B", "Tube")
+
+    # 3. Campaign
+    campaign = client.create_campaign("Buffer Prep", "BP-001", "0")
+
+    # 4. Process template
+    with client.build_process_template("Transfer 1mL", "1.0") as pt:
+        pt.add_resource_slot("source", "container", Direction.input)
+        pt.add_resource_slot("dest", "container", Direction.output)
+        pt.add_step("transfer")\
+          .param_group("p")\
+          .add_attribute("volume_uL", "float", "uL", 0)\
+          .close_group()\
+          .bind_slot("src", "source")\
+          .bind_slot("dst", "dest")\
+          .close_step()
+
+    # 5. Run
+    with client.build_process_run("Run 1", "", "Transfer 1mL", "1.0") as run:
+        run.assign_resource("source", tubeA)
+        run.assign_resource("dest", tubeB)
+        run.steps[0].parameters["p"].values["volume_uL"] = 1000
+
+
+Roadmap
+-------
+
+- REST API backend  
+- Web UI for campaign/process management  
+- Automated execution engines  
+- Integration with beamline/robot systems  
+- GraphQL provenance explorer  
 
