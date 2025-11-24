@@ -301,6 +301,319 @@ Example: End-to-End Mini Workflow
         run.steps[0].parameters["p"].values["volume_uL"] = 1000
 
 
+Querying Data
+=============
+
+RECAP exposes a small Query DSL on top of the configured backend (SQLAlchemy or another adapter) so that you can express provenance-oriented queries in a fluent, chainable style.
+
+The query builder lives on the client as ``client.query_maker()`` and exposes type-specific entry points:
+
+- ``campaigns()`` → :class:`CampaignQuery`
+- ``process_runs()`` → :class:`ProcessRunQuery`
+- ``resources()`` → :class:`ResourceQuery`
+- ``resource_templates()`` → :class:`ResourceTemplateQuery`
+
+Under the hood, these all use a common :class:`BaseQuery` and a backend-provided ``.query(model, spec)`` implementation. The ``QuerySpec`` object carries filters, predicates, ordering, preloads, and pagination options down to the backend.
+
+Getting a QueryDSL handle
+-------------------------
+
+Assuming you have a configured client:
+
+.. code-block:: python
+
+    from recap.client.base_client import RecapClient
+
+    with RecapClient(url="sqlite:///recap.db") as client:
+        qm = client.query_maker()
+
+        # Query entry points
+        campaigns = qm.campaigns()
+        runs = qm.process_runs()
+        resources = qm.resources()
+        templates = qm.resource_templates()
+
+The query objects are *immutable*: every operation like ``filter`` or ``include`` returns a **new** query instance.
+
+Basic filtering
+---------------
+
+The simplest way to filter is with ``filter(**kwargs)``, which translates into backend-specific filter expressions.
+
+List all campaigns with a given proposal id:
+
+.. code-block:: python
+
+    campaigns = (
+        client.query_maker()
+        .campaigns()
+        .filter(proposal="4321")
+        .all()
+    )
+
+    for c in campaigns:
+        print(c.id, c.name)
+
+Fetch a single campaign by name (or ``None`` if not found):
+
+.. code-block:: python
+
+    campaign = (
+        client.query_maker()
+        .campaigns()
+        .filter(name="Beamline Proposal 4321")
+        .first()
+    )
+
+    if campaign is None:
+        raise RuntimeError("No such campaign")
+
+Counting results:
+
+.. code-block:: python
+
+    n_runs = (
+        client.query_maker()
+        .process_runs()
+        .count()
+    )
+    print("Total runs:", n_runs)
+
+Filtering resource templates by type
+------------------------------------
+
+``ResourceTemplateQuery`` adds a convenience helper ``filter_by_types`` for semantic resource types:
+
+.. code-block:: python
+
+    xtal_plate_templates = (
+        client.query_maker()
+        .resource_templates()
+        .filter_by_types(["xtal_plate"])
+        .all()
+    )
+
+    for tmpl in xtal_plate_templates:
+        print(tmpl.name, tmpl.types)
+
+This corresponds directly to the examples in the workflow section where we create templates tagged with types like ``["container", "xtal_plate", "plate"]`` or ``["library_plate"]``.
+
+Eager loading related data with ``include``
+-------------------------------------------
+
+Queries can also **preload** related entities via the ``include`` helper. Each ``include`` translates to a string path that the backend understands (e.g. for SQLAlchemy that might become ``joinedload`` / ``selectinload``).
+
+The type-specific queries expose more ergonomic methods:
+
+- ``CampaignQuery.include_process_runs()``
+- ``ProcessRunQuery.include_steps(include_parameters: bool = False)``
+- ``ProcessRunQuery.include_resources()``
+- ``ResourceQuery.include_template()``
+
+Example: load campaigns *and* their process runs in one go:
+
+.. code-block:: python
+
+    campaigns = (
+        client.query_maker()
+        .campaigns()
+        .include_process_runs()
+        .all()
+    )
+
+    for c in campaigns:
+        print("Campaign:", c.name)
+        for run in c.process_runs:
+            print("  Run:", run.name)
+
+Example: load runs with steps and parameter groups
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The documentation earlier states you can traverse ``campaign → runs → steps → parameters``. Here is how to do that in code:
+
+.. code-block:: python
+
+    runs = (
+        client.query_maker()
+        .process_runs()
+        .include_steps(include_parameters=True)
+        .all()
+    )
+
+    for run in runs:
+        print(f"Run: {run.name}")
+        for step_num, step in enumerate(run.steps):
+            print(f"\tStep {step_num}: {step.name}")
+            for pg_num, (param_group_name, param_group) in enumerate(step.parameters.items()):
+                print(f"\t\tGroup {pg_num}: {param_group_name}")
+                for param_name, param_value in param_group.values.items():
+                    print(f"\t\t\t{param_name} : {param_value}")
+
+Example: load resources with their template
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The earlier sections explain that every resource is instantiated from a ``ResourceTemplate``. You can reflect that relationship in your queries:
+
+.. code-block:: python
+
+    library_plates = (
+        client.query_maker()
+        .resources()
+        .filter(types__names_in=["library_plate"])
+        .include_template()
+        .all()
+    )
+
+    for plate in library_plates:
+        print("Resource:", plate.name)
+        print("  Template:", plate.template.name)
+
+Provenance queries
+------------------
+
+The provenance claims in the design section can be expressed directly using the DSL.
+
+"Which campaigns touched this sample?"
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The documentation says that a resource can answer *"Which campaigns touched this sample?"*.
+
+One way to approach that is:
+
+1. Find the resource.
+2. Use a backend helper (if provided) or follow associations via preloads.
+
+At the QueryDSL level, you typically start with a resource lookup:
+
+.. code-block:: python
+
+    sample = (
+        client.query_maker()
+        .resources()
+        .filter(name="Sample 42")
+        .first()
+    )
+
+    if sample is None:
+        raise RuntimeError("Sample not found")
+
+    # Depending on your backend schema, you might either:
+    #  - expose `campaigns` directly on `ResourceSchema`, or
+    #  - query process runs and then campaigns from those runs.
+
+    runs = (
+        client.query_maker()
+        .process_runs()
+        .filter(resources__id=sample.id)
+        .include_steps()
+        .all()
+    )
+
+    campaign_ids = {run.campaign_id for run in runs}
+    campaigns = (
+        client.query_maker()
+        .campaigns()
+        .filter(id__in=list(campaign_ids))
+        .all()
+    )
+
+    for c in campaigns:
+        print("Campaign:", c.name)
+
+"Show me a full tree for a campaign"
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Earlier we described traversing:
+
+::
+
+    campaign → runs → steps → parameters and
+    resources → assignments → runs → campaigns
+
+In code, a simple “full tree” for a campaign could start with:
+
+.. code-block:: python
+
+    campaign = (
+        client.query_maker()
+        .campaigns()
+        .filter(name="Buffer Prep")
+        .include_process_runs()
+        .first()
+    )
+
+    if campaign is None:
+        raise RuntimeError("No such campaign")
+
+    runs = (
+        client.query_maker()
+        .process_runs()
+        .filter(campaign_id=campaign.id)
+        .include_steps(include_parameters=True)
+        .include_resources()
+        .all()
+    )
+
+    for run in runs:
+        print("Run:", run.name)
+        print("  Resources:")
+        for assignment in run.resources:
+            print("   -", assignment.resource.name, f"({assignment.role})")
+
+        print("  Steps:")
+        for step in run.steps:
+            print("   -", step.name)
+            for group in step.parameters:
+                for attr in group.values:
+                    print(f"       {group.group_name}.{attr.name} = {attr.value}")
+
+Pagination and ordering
+-----------------------
+
+All query types expose generic helpers:
+
+- ``where(*predicates)``
+- ``order_by(*orderings)``
+- ``limit(value)``
+- ``offset(value)``
+
+The exact predicate and ordering objects are backend-specific, but the chaining API is stable.
+
+Example: fetch the 10 most recent runs:
+
+.. code-block:: python
+
+    from recap.db.models import ProcessRun  # or use backend-specific fields
+
+    recent_runs = (
+        client.query_maker()
+        .process_runs()
+        .order_by(ProcessRun.created_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    for run in recent_runs:
+        print(run.created_at, run.name)
+
+Implementation note
+-------------------
+
+Internally, each query constructs a :class:`QuerySpec`:
+
+.. code-block:: python
+
+    class QuerySpec(BaseModel):
+        filters: dict[str, Any] = {}
+        predicates: Sequence[Any] = ()
+        orderings: Sequence[Any] = ()
+        preloads: Sequence[str] = ()
+        limit: int | None = None
+        offset: int | None = None
+
+Your backend adapter receives the model type and ``QuerySpec`` and is responsible for translating that into SQLAlchemy queries or other data sources. This separation keeps the public Query DSL stable even if the backend implementation changes.
+
+
 Roadmap
 -------
 
