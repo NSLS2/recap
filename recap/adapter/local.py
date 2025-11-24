@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, create_model
 from sqlalchemy import insert, select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.sql.functions import count
 
 from recap.adapter import Backend, UnitOfWork
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
@@ -421,7 +422,6 @@ class LocalBackend(Backend):
             template=process_template_model,
             campaign_id=campaign.id,
         )
-        print(process_run.name)
         self.session.add(process_run)
         self.session.flush()
 
@@ -546,7 +546,6 @@ class LocalBackend(Backend):
             )
 
         elif spec.filters:
-            print(model, spec.filters)
             stmt = stmt.filter_by(**spec.filters)
 
         for pred in spec.predicates:
@@ -580,7 +579,8 @@ class LocalBackend(Backend):
             stmt = stmt.where(pred)
 
         with self._session_scope() as session:
-            return session.execute(stmt.count()).scalar_one()
+            select_stmt = select(count()).select_from(stmt.subquery())
+            return session.execute(select_stmt).scalar_one()
 
     def _relationship_loaders(self, schema: type[SchemaT], preloads: list[str]):
         model = SCHEMA_MODEL_MAPPING[schema]
