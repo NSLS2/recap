@@ -4,7 +4,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, create_model
-from sqlalchemy import insert, select
+from sqlalchemy import Select, insert, select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.functions import count
@@ -42,8 +42,8 @@ from recap.schemas.process import (
 )
 from recap.schemas.resource import ResourceSlotSchema, ResourceTypeSchema
 from recap.schemas.step import StepSchema, StepTemplateRef
-from recap.utils.database import _load_single
-from recap.utils.dsl import AliasMixin, _get_or_create
+from recap.utils.database import get_or_create, load_single
+from recap.utils.dsl import AliasMixin, resolve_path
 
 SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
     CampaignSchema: Campaign,
@@ -142,7 +142,7 @@ class LocalBackend(Backend):
     def create_process_template(
         self, name: str, version: str
     ) -> ProcessTemplateRef | None:
-        template, created = _get_or_create(
+        template, created = get_or_create(
             self.session, ProcessTemplate, {"name": name, "version": version}, {}
         )
         if created:
@@ -185,7 +185,7 @@ class LocalBackend(Backend):
             else:
                 rt = ResourceType(name=resource_type)
                 self.session.add(rt)
-        slot, _ = _get_or_create(
+        slot, _ = get_or_create(
             self.session,
             ResourceSlot,
             where={"process_template_id": process_template_ref.id, "name": name},
@@ -292,7 +292,7 @@ class LocalBackend(Backend):
         resource_type_schemas = []
         for type_name in type_names:
             where = {"name": type_name}
-            resource_type, _ = _get_or_create(self.session, ResourceType, where=where)
+            resource_type, _ = get_or_create(self.session, ResourceType, where=where)
             resource_type_schemas.append(
                 ResourceTypeSchema.model_validate(resource_type)
             )
@@ -367,7 +367,7 @@ class LocalBackend(Backend):
                 selectinload(ResourceTemplate.children),
                 selectinload(ResourceTemplate.attribute_group_templates),
             )
-        template = _load_single(self.session, statement, label="ResourceTemplate")
+        template = load_single(self.session, statement, label="ResourceTemplate")
 
         if expand:
             return ResourceTemplateSchema.model_validate(template)
@@ -400,7 +400,7 @@ class LocalBackend(Backend):
                 Resource.active.is_(True),
             )
         )
-        resource = _load_single(self.session, statement, label="Resource")
+        resource = load_single(self.session, statement, label="Resource")
         return ResourceRef.model_validate(resource)
 
     def create_process_run(
@@ -413,7 +413,7 @@ class LocalBackend(Backend):
         statement = select(ProcessTemplate).where(
             ProcessTemplate.id == process_template.id
         )
-        process_template_model = _load_single(
+        process_template_model = load_single(
             self.session, statement, label="ProcessTemplate"
         )
         process_run = ProcessRun(
@@ -432,23 +432,22 @@ class LocalBackend(Backend):
         resource_slot: ResourceSlotSchema,
         resource: ResourceRef | ResourceSchema,
         process_run: ProcessRunSchema,
-    ):
-        statement = select(ResourceSlot).where(
-            ResourceSlot.process_template_id == process_run.template.id
-        )
-        if resource_slot.name:
-            statement = statement.where(
-                ResourceSlot.name == resource_slot.name,
-            )
-        if resource.id:
-            statement = statement.where(ResourceSlot.id == resource.id)
+    ) -> ProcessRunSchema:
+        statement = select(ResourceSlot).where(ResourceSlot.id == resource_slot.id)
         resource_statement = select(Resource).where(
             Resource.name == resource.name, Resource.active
         )
-        _resource_slot = _load_single(self.session, statement, label="ResourceSlot")
-        _resource = _load_single(self.session, resource_statement, label="Resource")
+        resource_slot_model = load_single(self.session, statement, label="ResourceSlot")
+        resource_model = load_single(self.session, resource_statement, label="Resource")
 
-        # self._process_run.resources[_resource_slot] = _resource
+        process_run_statement = select(ProcessRun).where(
+            ProcessRun.id == process_run.id
+        )
+        process_run_model = load_single(
+            self.session, process_run_statement, label="ProcessRun"
+        )
+        process_run_model.resources[resource_slot_model] = resource_model
+        return ProcessRunSchema.model_validate(process_run_model)
 
     def check_resource_assignment(
         self,
@@ -460,7 +459,7 @@ class LocalBackend(Backend):
         )
         _resource_slots = self.session.scalars(statement).all()
         expected_ids = {slot.id for slot in _resource_slots}
-        assigned_ids = {slot.id for slot in process_run.assignments}
+        assigned_ids = {ar.slot.id for ar in process_run.assigned_resources}
 
         missing_ids = expected_ids - assigned_ids
         if not missing_ids:
@@ -481,8 +480,7 @@ class LocalBackend(Backend):
 
     def get_params(self, step_schema: StepSchema) -> type[BaseModel]:
         statement = select(Step).where(
-            Step.process_run_id == step_schema.process_run_id,
-            Step.name == step_schema.id,
+            Step.id == step_schema.id,
         )
         step: Step | None = self.session.scalars(statement).one_or_none()
         if step is None:
@@ -533,7 +531,7 @@ class LocalBackend(Backend):
                     filled_param.get(value_name)
                 )
 
-    def query(self, schema: type[SchemaT], spec: QuerySpec) -> list[SchemaT]:
+    def _build_select(self, schema: type[SchemaT], spec: QuerySpec) -> Select:
         model = SCHEMA_MODEL_MAPPING[schema]
         stmt = select(model)
 
@@ -545,14 +543,31 @@ class LocalBackend(Backend):
                 .group_by(ResourceTemplate.id)
             )
 
-        elif spec.filters:
-            stmt = stmt.filter_by(**spec.filters)
+        filters = dict(spec.filters)
+        joined_paths: dict[tuple[str, ...], type] = {}
+        simple_filters: dict[str, object] = {}
+
+        for raw_key, value in filters.items():
+            if "__" not in raw_key:
+                simple_filters[raw_key] = value
+                continue
+            parts = tuple(raw_key.split("__"))
+            stmt, attr = resolve_path(model, stmt, parts, joined_paths)
+            stmt = stmt.where(attr == value)
+
+        if simple_filters:
+            stmt = stmt.filter_by(**simple_filters)
 
         for pred in spec.predicates:
             stmt = stmt.where(pred)
 
         if spec.orderings:
             stmt = stmt.order_by(*spec.orderings)
+
+        return stmt
+
+    def query(self, schema: type[SchemaT], spec: QuerySpec) -> list[SchemaT]:
+        stmt = self._build_select(schema, spec)
 
         loader_options = self._relationship_loaders(schema, list(spec.preloads))
         if loader_options:
@@ -570,13 +585,8 @@ class LocalBackend(Backend):
             ]
 
     def count(self, schema: type[SchemaT], spec: QuerySpec) -> int:
-        model = SCHEMA_MODEL_MAPPING[schema]
-        stmt = select(model.id)
-
-        if spec.filters:
-            stmt = stmt.filter_by(**spec.filters)
-        for pred in spec.predicates:
-            stmt = stmt.where(pred)
+        # model = SCHEMA_MODEL_MAPPING[schema]
+        stmt = self._build_select(schema, spec)
 
         with self._session_scope() as session:
             select_stmt = select(count()).select_from(stmt.subquery())

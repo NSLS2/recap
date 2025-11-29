@@ -118,9 +118,4 @@ class RecapClient:
             raise
 
     def query_maker(self):
-        # if self._session:
-        #     SessionLocal = sessionmaker(bind=self._session.get_bind())
-        #     return QueryDSL(lambda: SessionLocal())
-        # else:
-        # return QueryDSL(self._sessionmaker)
         return QueryDSL(self.backend)
