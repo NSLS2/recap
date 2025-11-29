@@ -12,7 +12,7 @@ class AttributeTemplateSchema(CommonFields):
     name: str
     slug: str
     value_type: TypeName
-    unit: str
+    unit: str | None
     default_value: Any
 
 
@@ -31,7 +31,7 @@ class AttributeTemplateValidator(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     name: str
     type: TypeName
-    unit: str = ""
+    unit: str | None = ""
     default: Any = Field(default=None)
 
     @field_validator("default")

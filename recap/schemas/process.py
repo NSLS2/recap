@@ -1,7 +1,7 @@
 from typing import Annotated, Any, Self
 from uuid import UUID
 
-from pydantic import Field, SkipValidation, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation, model_validator
 
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
@@ -101,6 +101,12 @@ class ResourceSchema(CommonFields):
     properties: dict[str, PropertySchema]
 
 
+class ResourceAssignmentSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    slot: ResourceSlotSchema
+    resource: ResourceSchema
+
+
 class ProcessRunSchema(CommonFields):
     name: str
     description: str
@@ -108,5 +114,5 @@ class ProcessRunSchema(CommonFields):
     campaign_id: UUID
     template: ProcessTemplateSchema
     steps: list[StepSchema]
-    resources: dict[str, ResourceSchema]
-    assignments: dict[ResourceSlotSchema, ResourceSchema]
+    # resources: dict[ResourceSlotSchema, ResourceSchema]
+    assigned_resources: list[ResourceAssignmentSchema]
