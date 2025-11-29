@@ -1,21 +1,72 @@
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.inspection import inspect
+from sqlalchemy.orm import InstrumentedAttribute
+from sqlalchemy.sql import Select
 
 
-def _get_or_create(session: Session, model, where: dict, defaults: dict | None = None):
-    stmt = select(model).filter_by(**where)
-    obj = session.execute(stmt).scalar_one_or_none()
-    if obj:
-        # update with defaults (no destructive changes)
-        if defaults:
-            for k, v in defaults.items():
-                if getattr(obj, k, None) is None:
-                    setattr(obj, k, v)
-        return obj, False
-    obj = model(**{**where, **(defaults or {})})
-    session.add(obj)
-    session.flush()
-    return obj, True
+def resolve_path(
+    base_model,
+    stmt: Select,
+    path: tuple[str, ...],
+    joined_paths: dict[tuple[str, ...], type],
+) -> tuple[Select, InstrumentedAttribute]:
+    """
+    Walk a path like ("campaign", "proposal") from base_model using SQLAlchemy
+    inspection. Along the way, join relationships as needed.
+
+    Returns:
+        stmt: the possibly-modified Select with joins applied
+        attr: the final attribute (typically a column) on the last entity
+    """
+    if not path:
+        raise ValueError("Empty path")
+
+    current_entity = base_model
+    mapper = inspect(current_entity)
+
+    *rel_path, field_name = path
+
+    # Walk relationships (if any)
+    for depth, rel_name in enumerate(rel_path):
+        subpath = tuple(rel_path[: depth + 1])
+
+        if subpath in joined_paths:
+            current_entity = joined_paths[subpath]
+            mapper = inspect(current_entity)
+            continue
+
+        rel = mapper.relationships.get(rel_name)
+        if rel is None:
+            raise ValueError(
+                f"{current_entity.__name__} has no relationship '{rel_name}' "
+                f"(path: {'__'.join(path)})"
+            )
+
+        rel_attr: InstrumentedAttribute = getattr(current_entity, rel.key)
+        target_entity = rel.mapper.class_
+
+        # Apply the join
+        stmt = stmt.join(rel_attr)
+
+        joined_paths[subpath] = target_entity
+        current_entity = target_entity
+        mapper = inspect(current_entity)
+
+    # Now resolve the final field on the last entity
+    try:
+        attr = getattr(current_entity, field_name)
+    except AttributeError as err:
+        raise ValueError(
+            f"{current_entity.__name__} has no attribute '{field_name}' "
+            f"(path: {'__'.join(path)})"
+        ) from err
+
+    if not isinstance(attr, InstrumentedAttribute):
+        raise ValueError(
+            f"Attribute '{field_name}' on {current_entity.__name__} is not a column/relationship "
+            f"(path: {'__'.join(path)})"
+        )
+
+    return stmt, attr
 
 
 class AliasMixin:
