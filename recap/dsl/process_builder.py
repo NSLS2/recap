@@ -153,12 +153,15 @@ class ProcessRunBuilder:
         resource = self.backend.get_resource(resource_name, resource_template_name)
         if resource_slot is None:
             raise NoResultFound(f"Resource slot {resource_slot_name} not found")
-        self.backend.assign_resource(resource_slot, resource, self._process_run)
+        self._process_run = self.backend.assign_resource(
+            resource_slot, resource, self._process_run
+        )
         return self
 
     def _check_resource_assignment(self):
         self.backend.check_resource_assignment(self._process_template, self.process_run)
 
+    @property
     def steps(self) -> list[StepSchema]:
         self._check_resource_assignment()
         if self._steps is None:
@@ -167,8 +170,17 @@ class ProcessRunBuilder:
 
     def get_params(
         self,
-        step_schema: StepSchema,
+        # step_schema: StepSchema,
+        step_name: str,
     ) -> type[BaseModel]:
+        step_schema = None
+        for step in self.steps:
+            if step.name == step_name:
+                step_schema = step
+                break
+
+        if step_schema is None:
+            raise NoResultFound("Step not found with name: {step_name} ")
         self._check_resource_assignment()
         return self.backend.get_params(step_schema)
 
