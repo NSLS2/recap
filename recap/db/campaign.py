@@ -16,7 +16,7 @@ if typing.TYPE_CHECKING:
 class Campaign(TimestampMixin, Base):
     __tablename__ = "campaign"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    name: Mapped[str] = mapped_column(unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(nullable=False)
     proposal: Mapped[str] = mapped_column(nullable=False)
     saf: Mapped[str] = mapped_column(nullable=True)
     meta_data: Mapped[dict[str, Any] | None] = mapped_column(

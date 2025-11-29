@@ -69,7 +69,7 @@ resource_template_type_association = Table(
 class ResourceTemplate(TimestampMixin, Base):
     __tablename__ = "resource_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    name: Mapped[str] = mapped_column(unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(nullable=False)
     slug: Mapped[str] = mapped_column(nullable=True)
 
     types: Mapped[list["ResourceType"]] = relationship(
@@ -93,6 +93,25 @@ class ResourceTemplate(TimestampMixin, Base):
         back_populates="resource_template",
         cascade="all, delete-orphan",
     )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "parent_id",
+            "name",
+            name="uq_resource_template_parent_name",
+        ),
+    )
+
+
+# --- Keep slug always in sync with name ---
+@event.listens_for(ResourceTemplate, "before_insert", propagate=True)
+def _before_insert_resource_template(mapper, connection, target: ResourceTemplate):
+    target.slug = make_slug(target.name)
+
+
+@event.listens_for(ResourceTemplate, "before_update", propagate=True)
+def _before_update_resource_template(mapper, connection, target: ResourceTemplate):
+    target.slug = make_slug(target.name)
 
 
 class ResourceType(TimestampMixin, Base):

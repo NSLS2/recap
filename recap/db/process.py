@@ -1,5 +1,6 @@
 import enum
 import typing
+from collections import namedtuple
 from uuid import UUID, uuid4
 
 from sqlalchemy import Enum, ForeignKey, UniqueConstraint
@@ -8,6 +9,7 @@ from sqlalchemy.orm import (
     Mapped,
     attribute_mapped_collection,
     mapped_column,
+    object_session,
     relationship,
     validates,
 )
@@ -19,6 +21,8 @@ from .base import Base, TimestampMixin
 
 if typing.TYPE_CHECKING:
     from recap.db.resource import Resource, ResourceType
+
+AssignedResource = namedtuple("AssignedResource", ["slot", "resource"])
 
 
 class Direction(str, enum.Enum):
@@ -112,6 +116,11 @@ class ProcessRun(TimestampMixin, Base):
 
     @validates("assignments")
     def _check_assignment(self, key, assignment: "ResourceAssignment"):
+        if assignment.process_run is None:
+            assignment.process_run = self
+        sess = object_session(self)
+        if sess is not None and assignment not in sess:
+            sess.add(assignment)
         slot = assignment.resource_slot
         resource = assignment.resource
 
@@ -133,6 +142,13 @@ class ProcessRun(TimestampMixin, Base):
 
         return assignment
 
+    @property
+    def assigned_resources(self):
+        ar = []
+        for resource_slot, resource in self.resources.items():
+            ar.append(AssignedResource(slot=resource_slot, resource=resource))
+        return ar
+
 
 class ResourceAssignment(TimestampMixin, Base):
     __tablename__ = "resource_assignment"
@@ -147,7 +163,7 @@ class ResourceAssignment(TimestampMixin, Base):
     # ties back to the run
     process_run: Mapped["ProcessRun"] = relationship(
         "ProcessRun"
-    )  # , back_populates="assignments"
+    )  # , back_populates="assignments")
     # ties back to the slot
     resource_slot: Mapped["ResourceSlot"] = relationship()
     # ties back to the underlying Resource

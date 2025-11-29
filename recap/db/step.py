@@ -171,24 +171,21 @@ class Step(TimestampMixin, Base):
     )
 
     def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         template: StepTemplate | None = kwargs.get("template")
         if not template:
             return
         # If no name specified use the templates name
-        if not kwargs.get("name"):
-            kwargs["name"] = template.name
-        super().__init__(*args, **kwargs)
+        if self.name is None:
+            self.name = template.name
 
         self._initialize_from_step_type(template)
 
-    def _initialize_from_step_type(self, template: StepTemplate | None = None):
+    def _initialize_from_step_type(self, template: StepTemplate):
         """
         Automatically initialize step from step_type
         - Only add parameters if not present
         """
-        if not template:
-            return
-
         for param in self.template.attribute_group_templates:
             if not any(
                 p.template.id == param.id for name, p in self.parameters.items()
