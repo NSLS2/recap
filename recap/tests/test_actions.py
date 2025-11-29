@@ -1,5 +1,6 @@
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.campaign import Campaign
+from recap.utils.database import get_or_create
 
 
 def test_container(db_session):
@@ -15,8 +16,13 @@ def test_container(db_session):
     )
     param_type.attribute_templates.append(param_value_template)
     db_session.add(param_type)
+    db_session.commit()
     process_template = ProcessTemplate(name="TestProcessTemplate", version="1.0")
-    container_type = ResourceType(name="container")
+    db_session.add(process_template)
+    # container_type = ResourceType(name="container")
+    container_type, _ = get_or_create(
+        db_session, ResourceType, where={"name": "container"}
+    )
     container_1_resource_slot = ResourceSlot(
         process_template=process_template,
         resource_type=container_type,
@@ -29,6 +35,8 @@ def test_container(db_session):
         name="container2",
         direction="input",
     )
+    db_session.add(container_1_resource_slot)
+    db_session.add(container_2_resource_slot)
     process_template.resource_slots.append(container_1_resource_slot)
     process_template.resource_slots.append(container_2_resource_slot)
     step_template = StepTemplate(

@@ -1,4 +1,5 @@
 from recap.db.attribute import AttributeTemplate
+from recap.utils.database import get_or_create
 
 
 def test_attribute(db_session):
@@ -14,7 +15,10 @@ def test_attribute(db_session):
     prop_type.attribute_templates.append(prop_value_template)
     db_session.add(prop_type)
 
-    container_type = ResourceType(name="container")
+    # container_type = ResourceType(name="container")
+    container_type, _ = get_or_create(
+        db_session, ResourceType, where={"name": "container"}
+    )
     container_template = ResourceTemplate(
         name="TestContainer",
         attribute_group_templates=[prop_type],
@@ -34,7 +38,9 @@ def test_attribute(db_session):
 def test_container_type(db_session):
     from recap.db.resource import ResourceTemplate, ResourceType
 
-    container_type = ResourceType(name="container")
+    container_type, _ = get_or_create(
+        db_session, ResourceType, where={"name": "container"}
+    )
     container = ResourceTemplate(name="test", types=[container_type])
     db_session.add(container_type)
     db_session.add(container)
@@ -54,13 +60,15 @@ def test_container(db_session):
     )
     prop_type.attribute_templates.append(prop_value_template)
     db_session.add(prop_type)
-    container_type = ResourceType(name="container")
+    container_type, _ = get_or_create(
+        db_session, ResourceType, where={"name": "container"}
+    )
     container_template = ResourceTemplate(
         name="TestContainerType",
         attribute_group_templates=[prop_type],
         types=[container_type],
     )
-    db_session.add(container_type)
+    db_session.add(container_template)
     db_session.commit()
 
     container = Resource(name="TestContainer", template=container_template)

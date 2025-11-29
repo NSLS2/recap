@@ -7,6 +7,7 @@ from recap.db.campaign import Campaign
 from recap.db.process import Direction, ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate
+from recap.utils.database import get_or_create
 
 
 def test_solution_scattering_sample_prep(db_session):
@@ -27,7 +28,7 @@ def test_solution_scattering_sample_prep(db_session):
 
     """
 
-    container_resource_type = ResourceType(name="container")
+    container_resource_type = ResourceType(name="container1")
 
     sample_plate_96_well = ResourceTemplate(
         name="96-well sample template",
@@ -71,30 +72,34 @@ def test_solution_scattering_sample_prep(db_session):
     )
     stock = AttributeTemplate(name="stock", value_type="bool", default_value="False")
     notes = AttributeTemplate(name="notes", value_type="str", default_value="")
-    well_data = AttributeGroupTemplate(
-        name="well_data",
-        attribute_templates=[
-            sample_name,
-            buffer_name,
-            volume,
-            mixing_instruction,
-            stock,
-            notes,
-        ],
-    )
-    db_session.add(well_data)
     db_session.commit()
 
     well_cols = "ABCDEFGH"
     well_rows = [i for i in range(1, 13)]
     well_names = [f"{wn[0]}{wn[1]}" for wn in product(well_cols, well_rows)]
-    well_resource_type = ResourceType(name="well")
+    # well_resource_type = ResourceType(name="well")
+    well_resource_type, _ = get_or_create(
+        db_session, ResourceType, where={"name": "well"}
+    )
     for well_name in well_names:
+        well_data = AttributeGroupTemplate(
+            name="well_data",
+            attribute_templates=[
+                sample_name,
+                buffer_name,
+                volume,
+                mixing_instruction,
+                stock,
+                notes,
+            ],
+        )
+        # db_session.add(well_data)
         well_resource_template = ResourceTemplate(
             name=well_name, types=[well_resource_type]
         )
-        well_resource_template.attribute_group_templates.append(well_data)
         db_session.add(well_resource_template)
+        well_resource_template.attribute_group_templates.append(well_data)
+        # db_session.add(well_resource_template)
         sample_plate_96_well.children.append(well_resource_template)
     db_session.add(sample_plate_96_well)
     db_session.commit()
@@ -103,17 +108,20 @@ def test_solution_scattering_sample_prep(db_session):
         name="sample holder template", types=[container_resource_type]
     )
     # Well attributes
-    sample_well_data = AttributeGroupTemplate(
-        name="sample_holder_well_data",
-        attribute_templates=[sample_name, buffer_name, volume],
-    )
     for well_num in range(1, 19):
         well_resource_template = ResourceTemplate(
-            name=str(well_num), types=[well_resource_type]
+            name=str(well_num),
+            types=[well_resource_type],
+        )
+        sample_well_data = AttributeGroupTemplate(
+            name="sample_holder_well_data",
+            # resource_template=well_resource_template,
+            attribute_templates=[sample_name, buffer_name, volume],
         )
         well_resource_template.attribute_group_templates.append(sample_well_data)
-        db_session.add(well_resource_template)
         sample_holder.children.append(well_resource_template)
+        db_session.add(well_resource_template)
+        # db_session.flush()
     db_session.add(sample_holder)
     db_session.commit()
 
@@ -176,7 +184,7 @@ def test_solution_scattering_sample_prep(db_session):
     db_session.add(destination_plate)
     db_session.add(source_plate)
     db_session.commit()
-    campaign = Campaign(name="Test campaign", proposal="123456")
+    campaign = Campaign(name="Test campaign", proposal="12356")
     process_run1 = ProcessRun(
         name="Test1",
         description="This is a test",
@@ -184,11 +192,11 @@ def test_solution_scattering_sample_prep(db_session):
         campaign=campaign,
     )
 
+    db_session.add(process_run1)
     # process_run1.resources=[(source_plate, sample_plate_resource_slot),
     #                         (destination_plate, holder_resource_slot)]
     process_run1.resources[sample_plate_resource_slot] = source_plate
     process_run1.resources[holder_resource_slot] = destination_plate
-    db_session.add(process_run1)
     db_session.commit()
 
     assert process_run1.steps[0].template.name == "Robot transfer"

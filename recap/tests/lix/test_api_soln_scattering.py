@@ -1,13 +1,11 @@
 from itertools import product
 
-from recap.client.base_client import RecapClient
 from recap.db.process import Direction
+from recap.dsl.process_builder import ProcessRunBuilder
 
 
-def test_client(db_session):
-    client = RecapClient(session=db_session)
-
-    with client.process_template("Test", "0.0.1") as ed:
+def test_client(client):
+    with client.build_process_template("Test", "0.0.1") as ed:
         ed.add_resource_slot(
             "Input plate 1", "container", Direction.input, create_resource_type=True
         ).add_resource_slot(
@@ -31,7 +29,7 @@ def test_client(db_session):
             "temperature", "float", "degC", "0.0"
         ).close_group().close_step()
 
-    with client.resource_template("96 well plate", ["container", "plate"]) as rt:
+    with client.build_resource_template("96 well plate", ["container", "plate"]) as rt:
         rt.prop_group("dimensions").add_attribute("rows", "float", "", 8).add_attribute(
             "columns", "float", "", 12
         )
@@ -70,7 +68,7 @@ def test_client(db_session):
                 default="",
             ).close_group().close_child()
 
-    with client.resource_template("sample holder", ["container", "plate"]) as rt:
+    with client.build_resource_template("sample holder", ["container", "plate"]) as rt:
         rt.prop_group("dimensions").add_attribute("rows", "int", "", 2).add_attribute(
             "columns", "int", "", 9
         )
@@ -94,7 +92,9 @@ def test_client(db_session):
                 default="0",
             ).close_group().close_child()
 
-    with client.resource_template("robot", ["robot", "liquid_transfer"]) as rt:
+    with client.build_resource_template(
+        "robot", ["robot", "liquid_transfer", "operator"]
+    ) as rt:
         rt.prop_group("details").add_attribute(
             "serial_no", "str", "", "xyz"
         ).close_group()
@@ -105,14 +105,26 @@ def test_client(db_session):
     client.create_resource("96 well plate", "96 well plate")
     client.create_resource("LHR", "robot")
 
-    with client.process_run(
-        name="test_run", template_name="Test", version="0.0.1"
+    with client.build_process_run(
+        name="test_run",
+        description="This is a test",
+        template_name="Test",
+        version="0.0.1",
     ) as run:
+        run: ProcessRunBuilder
         run.assign_resource(
-            "Input plate 1", resource_name="96 well plate"
+            "Input plate 1",
+            resource_name="96 well plate",
+            resource_template_name="96 well plate",
         ).assign_resource(
-            "Input plate 2", resource_name="Test destination plate"
-        ).assign_resource("Liquid transfer operator", resource_name="LHR")
+            "Input plate 2",
+            resource_name="Test destination plate",
+            resource_template_name="sample holder",
+        ).assign_resource(
+            "Liquid transfer operator",
+            resource_name="LHR",
+            resource_template_name="robot",
+        )
 
         transfer_params = run.get_params("Transfer")
         transfer_params.volume_transfer.volume = 50

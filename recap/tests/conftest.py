@@ -37,7 +37,7 @@ def setup_database(engine):
 def db_session(engine, setup_database):
     """Create a new database session"""
     connection = engine.connect()
-    transcaction = connection.begin()
+    transaction = connection.begin()
     TestingSessionLocal = sessionmaker(bind=connection)
     session = TestingSessionLocal(bind=connection)
     # Add default start and end actionTypes
@@ -50,8 +50,8 @@ def db_session(engine, setup_database):
     """
     yield session
 
+    transaction.rollback()
     session.close()
-    transcaction.rollback()
     connection.close()
 
 

@@ -2,6 +2,7 @@ from sqlalchemy import select
 
 from recap.db.campaign import Campaign
 from recap.db.step import StepTemplate
+from recap.utils.database import get_or_create
 from recap.utils.general import generate_uppercase_alphabets
 
 
@@ -9,12 +10,14 @@ def test_fragment_screening(db_session):
     from recap.db.attribute import (
         AttributeGroupTemplate,
         AttributeTemplate,
-    )  # noqa
+    )
+
+    # noqa
     from recap.db.resource import (
         Resource,
         ResourceTemplate,
         ResourceType,
-    )  # noqa
+    )
 
     """
     Testing fragment screening
@@ -37,7 +40,10 @@ def test_fragment_screening(db_session):
         - Add resources to the process
     """
     # Create container Resource type
-    container_type = ResourceType(name="container")
+    # container_type = ResourceType(name="container")
+    container_type, _ = get_or_create(
+        db_session, ResourceType, where={"name": "container"}
+    )
 
     # Create a library plate template
     lib_plate_1536_template = ResourceTemplate(
@@ -129,7 +135,9 @@ def test_fragment_screening(db_session):
     from recap.db.attribute import (
         AttributeGroupTemplate,
         AttributeTemplate,
-    )  # noqa
+    )
+
+    # noqa
     from recap.db.resource import Resource, ResourceTemplate  # noqa
 
     # - Create an xtal plate template
@@ -197,7 +205,7 @@ def test_fragment_screening(db_session):
         ProcessRun,
         ProcessTemplate,
         ResourceSlot,
-    )  # noqa
+    )
 
     process_template = ProcessTemplate(
         name="Fragment Screening Sample Prep", version="1.0"
@@ -320,12 +328,13 @@ def test_fragment_screening(db_session):
     db_session.add(process_template)
     db_session.commit()
 
-    campaign = Campaign(name="Test campaign", proposal=1)
+    campaign = Campaign(name="Test campaign", proposal="111")
 
     #     - Create Process from template
     process_run = ProcessRun(
         name="FS1", description="Test", template=process_template, campaign=campaign
     )
+    db_session.add(process_run)
     #     - Add resources to the process
     for resource in [
         (lib_plate, lib_plate_resource_slot),
@@ -334,7 +343,6 @@ def test_fragment_screening(db_session):
     ]:
         process_run.resources[resource[1]] = resource[0]
 
-    db_session.add(process_run)
     db_session.commit()
 
     statement = select(ProcessRun).where(ProcessRun.name == "FS1")

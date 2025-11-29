@@ -1,11 +1,8 @@
-from recap.client.base_client import RecapClient
 from recap.db.process import Direction
 from recap.utils.general import generate_uppercase_alphabets
 
 
-def test_fragment_screening_api(db_session):
-    client = RecapClient(session=db_session)
-
+def test_fragment_screening_api(client):
     # Testing
     # - Create templates
     #     - Library plate
@@ -21,12 +18,9 @@ def test_fragment_screening_api(db_session):
     #     - xtal plate
     #     -
 
-    with client.resource_template(
+    with client.build_resource_template(
         "Library Plate 1536", type_names=["container", "library_plate", "plate"]
     ) as lp:
-        # lp.prop_group("LB1536_dimensions").add_attribute(
-        #     "rows", "int", "", 32
-        # ).add_attribute("columns", "int", "", 48).close_group()
         lp.add_properties(
             {
                 "LB1536_dimensions": [
@@ -41,13 +35,6 @@ def test_fragment_screening_api(db_session):
             {"name": f"{i}{str(j).zfill(2)}"} for i in a_to_af for j in range(1, 49)
         ]
         for well_data in lib_well_type_names_1536:
-            # lp.add_child(well_data["name"], ["container", "well"]).prop_group(
-            #     "well_status"
-            # ).add_attribute("used", "bool", "", False).close_group().prop_group(
-            #     "content"
-            # ).add_attribute("catalog_id", "str", "", "").add_attribute(
-            #     "SMILES", "str", "", ""
-            # ).add_attribute("sequence", "int", "", 0).close_group().close_child()
             lp.add_child(well_data["name"], ["container", "well"]).add_properties(
                 {
                     "well_status": [
@@ -69,7 +56,7 @@ def test_fragment_screening_api(db_session):
     )
     assert rt.name == "Library Plate 1536"
 
-    with client.resource_template(
+    with client.build_resource_template(
         "SwissCI-MRC-2d", ["container", "xtal_plate", "plate"]
     ) as plate:
         a_to_h = generate_uppercase_alphabets(8)
@@ -108,16 +95,6 @@ def test_fragment_screening_api(db_session):
                     ]
                 }
             ).close_child()
-            # .prop_group(
-            #     "echo_offset"
-            # ).add_attribute("x", "int", "", 0).add_attribute(
-            #     "y_0" if plate_shift_b else "y_1350",
-            #     "int",
-            #     "",
-            #     0 if plate_shift_b else 1350,
-            # ).add_attribute(
-            #     f"echo_pos_{plate_map['echo']}", "str", "", plate_map["echo"]
-            # ).close_group()\
 
     rt = (
         client.query_maker()
@@ -127,20 +104,22 @@ def test_fragment_screening_api(db_session):
     )
     assert rt.name == "SwissCI-MRC-2d"
 
-    with client.resource_template("puck_collection", ["container"]) as puck_collection:
+    with client.build_resource_template(
+        "puck_collection", ["container"]
+    ) as puck_collection:
         puck_collection.prop_group("contents").add_attribute("count", "int", "", 0)
 
-    with client.resource_template("puck", ["container", "puck"]) as puck_template:
+    with client.build_resource_template("puck", ["container", "puck"]) as puck_template:
         puck_template.prop_group("pin_count").add_attribute(
             "total", "int", "", 16
         ).add_attribute("occupied", "int", "", 0).close_group()
 
-    with client.resource_template("pin", ["container", "pin"]) as pin_template:
+    with client.build_resource_template("pin", ["container", "pin"]) as pin_template:
         pin_template.prop_group("content").add_attribute(
             "position", "int", "", 0
         ).close_group()
 
-    with client.process_template("Fragment Screening Sample Prep", "1.0") as pt:
+    with client.build_process_template("Fragment Screening Sample Prep", "1.0") as pt:
         pt.add_resource_slot(
             "library_plate", "plate", Direction.input
         ).add_resource_slot("xtal_plate", "plate", Direction.input).add_resource_slot(
@@ -186,11 +165,47 @@ def test_fragment_screening_api(db_session):
         .first()
     )
     if library_plate_template:
-        with client.create_resource(
+        with client.build_resource(
             "DSI-poised", library_plate_template.name
         ) as lib_plate_builder:
             for well in lib_plate_builder.resource.children:
                 well.properties["content"].values["SMILES"] = ""
                 well.properties["content"].values["catalog_id"] = ""
 
-    client.process_run("Test run", "Fragment Screening Sample Prep", "1.0")
+    with client.build_process_run(
+        "Test run", "Test run for something", "Fragment Screening Sample Prep", "1.0"
+    ):
+        pass
+
+    ## Testing queries
+
+    qm = client.query_maker()
+
+    campaigns = qm.campaigns()
+    runs = qm.process_runs()
+
+    all_campaigns = campaigns.filter(proposal="123").all()
+    assert all_campaigns[0].name == "Test campaign"
+
+    assert runs.filter(campaign__proposal="123").count() == 1
+
+    for run in runs.include_steps(include_parameters=True).all():
+        print(f"Run: {run.name}")
+        for step_num, step in enumerate(run.steps):
+            print(f"\tStep {step_num}: {step.name}")
+            for pg_num, (param_group_name, param_group) in enumerate(
+                step.parameters.items()
+            ):
+                print(f"\t\tGroup {pg_num}: {param_group_name}")
+                for param_name, param_value in param_group.values.items():
+                    print(f"\t\t\t{param_name} : {param_value}")
+
+    # for c in campaigns.include_process_runs().all():
+    #     print(c.name)
+    #     for run in c.process_runs:
+    #         print(run.name)
+
+    # plates = resources.filter(template__types__name_in=["library_plate"]).include_template().all()
+
+    # for plate in plates:
+    #     print(f"{plate.name} : {plate.template.name}")
