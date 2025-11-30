@@ -50,7 +50,8 @@ def db_session(engine, setup_database):
     """
     yield session
 
-    transaction.rollback()
+    if transaction.is_active:
+        transaction.rollback()
     session.close()
     connection.close()
 
