@@ -381,8 +381,12 @@ class LocalBackend(Backend):
         expand=False,
     ) -> ResourceRef | ResourceSchema:
         parent_id = parent_resource.id if parent_resource else None
+        template_model = self.session.get(ResourceTemplate, resource_template.id)
         resource = Resource(
-            name=name, resource_template_id=resource_template.id, parent_id=parent_id
+            name=name,
+            resource_template_id=resource_template.id,
+            parent_id=parent_id,
+            template=template_model,
         )
         self.session.add(resource)
         self.session.flush()
