@@ -3,13 +3,13 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
+from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
+
 if TYPE_CHECKING:
     from recap.adapter import Backend
 from recap.schemas.process import (
     CampaignSchema,
     ProcessRunSchema,
-    ResourceSchema,
-    ResourceTemplateSchema,
 )
 
 try:

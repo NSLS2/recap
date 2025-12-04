@@ -8,7 +8,7 @@ from recap.db.resource import Resource, ResourceTemplate
 from recap.dsl.attribute_builder import AttributeGroupBuilder
 from recap.dsl.process_builder import map_dtype_to_pytype
 from recap.schemas.attribute import AttributeTemplateValidator
-from recap.schemas.process import (
+from recap.schemas.resource import (
     ResourceSchema,
     ResourceTemplateRef,
 )

@@ -4,7 +4,11 @@ from sqlalchemy.exc import NoResultFound
 from recap.adapter import Backend
 from recap.db.process import Direction
 from recap.dsl.attribute_builder import AttributeGroupBuilder
-from recap.schemas.process import CampaignSchema, ProcessRunSchema, ProcessTemplateRef
+from recap.schemas.process import (
+    CampaignSchema,
+    ProcessRunSchema,
+    ProcessTemplateRef,
+)
 from recap.schemas.resource import ResourceSlotSchema
 from recap.schemas.step import StepSchema, StepTemplateRef
 
@@ -186,6 +190,34 @@ class ProcessRunBuilder:
 
     def set_params(self, filled_params: type[BaseModel]):
         self.backend.set_params(filled_params)
+        return self
+
+    def add_child_step(
+        self,
+        parent_step_name: str,
+        step_template_name: str,
+        parameters: dict[str, dict[str, object]] | None = None,
+        resources: dict[str, object] | None = None,
+    ) -> StepSchema:
+        parent_step = None
+        for step in self.steps:
+            if step.name == parent_step_name:
+                parent_step = step
+                break
+        if parent_step is None:
+            raise ValueError(
+                f"Parent step named {parent_step_name!r} not found in process run {self.process_run.name!r}"
+            )
+        child = self.backend.add_child_step(
+            self.process_run,
+            parent_step.id,
+            step_template_name,
+            parameters,
+            resources,
+        )
+        # refresh cached steps so subsequent operations see the new child
+        self._steps = None
+        return child
 
 
 def map_dtype_to_pytype(dtype: str):
