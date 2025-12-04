@@ -407,6 +407,27 @@ class LocalBackend(Backend):
         resource = load_single(self.session, statement, label="Resource")
         return ResourceRef.model_validate(resource)
 
+    def get_resource_with_children(
+        self, name: str, template_name: str
+    ) -> ResourceSchema:
+        statement = (
+            select(Resource)
+            .join(Resource.template)
+            .where(
+                Resource.name == name,
+                ResourceTemplate.name == template_name,
+                Resource.active.is_(True),
+            )
+            .options(
+                selectinload(Resource.children).selectinload(Resource.children),
+                selectinload(Resource.template),
+                selectinload(Resource.children).selectinload(Resource.properties),
+                selectinload(Resource.properties),
+            )
+        )
+        resource = load_single(self.session, statement, label="Resource")
+        return ResourceSchema.model_validate(resource)
+
     def create_process_run(
         self,
         name: str,
