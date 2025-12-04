@@ -16,6 +16,7 @@ from sqlalchemy.orm import (
 
 from recap.db.campaign import Campaign
 from recap.db.step import Step, StepTemplate, StepTemplateEdge
+from recap.exceptions import DuplicateResourceError
 
 from .base import Base, TimestampMixin
 
@@ -170,6 +171,21 @@ class ResourceAssignment(TimestampMixin, Base):
         "Resource", back_populates="assignments"
     )
     step: Mapped["Step | None"] = relationship("Step", back_populates="assignments")
+
+    @validates("resource")
+    def _check_resource_campaign_uniqueness(self, key, resource: "Resource"):
+        if self.process_run and self.process_run.campaign:
+            campaign_id = self.process_run.campaign.id
+            for assignment in resource.assignments:
+                if assignment is self:
+                    continue
+                if (
+                    assignment.process_run
+                    and assignment.process_run.campaign_id == campaign_id
+                ):
+                    raise DuplicateResourceError(
+                        resource.name, self.process_run.campaign.name
+                    )
 
     __table_args__ = (
         UniqueConstraint(

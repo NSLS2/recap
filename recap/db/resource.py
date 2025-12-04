@@ -212,13 +212,6 @@ class Resource(TimestampMixin, Base):
             )
             self.children.append(child_resource)
 
-    __table_args__ = (
-        # Check that a resource name is unique per resource_template
-        UniqueConstraint(
-            "resource_template_id", "name", name="uq_resource_name_per_template"
-        ),
-    )
-
 
 # --- Keep slug always in sync with name ---
 @event.listens_for(Resource, "before_insert", propagate=True)
