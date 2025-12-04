@@ -75,7 +75,6 @@ class ResourceTemplate(TimestampMixin, Base):
     types: Mapped[list["ResourceType"]] = relationship(
         "ResourceType",
         secondary=resource_template_type_association,
-        back_populates="resource_templates",
     )
     parent_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("resource_template.id"), nullable=True
@@ -118,11 +117,6 @@ class ResourceType(TimestampMixin, Base):
     __tablename__ = "resource_type"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
-    resource_templates: Mapped[list[ResourceTemplate]] = relationship(
-        "ResourceTemplate",
-        secondary=resource_template_type_association,
-        back_populates="types",
-    )
 
 
 class Resource(TimestampMixin, Base):
