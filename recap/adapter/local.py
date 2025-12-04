@@ -26,7 +26,11 @@ from recap.db.resource import (
     ResourceType,
     resource_template_type_association,
 )
-from recap.db.step import Parameter, Step, StepTemplate
+from recap.db.step import (
+    Parameter,
+    Step,
+    StepTemplate,
+)
 from recap.dsl.process_builder import map_dtype_to_pytype
 from recap.dsl.query import QuerySpec, SchemaT
 from recap.schemas.attribute import AttributeGroupRef, AttributeTemplateSchema
@@ -35,12 +39,15 @@ from recap.schemas.process import (
     ProcessRunSchema,
     ProcessTemplateRef,
     ProcessTemplateSchema,
+)
+from recap.schemas.resource import (
     ResourceRef,
     ResourceSchema,
+    ResourceSlotSchema,
     ResourceTemplateRef,
     ResourceTemplateSchema,
+    ResourceTypeSchema,
 )
-from recap.schemas.resource import ResourceSlotSchema, ResourceTypeSchema
 from recap.schemas.step import StepSchema, StepTemplateRef
 from recap.utils.database import get_or_create, load_single
 from recap.utils.dsl import AliasMixin, resolve_path
