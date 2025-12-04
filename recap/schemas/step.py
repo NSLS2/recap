@@ -1,14 +1,14 @@
 from typing import Any
 from uuid import UUID
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
     AttributeTemplateValidator,
 )
 from recap.schemas.common import CommonFields, StepStatus
-from recap.schemas.resource import ResourceSlotSchema
+from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
 
 
 class StepTemplateRef(CommonFields):
@@ -64,3 +64,9 @@ class StepSchema(CommonFields):
     parameters: dict[str, ParameterSchema]
     state: StepStatus
     process_run_id: UUID
+    parent_id: UUID | None = None
+    children: list["StepSchema"] = Field(default_factory=list)
+    resources: dict[str, "ResourceSchema"] = Field(default_factory=dict)
+
+
+StepSchema.model_rebuild()
