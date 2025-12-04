@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ValueType(str, Enum):
@@ -48,7 +48,7 @@ class Attribute(BaseModel):
 
 class CommonFields(BaseModel):
     id: UUID
-    create_date: datetime
-    modified_date: datetime
+    create_date: datetime = Field(repr=False)
+    modified_date: datetime = Field(repr=False)
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
