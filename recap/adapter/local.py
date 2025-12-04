@@ -465,18 +465,29 @@ class LocalBackend(Backend):
         resource: ResourceRef | ResourceSchema,
         process_run: ProcessRunSchema,
     ) -> ProcessRunSchema:
-        statement = select(ResourceSlot).where(ResourceSlot.id == resource_slot.id)
-        resource_statement = select(Resource).where(
-            Resource.name == resource.name, Resource.active
+        resource_slot_model = load_single(
+            self.session,
+            select(ResourceSlot).where(ResourceSlot.id == resource_slot.id),
+            label="ResourceSlot",
         )
-        resource_slot_model = load_single(self.session, statement, label="ResourceSlot")
-        resource_model = load_single(self.session, resource_statement, label="Resource")
-
-        process_run_statement = select(ProcessRun).where(
-            ProcessRun.id == process_run.id
+        resource_model = load_single(
+            self.session,
+            select(Resource)
+            .where(Resource.name == resource.name)
+            .options(
+                selectinload(Resource.template).selectinload(ResourceTemplate.types)
+            ),
+            label="Resource",
         )
         process_run_model = load_single(
-            self.session, process_run_statement, label="ProcessRun"
+            self.session,
+            select(ProcessRun)
+            .where(ProcessRun.id == process_run.id)
+            .options(
+                selectinload(ProcessRun.assignments),
+                selectinload(ProcessRun.template),
+            ),
+            label="ProcessRun",
         )
         process_run_model.resources[resource_slot_model] = resource_model
         return ProcessRunSchema.model_validate(process_run_model)
