@@ -11,12 +11,15 @@ from recap.schemas.process import (
     ProcessRunSchema,
     ProcessTemplateRef,
     ProcessTemplateSchema,
+)
+from recap.schemas.resource import (
     ResourceRef,
     ResourceSchema,
+    ResourceSlotSchema,
     ResourceTemplateRef,
     ResourceTemplateSchema,
+    ResourceTypeSchema,
 )
-from recap.schemas.resource import ResourceSlotSchema, ResourceTypeSchema
 from recap.schemas.step import StepSchema, StepTemplateRef
 
 
