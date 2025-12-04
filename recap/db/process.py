@@ -91,6 +91,7 @@ class ProcessRun(TimestampMixin, Base):
 
     assignments: Mapped[dict["ResourceSlot", "ResourceAssignment"]] = relationship(
         "ResourceAssignment",
+        primaryjoin="and_(ProcessRun.id==ResourceAssignment.process_run_id, ResourceAssignment.step_id==None)",
         back_populates="process_run",
         cascade="all, delete-orphan",
         collection_class=attribute_mapped_collection("resource_slot"),
@@ -158,20 +159,20 @@ class ResourceAssignment(TimestampMixin, Base):
     resource_slot_id: Mapped[UUID] = mapped_column(
         ForeignKey("resource_slot.id"), primary_key=True
     )
+    step_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("step.id"), primary_key=True
+    )
     resource_id: Mapped[UUID] = mapped_column(ForeignKey("resource.id"), nullable=False)
 
-    # ties back to the run
-    process_run: Mapped["ProcessRun"] = relationship(
-        "ProcessRun"
-    )  # , back_populates="assignments")
-    # ties back to the slot
+    process_run: Mapped["ProcessRun"] = relationship("ProcessRun")
     resource_slot: Mapped["ResourceSlot"] = relationship()
-    # ties back to the underlying Resource
     resource: Mapped["Resource"] = relationship(
         "Resource", back_populates="assignments"
     )
+    step: Mapped["Step | None"] = relationship("Step", back_populates="assignments")
 
-    # enforce “one assignment per run+slot”
     __table_args__ = (
-        UniqueConstraint("process_run_id", "resource_slot_id", name="uq_run_slot"),
+        UniqueConstraint(
+            "process_run_id", "resource_slot_id", "step_id", name="uq_run_slot_step"
+        ),
     )

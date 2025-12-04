@@ -13,15 +13,12 @@ from sqlalchemy.orm import (
 )
 from sqlalchemy.sql import func
 
-from recap.db.attribute import (
-    AttributeGroupTemplate,
-    AttributeValue,
-)
+from recap.db.attribute import AttributeGroupTemplate, AttributeValue
 from recap.db.base import Base, TimestampMixin
 from recap.schemas.common import StepStatus
 
 if TYPE_CHECKING:
-    from recap.db.process import ProcessRun, ResourceSlot
+    from recap.db.process import ProcessRun, ResourceAssignment, ResourceSlot
 
 
 def _reject_new(key, _value):
@@ -144,7 +141,7 @@ class StepEdge(TimestampMixin, Base):
 class Step(TimestampMixin, Base):
     __tablename__ = "step"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    name: Mapped[str] = mapped_column(unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(nullable=False)
 
     process_run_id: Mapped[UUID] = mapped_column(
         ForeignKey("process_run.id"), nullable=False
@@ -168,6 +165,22 @@ class Step(TimestampMixin, Base):
     )
     state: Mapped[StepStatus] = mapped_column(
         default=StepStatus.PENDING, nullable=False
+    )
+    parent_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("step.id"), nullable=True, index=True
+    )
+    parent: Mapped["Step | None"] = relationship(
+        "Step", back_populates="children", remote_side=[id]
+    )
+    children: Mapped[list["Step"]] = relationship(
+        "Step", back_populates="parent", cascade="all, delete-orphan"
+    )
+    assignments: Mapped[dict[UUID, "ResourceAssignment"]] = relationship(
+        "ResourceAssignment",
+        back_populates="step",
+        cascade="all, delete-orphan",
+        collection_class=attribute_mapped_collection("resource_slot_id"),
+        primaryjoin="Step.id==ResourceAssignment.step_id",
     )
 
     def __init__(self, *args, **kwargs):
@@ -198,12 +211,12 @@ class Step(TimestampMixin, Base):
     def is_leaf(self) -> bool:
         return not self.next_steps
 
-
-class StepResourceBinding(TimestampMixin, Base):
-    __tablename__ = "step_resource_binding"
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    step_id: Mapped[UUID] = mapped_column(ForeignKey("step.id"), nullable=False)
-    resource_id: Mapped[UUID] = mapped_column(ForeignKey("resource.id"), nullable=False)
-    step_template_resource_slot_binding_id: Mapped[UUID] = mapped_column(
-        ForeignKey("step_template_resource_slot_binding.id"), nullable=False
-    )
+    @property
+    def resources(self):
+        slot_to_role = {
+            b.resource_slot_id: b.role for b in self.template.bindings.values()
+        }
+        return {
+            slot_to_role.get(slot_id, str(slot_id)): assignment.resource
+            for slot_id, assignment in self.assignments.items()
+        }
