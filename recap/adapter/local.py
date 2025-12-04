@@ -30,6 +30,7 @@ from recap.db.step import (
     Parameter,
     Step,
     StepTemplate,
+    StepTemplateResourceSlotBinding,
 )
 from recap.dsl.process_builder import map_dtype_to_pytype
 from recap.dsl.query import QuerySpec, SchemaT
@@ -626,6 +627,130 @@ class LocalBackend(Backend):
                     filled_param.get(value_name)
                 )
 
+    def add_child_step(
+        self,
+        process_run: ProcessRunSchema,
+        parent_step_id: UUID,
+        step_template_name: str,
+        parameter_values: dict[str, dict[str, Any]] | None = None,
+        resources: dict[str, ResourceRef | ResourceSchema] | None = None,
+    ) -> StepSchema:
+        pr_model = load_single(
+            self.session,
+            select(ProcessRun)
+            .where(ProcessRun.id == process_run.id)
+            .options(
+                selectinload(ProcessRun.steps)
+                .selectinload(Step.parameters)
+                .selectinload(Parameter._values),
+                selectinload(ProcessRun.steps)
+                .selectinload(Step.assignments)
+                .selectinload(ResourceAssignment.resource)
+                .selectinload(Resource.template),
+                selectinload(ProcessRun.steps)
+                .selectinload(Step.assignments)
+                .selectinload(ResourceAssignment.resource_slot),
+                selectinload(ProcessRun.assignments)
+                .selectinload(ResourceAssignment.resource)
+                .selectinload(Resource.children),
+            ),
+            label="ProcessRun",
+        )
+
+        parent_step = next((s for s in pr_model.steps if s.id == parent_step_id), None)
+        if parent_step is None:
+            raise ValueError(
+                f"Parent step with id {parent_step_id} not found in run {pr_model.name}"
+            )
+
+        template = load_single(
+            self.session,
+            select(StepTemplate)
+            .where(
+                StepTemplate.process_template_id == pr_model.process_template_id,
+                StepTemplate.name == step_template_name,
+            )
+            .options(
+                selectinload(StepTemplate.bindings).selectinload(
+                    StepTemplateResourceSlotBinding.resource_slot
+                )
+            ),
+            label="StepTemplate",
+        )
+
+        step = Step(process_run=pr_model, template=template, parent=parent_step)
+        # Add early to session to avoid autoflush warnings when binding children/resources
+        self.session.add(step)
+
+        if parameter_values:
+            for group_name, values in parameter_values.items():
+                if group_name not in step.parameters:
+                    raise ValueError(
+                        f"Step {step_template_name} has no parameter group {group_name}"
+                    )
+                param = step.parameters[group_name]
+                for key, value in values.items():
+                    if key not in param.values:
+                        raise ValueError(
+                            f"Parameter {key} not found in group {group_name}"
+                        )
+                    param.values[key] = value
+
+        if resources:
+            self._assign_step_resources(step, pr_model, resources)
+
+        self.session.add(step)
+        self.session.flush()
+        return StepSchema.model_validate(step)
+
+    def _assign_step_resources(
+        self,
+        step: Step,
+        process_run_model: ProcessRun,
+        resources: dict[str, ResourceRef | ResourceSchema],
+    ):
+        slot_by_role = {
+            b.role: b.resource_slot for b in step.template.bindings.values()
+        }
+        for role, resource_ref in resources.items():
+            if role not in slot_by_role:
+                raise ValueError(
+                    f"Role {role} is not bound to a resource slot for step {step.template.name}"
+                )
+            resource_model = self._load_resource_model(resource_ref)
+            slot = slot_by_role[role]
+            root_resource = process_run_model.resources.get(slot)
+            if root_resource is None:
+                raise ValueError(
+                    f"No resource assigned to slot {slot.name} for process run {process_run_model.name}"
+                )
+            if not self._resource_is_descendant_or_same(resource_model, root_resource):
+                raise ValueError(
+                    f"Resource {resource_model.name} is not allowed for role {role}; "
+                    f"must be the assigned resource {root_resource.name} or its child"
+                )
+                step.assignments[slot.id] = ResourceAssignment(
+                    process_run=process_run_model,
+                    resource_slot=slot,
+                    resource=resource_model,
+                    step=step,
+                )
+
+    def _resource_is_descendant_or_same(self, candidate: Resource, root: Resource):
+        current = candidate
+        while current is not None:
+            if current.id == root.id:
+                return True
+            current = current.parent
+        return False
+
+    def _load_resource_model(self, ref: ResourceRef | ResourceSchema) -> Resource:
+        return load_single(
+            self.session,
+            select(Resource).where(Resource.id == ref.id),
+            label="Resource",
+        )
+
     def _build_select(self, schema: type[SchemaT], spec: QuerySpec) -> Select:
         model = SCHEMA_MODEL_MAPPING[schema]
         stmt = select(model)
@@ -692,7 +817,11 @@ class LocalBackend(Backend):
         opts = []
         for name in preloads:
             if model is ProcessRunSchema and name == "steps":
-                opts.append(selectinload(ProcessRun.steps))
+                opts.append(
+                    selectinload(ProcessRun.steps)
+                    .selectinload(Step.children)
+                    .selectinload(Step.parameters)
+                )
             elif model is ProcessRunSchema and name == "steps.parameters":
                 opts.append(
                     selectinload(ProcessRun.steps)
