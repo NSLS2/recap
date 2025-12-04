@@ -489,7 +489,46 @@ class LocalBackend(Backend):
             ),
             label="ProcessRun",
         )
-        process_run_model.resources[resource_slot_model] = resource_model
+
+        if (
+            resource_slot_model.process_template_id
+            != process_run_model.process_template_id
+        ):
+            raise ValueError(
+                f"Resource slot {resource_slot_model.name!r} does not belong to "
+                f"process template for run {process_run_model.name!r}"
+            )
+
+        if resource_model.template is None:
+            raise ValueError(
+                f"Resource {resource_model.name!r} must have a template with types"
+            )
+
+        if not resource_model.active:
+            raise ValueError(f"Resource {resource_model.name!r} is inactive")
+
+        template_type_ids = {rt.id for rt in resource_model.template.types}
+        if resource_slot_model.resource_type_id not in template_type_ids:
+            raise ValueError(
+                f"Resource {resource_model.name!r} does not match required type for "
+                f"slot {resource_slot_model.name!r}"
+            )
+
+        for existing in process_run_model.assignments.values():
+            if existing.resource_slot_id == resource_slot_model.id:
+                raise ValueError(
+                    f"Slot {resource_slot_model.name!r} is already assigned in "
+                    f"run {process_run_model.name!r}"
+                )
+
+        try:
+            process_run_model.resources[resource_slot_model] = resource_model
+        except ValueError as exc:
+            raise ValueError(
+                f"Could not assign resource {resource_model.name!r} "
+                f"to slot {resource_slot_model.name!r}: {exc}"
+            ) from exc
+
         return ProcessRunSchema.model_validate(process_run_model)
 
     def check_resource_assignment(
