@@ -107,7 +107,7 @@ class Backend(Protocol):
     def add_child_resource_template(
         self,
         name: str,
-        resource_types: list[str],
+        resource_types: list[ResourceTypeSchema],
         parent_resource_template: ResourceTemplateRef | ResourceTemplateSchema,
     ) -> ResourceTemplateRef: ...
 
