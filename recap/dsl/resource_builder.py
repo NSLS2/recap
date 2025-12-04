@@ -4,13 +4,14 @@ from uuid import UUID
 from pydantic import BaseModel, Field, create_model
 
 from recap.adapter import Backend
-from recap.db.resource import Resource, ResourceTemplate
+from recap.db.resource import Resource
 from recap.dsl.attribute_builder import AttributeGroupBuilder
 from recap.dsl.process_builder import map_dtype_to_pytype
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.resource import (
     ResourceSchema,
     ResourceTemplateRef,
+    ResourceTypeSchema,
 )
 from recap.utils.dsl import AliasMixin
 
@@ -22,7 +23,7 @@ class ResourceBuilder:
         name: str,
         template_name: str,
         backend: Backend,
-        create: bool = False,
+        create_new: bool = False,
         parent: Optional["ResourceBuilder"] = None,
     ):
         self.name = name
@@ -30,18 +31,18 @@ class ResourceBuilder:
         self.parent = parent
         self.parent_resource = parent._resource if parent else None
         self.backend = backend
-        self.create = create
+        self.create_new = create_new
         self.template_name = template_name
 
     @classmethod
     def create(cls, name: str, template_name: str, backend: Backend, parent=None):
-        with cls(name, template_name, backend, create=True, parent=parent) as rb:
+        with cls(name, template_name, backend, create_new=True, parent=parent) as rb:
             return rb.resource
 
     def __enter__(self):
         self._uow = self.backend.begin()
 
-        if self.create:
+        if self.create_new:
             template = self.backend.get_resource_template(name=self.template_name)
             self._resource = self.backend.create_resource(
                 self.name,
@@ -77,7 +78,7 @@ class ResourceBuilder:
             template_name=template_name,
             parent=self,
             backend=self.backend,
-            create=True,
+            create_new=True,
         )
         return child_builder
 
@@ -150,16 +151,21 @@ class ResourceTemplateBuilder:
             raise ValueError("No parent builder or backend provided")
         self.name = name
         self.type_names = type_names
-        self._children: list[ResourceTemplate] = []
+        self._children: list[ResourceTemplateRef] = []
         self.parent = parent
-        self.resource_types = {}
+        self.resource_types: dict[str, ResourceTypeSchema] = {}
         for rt_schema in self.backend.add_resource_types(type_names):
             self.resource_types[rt_schema.name] = rt_schema
-        self._template: ResourceTemplateRef = self.backend.add_resource_template(
-            name, list(self.resource_types.values())
-        )
         if self.parent:
-            self._template.parent = self.parent._template
+            self._template = self.backend.add_child_resource_template(
+                self.name,
+                [rt for rt in self.resource_types.values()],
+                parent_resource_template=self.parent._template,
+            )
+        else:
+            self._template: ResourceTemplateRef = self.backend.add_resource_template(
+                name, list(self.resource_types.values())
+            )
 
     def __enter__(self):
         return self
