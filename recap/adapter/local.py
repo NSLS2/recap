@@ -556,7 +556,20 @@ class LocalBackend(Backend):
         )
 
     def get_steps(self, process_run: ProcessRunSchema) -> list[StepSchema]:
-        statement = select(Step).where(Step.process_run_id == process_run.id)
+        statement = (
+            select(Step)
+            .where(Step.process_run_id == process_run.id)
+            .options(
+                selectinload(Step.children),
+                selectinload(Step.parameters).selectinload(Parameter._values),
+                selectinload(Step.assignments)
+                .selectinload(ResourceAssignment.resource)
+                .selectinload(Resource.template),
+                selectinload(Step.assignments).selectinload(
+                    ResourceAssignment.resource_slot
+                ),
+            )
+        )
         steps = self.session.scalars(statement).all()
         return [StepSchema.model_validate(step) for step in steps]
 
