@@ -83,7 +83,7 @@ class RecapClient:
             name=name,
             template_name=template_name,
             backend=self.backend,
-            create=create_new,
+            create_new=create_new,
         )
 
     def create_resource(self, name: str, template_name: str):
