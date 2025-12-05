@@ -24,8 +24,9 @@ from recap.schemas.step import StepSchema, StepTemplateRef
 
 
 class UnitOfWork(Protocol):
-    def commit(self) -> None: ...
+    def commit(self, clear_session: bool = True) -> None: ...
     def rollback(self) -> None: ...
+    def end_session(self) -> None: ...
 
 
 class Backend(Protocol):
@@ -149,7 +150,15 @@ class Backend(Protocol):
         expand: Literal[True],
     ) -> ResourceSchema: ...
 
-    def get_resource(self, name: str, template_name: str) -> ResourceSchema: ...
+    def get_resource(
+        self, name: str, template_name: str, expand: bool = False
+    ) -> ResourceSchema: ...
+
+    def add_child_resources(
+        self,
+        parent_resource: ResourceSchema | ResourceRef,
+        child_resources: list[ResourceSchema | ResourceRef],
+    ): ...
 
     def create_process_run(
         self,

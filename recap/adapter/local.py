@@ -67,8 +67,12 @@ class SQLUnitOfWork(UnitOfWork):
         self._session = session
         self._tx = tx
 
-    def commit(self):
+    def commit(self, clear_session=True):
         self._tx.commit()
+        if clear_session:
+            self._backend._clear_session(self._session)
+
+    def end_session(self):
         self._backend._clear_session(self._session)
 
     def rollback(self):
@@ -354,6 +358,22 @@ class LocalBackend(Backend):
         self.session.flush()
         return ResourceTemplateRef.model_validate(template)
 
+    def add_child_resources(
+        self,
+        parent_resource: ResourceSchema | ResourceRef,
+        child_resources: list[ResourceSchema | ResourceRef],
+    ):
+        parent = self.session.get(Resource, parent_resource.id)
+        children_stmt = select(Resource).where(
+            Resource.id.in_([r.id for r in child_resources])
+        )
+        child_resources_results = self.session.scalars(children_stmt).all()
+        if parent:
+            for c in child_resources_results:
+                parent.children.append(c)
+        self.session.add(parent)
+        self.session.flush()
+
     def get_resource_template(
         self,
         name: str,
@@ -399,10 +419,13 @@ class LocalBackend(Backend):
         self.session.add(resource)
         self.session.flush()
         if expand:
+            print(resource.children)
             return ResourceSchema.model_validate(resource)
         return ResourceRef.model_validate(resource)
 
-    def get_resource(self, name: str, template_name: str) -> ResourceRef:
+    def get_resource(
+        self, name: str, template_name: str, expand: bool = False
+    ) -> ResourceRef | ResourceSchema:
         statement = (
             select(Resource)
             .join(Resource.template)
@@ -412,29 +435,19 @@ class LocalBackend(Backend):
                 Resource.active.is_(True),
             )
         )
-        resource = load_single(self.session, statement, label="Resource")
-        return ResourceRef.model_validate(resource)
-
-    def get_resource_with_children(
-        self, name: str, template_name: str
-    ) -> ResourceSchema:
-        statement = (
-            select(Resource)
-            .join(Resource.template)
-            .where(
-                Resource.name == name,
-                ResourceTemplate.name == template_name,
-                Resource.active.is_(True),
-            )
-            .options(
+        if expand:
+            statement = statement.options(
                 selectinload(Resource.children).selectinload(Resource.children),
                 selectinload(Resource.template),
                 selectinload(Resource.children).selectinload(Resource.properties),
                 selectinload(Resource.properties),
             )
-        )
         resource = load_single(self.session, statement, label="Resource")
-        return ResourceSchema.model_validate(resource)
+
+        if expand:
+            return ResourceSchema.model_validate(resource)
+
+        return ResourceRef.model_validate(resource)
 
     def create_process_run(
         self,
