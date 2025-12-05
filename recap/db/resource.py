@@ -195,16 +195,23 @@ class Resource(TimestampMixin, Base):
                 self.properties[prop.name] = Property(template=prop)
 
         for child_ct in self.template.children:
-            if child_ct in visited:
+            if child_ct.id in visited:
                 continue
-            child_resource = Resource(
+            Resource(
                 name=child_ct.name,
                 template=child_ct,
                 parent=self,
                 _visited_children=visited,
                 _max_depth=max_depth - 1,
             )
-            self.children.append(child_resource)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "parent_id",
+            "name",
+            name="uq_resource_parent_name",
+        ),
+    )
 
 
 # --- Keep slug always in sync with name ---
