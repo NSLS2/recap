@@ -22,7 +22,7 @@ class ResourceBuilder:
         # session: Session,
         name: str,
         template_name: str,
-        backend: Backend,
+        backend: Backend | None = None,
         create_new: bool = False,
         parent: Optional["ResourceBuilder"] = None,
     ):
@@ -30,18 +30,14 @@ class ResourceBuilder:
         self._children: list[Resource] = []
         self.parent = parent
         self.parent_resource = parent._resource if parent else None
-        self.backend = backend
         self.create_new = create_new
         self.template_name = template_name
-
-    @classmethod
-    def create(cls, name: str, template_name: str, backend: Backend, parent=None):
-        with cls(name, template_name, backend, create_new=True, parent=parent) as rb:
-            return rb.resource
-
-    def __enter__(self):
-        self._uow = self.backend.begin()
-
+        if backend:
+            self.backend = backend
+            self._uow = self.backend.begin()
+        elif self.parent:
+            self.backend = self.parent.backend
+            self._uow = self.parent._uow
         if self.create_new:
             template = self.backend.get_resource_template(name=self.template_name)
             self._resource = self.backend.create_resource(
@@ -51,7 +47,19 @@ class ResourceBuilder:
                 expand=True,
             )
         else:
-            self._resource = self.backend.get_resource(self.name, self.template_name)
+            self._resource = self.backend.get_resource(
+                self.name, self.template_name, expand=True
+            )
+        if self.parent_resource:
+            print(f"adding child {self._resource.name} to {self.parent_resource.name}")
+            self.backend.add_child_resources(self.parent_resource, [self._resource])
+
+    @classmethod
+    def create(cls, name: str, template_name: str, backend: Backend, parent=None):
+        with cls(name, template_name, backend, create_new=True, parent=parent) as rb:
+            return rb.resource
+
+    def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -61,7 +69,11 @@ class ResourceBuilder:
             self._uow.rollback()
 
     def save(self):
-        self._uow.commit()
+        self._uow.commit(clear_session=False)
+        self._resource = self.backend.get_resource(
+            self.name, self.template_name, expand=True
+        )
+        self._uow.end_session()
         return self
 
     @property
@@ -77,7 +89,7 @@ class ResourceBuilder:
             name=name,
             template_name=template_name,
             parent=self,
-            backend=self.backend,
+            # backend=self.backend,
             create_new=True,
         )
         return child_builder
