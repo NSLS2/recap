@@ -47,7 +47,7 @@ class Attribute(BaseModel):
 
 
 class CommonFields(BaseModel):
-    id: UUID
+    id: UUID = Field(repr=False)
     create_date: datetime = Field(repr=False)
     modified_date: datetime = Field(repr=False)
 
