@@ -13,6 +13,7 @@ from recap.adapter import Backend, UnitOfWork
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.base import Base
 from recap.db.campaign import Campaign
+from recap.db.exceptions import ValidationError
 from recap.db.process import (
     Direction,
     ProcessRun,
@@ -410,6 +411,18 @@ class LocalBackend(Backend):
     ) -> ResourceRef | ResourceSchema:
         parent_id = parent_resource.id if parent_resource else None
         template_model = self.session.get(ResourceTemplate, resource_template.id)
+        existing = self.session.scalars(
+            select(Resource).where(
+                Resource.parent_id == parent_id,
+                Resource.name == name,
+            )
+        ).one_or_none()
+        if existing:
+            parent_label = getattr(parent_resource, "name", None) or "__root__"
+            raise ValidationError(
+                "resource",
+                f"Resource {name!r} already exists under parent {parent_label!r}",
+            )
         resource = Resource(
             name=name,
             resource_template_id=resource_template.id,
@@ -419,7 +432,6 @@ class LocalBackend(Backend):
         self.session.add(resource)
         self.session.flush()
         if expand:
-            print(resource.children)
             return ResourceSchema.model_validate(resource)
         return ResourceRef.model_validate(resource)
 
