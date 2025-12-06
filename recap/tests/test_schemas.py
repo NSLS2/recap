@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -9,12 +9,12 @@ from recap.schemas.attribute import (
     AttributeTemplateValidator,
 )
 from recap.schemas.common import Attribute, ValueType
-from recap.schemas.process import PropertySchema
+from recap.schemas.resource import PropertySchema
 from recap.schemas.step import ParameterSchema
 
 
 def _now():
-    return datetime.utcnow()
+    return datetime.now(UTC)
 
 
 def _attribute_template_schema(

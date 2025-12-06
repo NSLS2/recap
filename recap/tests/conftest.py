@@ -3,6 +3,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from alembic import command
+from alembic.config import Config
 from recap.client.base_client import RecapClient
 from recap.db.base import Base
 
@@ -12,6 +14,23 @@ def db_url(tmp_path_factory):
     db_dir = tmp_path_factory.mktemp("data")
     db_path = db_dir / "test.db"
     return f"sqlite:///{db_path}"
+
+
+@pytest.fixture(scope="session")
+def apply_migrations(db_url):
+    """
+    Run alembic migrations once before all tests.
+    """
+    alembic_cfg = Config("alembic.ini")
+    alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+
+    # Upgrade to latest revision
+    command.upgrade(alembic_cfg, "head")
+
+    yield
+
+    # Optional cleanup for SQLite or temporary DB
+    command.downgrade(alembic_cfg, "base")
 
 
 @pytest.fixture(scope="session")
@@ -34,7 +53,7 @@ def setup_database(engine):
 
 
 @pytest.fixture(scope="function")
-def db_session(engine, setup_database):
+def db_session(apply_migrations, engine):
     """Create a new database session"""
     connection = engine.connect()
     transaction = connection.begin()
@@ -57,7 +76,7 @@ def db_session(engine, setup_database):
 
 
 @pytest.fixture(scope="function")
-def client(db_url, setup_database):
+def client(db_url, apply_migrations):
     # client = RecapClient(url=db_url)
     # try:
     #     yield client

@@ -1,10 +1,12 @@
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.campaign import Campaign
 from recap.db.process import Direction, ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate
+from recap.utils.database import get_or_create
 
 
 def _make_attr_group(name: str, attrs: list[dict]) -> AttributeGroupTemplate:
@@ -27,6 +29,7 @@ def test_platemate_workflow_with_recap(db_session):  # noqa
     Recap's resource/process model. The goal is to prove Recap can capture the
     same provenance as PlateMate's bespoke schema.
     """
+    suffix = uuid4().hex[:8]
     base_time = datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
     drop_offsets = {
         "c": (0, 0),
@@ -34,10 +37,9 @@ def test_platemate_workflow_with_recap(db_session):  # noqa
         "dr": (300, -300),
     }
 
-    container = ResourceType(name="container")
-    plate_type = ResourceType(name="plate")
-    puck_type = ResourceType(name="puck")
-    db_session.add_all([container, plate_type, puck_type])
+    container, _ = get_or_create(db_session, ResourceType, where={"name": "container"})
+    plate_type, _ = get_or_create(db_session, ResourceType, where={"name": "plate"})
+    puck_type, _ = get_or_create(db_session, ResourceType, where={"name": "puck"})
 
     lib_plate_template = ResourceTemplate(
         name="Platemate Library Plate",
@@ -182,7 +184,9 @@ def test_platemate_workflow_with_recap(db_session):  # noqa
         )
         puck_template.children.append(pin_template)
 
-    process_template = ProcessTemplate(name="Platemate Workflow", version="1.0")
+        process_template = ProcessTemplate(
+            name=f"Platemate Workflow {suffix}", version="1.0"
+        )
     lib_slot = ResourceSlot(
         name="library_plate",
         process_template=process_template,
@@ -241,14 +245,16 @@ def test_platemate_workflow_with_recap(db_session):  # noqa
     )
     db_session.flush()
 
-    lib_plate = Resource(name="DSI-poised", template=lib_plate_template)
-    xtal_plate = Resource(name="pmtest", template=xtal_plate_template)
-    puck = Resource(name="FGZ001", template=puck_template)
+    lib_plate = Resource(name=f"DSI-poised-{suffix}", template=lib_plate_template)
+    xtal_plate = Resource(name=f"pmtest-{suffix}", template=xtal_plate_template)
+    puck = Resource(name=f"FGZ001-{suffix}", template=puck_template)
     campaign = Campaign(
-        name="Platemate Campaign", proposal="PM-001", meta_data={"target": "mpro"}
+        name=f"Platemate Campaign {suffix}",
+        proposal=f"PM-{suffix}",
+        meta_data={"target": "mpro"},
     )
     process_run = ProcessRun(
-        name="pm-run",
+        name=f"pm-run-{suffix}",
         description="Replicated PlateMate flow with Recap",
         template=process_template,
         campaign=campaign,

@@ -5,12 +5,12 @@ from recap.adapter.local import LocalBackend
 from recap.db.campaign import Campaign
 from recap.db.process import Direction, ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
-from recap.schemas.process import ProcessRunSchema, ResourceSchema
-from recap.schemas.resource import ResourceSlotSchema
+from recap.schemas.process import ProcessRunSchema
+from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
 
 
 @pytest.fixture
-def backend(engine, setup_database):
+def backend(apply_migrations, engine):
     SessionLocal = sessionmaker(bind=engine)
     backend = LocalBackend(SessionLocal)
     uow = backend.begin()

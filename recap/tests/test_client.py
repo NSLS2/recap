@@ -8,7 +8,7 @@ def test_build_process_run_requires_campaign(client):
         client.build_process_run("run", "desc", "tmpl", "1.0")
 
 
-def test_build_resource_template_validates_type_names(db_url, setup_database):
+def test_build_resource_template_validates_type_names(apply_migrations, db_url):
     with RecapClient(url=db_url) as client:
         with pytest.raises(TypeError):
             client.build_resource_template("Bad", "not-a-list")
