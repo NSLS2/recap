@@ -154,15 +154,14 @@ class ProcessRun(TimestampMixin, Base):
 
 class ResourceAssignment(TimestampMixin, Base):
     __tablename__ = "resource_assignment"
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     process_run_id: Mapped[UUID] = mapped_column(
-        ForeignKey("process_run.id"), primary_key=True
+        ForeignKey("process_run.id"), nullable=False
     )
     resource_slot_id: Mapped[UUID] = mapped_column(
-        ForeignKey("resource_slot.id"), primary_key=True
+        ForeignKey("resource_slot.id"), nullable=False
     )
-    step_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("step.id"), primary_key=True
-    )
+    step_id: Mapped[UUID | None] = mapped_column(ForeignKey("step.id"), nullable=True)
     resource_id: Mapped[UUID] = mapped_column(ForeignKey("resource.id"), nullable=False)
 
     process_run: Mapped["ProcessRun"] = relationship("ProcessRun")
@@ -186,6 +185,7 @@ class ResourceAssignment(TimestampMixin, Base):
                     raise DuplicateResourceError(
                         resource.name, self.process_run.campaign.name
                     )
+        return resource
 
     __table_args__ = (
         UniqueConstraint(
