@@ -7,7 +7,7 @@ name = "pyrecap"
 dynamic = ["version"]
 description = "Scientific framework for Reproducible Experiment Capture and Provenance"
 authors = [{ name = "Venkateswaran Shekar", email = "vshekar1@bnl.gov" }]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 readme = "README.rst"
 license = { text = "BSD-3-Clause" }
 dependencies = [
@@ -129,3 +129,7 @@ test = { cmd = ["pytest", "-s", "-ra", "recap/tests"] }
 
 [tool.pixi.dependencies]
 pyyaml = ">=6.0.2,<7"
+ipython = ">=9.7.0,<10"
+pytest = "*"
+jupyterlab = ">=4.5.0,<5"
+alembic = ">=1.17.2,<2"
