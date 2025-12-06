@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, ForeignKey, Table, UniqueConstraint, event
+from sqlalchemy import Column, ForeignKey, Table, UniqueConstraint, event, func
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import Mapped, mapped_collection, mapped_column, relationship
 
@@ -12,6 +12,9 @@ if TYPE_CHECKING:
     from recap.db.attribute import AttributeGroupTemplate
 
 from .base import Base, TimestampMixin
+
+# Sentinel for root ResourceTemplate
+ROOT_RESOURCE_TEMPLATE_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 
 def _reject_new(key, _value):
@@ -84,7 +87,10 @@ class ResourceTemplate(TimestampMixin, Base):
     )
 
     children: Mapped[list["ResourceTemplate"]] = relationship(
-        "ResourceTemplate", back_populates="parent"
+        "ResourceTemplate",
+        back_populates="parent",
+        # Order by length first so names like A1a precede A10a
+        order_by=(func.length(name), name),
     )
 
     attribute_group_templates: Mapped[list["AttributeGroupTemplate"]] = relationship(
@@ -106,6 +112,9 @@ class ResourceTemplate(TimestampMixin, Base):
 @event.listens_for(ResourceTemplate, "before_insert", propagate=True)
 def _before_insert_resource_template(mapper, connection, target: ResourceTemplate):
     target.slug = make_slug(target.name)
+    # Default top-level templates to the root sentinel to avoid NULL parent collisions
+    if target.name != "__root__" and target.parent_id is None:
+        target.parent_id = ROOT_RESOURCE_TEMPLATE_ID
 
 
 @event.listens_for(ResourceTemplate, "before_update", propagate=True)
@@ -136,7 +145,9 @@ class Resource(TimestampMixin, Base):
         "Resource", back_populates="children", remote_side=[id]
     )
     children: Mapped[list["Resource"]] = relationship(
-        "Resource", back_populates="parent"
+        "Resource",
+        back_populates="parent",
+        order_by=(func.length(name), name),
     )
     properties = relationship(
         "Property",
@@ -195,7 +206,7 @@ class Resource(TimestampMixin, Base):
                 self.properties[prop.name] = Property(template=prop)
 
         for child_ct in self.template.children:
-            if child_ct.id in visited:
+            if child_ct.id is not None and child_ct.id in visited:
                 continue
             Resource(
                 name=child_ct.name,
