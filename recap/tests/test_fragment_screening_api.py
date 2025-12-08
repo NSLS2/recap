@@ -196,8 +196,9 @@ def test_fragment_screening_api(client):
             for pg_num, (param_group_name, param_group) in enumerate(
                 step.parameters.items()
             ):
+                vals = param_group.values
                 print(f"\t\tGroup {pg_num}: {param_group_name}")
-                for param_name, param_value in param_group.values.items():
+                for param_name, param_value in vals.model_dump(by_alias=True).items():
                     print(f"\t\t\t{param_name} : {param_value}")
 
     # for c in campaigns.include_process_runs().all():

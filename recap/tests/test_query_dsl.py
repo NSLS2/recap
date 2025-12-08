@@ -93,7 +93,7 @@ def test_campaign_include_process_runs_and_steps(db_session):
     assert loaded_campaign.process_runs[0].name.startswith("Run-include")
     step = loaded_campaign.process_runs[0].steps[0]
     exposure = step.parameters["Exposure-include"]
-    assert exposure.values["dwell_time"] == 5
+    assert exposure.values.dwell_time == 5
 
 
 def test_process_run_pagination_and_filtering(db_session):

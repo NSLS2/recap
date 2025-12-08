@@ -82,8 +82,8 @@ def test_parameter_schema_coerces_values_and_rejects_unknown():
         values={"Voltage": "10", "Enabled": "true"},
     )
 
-    assert schema.values["Voltage"] == 10
-    assert schema.values["Enabled"] is True
+    assert schema.values.voltage == 10
+    assert schema.values.enabled is True
 
     with pytest.raises(ValueError):
         ParameterSchema(
@@ -93,6 +93,25 @@ def test_parameter_schema_coerces_values_and_rejects_unknown():
             template=group_schema,
             values={"Voltage": "5", "Unknown": 1},
         )
+
+
+def test_parameter_schema_exposes_typed_values_model():
+    voltage = _attribute_template_schema("Voltage", "int", 5)
+    enabled = _attribute_template_schema("Enabled", "bool", False)
+    group_schema = _attribute_group_schema("Inputs", [voltage, enabled])
+    stamp = _now()
+
+    schema = ParameterSchema(
+        id=uuid4(),
+        create_date=stamp,
+        modified_date=stamp,
+        template=group_schema,
+        values={"Voltage": "10", "Enabled": "true"},
+    )
+
+    assert schema.values.voltage == 10
+    assert schema.values.enabled is True
+    assert schema.values.model_dump(by_alias=True) == {"Voltage": 10, "Enabled": True}
 
 
 def test_property_schema_value_coercion_matches_template():
