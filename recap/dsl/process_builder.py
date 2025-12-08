@@ -126,6 +126,7 @@ class ProcessRunBuilder:
         self._process_run = self.backend.create_process_run(
             name, description, self._process_template, campaign
         )
+        self.process_run._init_state(self.backend)
         self._steps = None
         self._resources = {}
 

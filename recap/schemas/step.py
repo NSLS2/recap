@@ -1,14 +1,16 @@
 from typing import Any
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
+from recap.db.step import Parameter
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
     AttributeTemplateValidator,
 )
 from recap.schemas.common import CommonFields, StepStatus
 from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
+from recap.utils.dsl import build_param_values_model
 
 
 class StepTemplateRef(CommonFields):
@@ -24,15 +26,72 @@ class StepTemplateSchema(CommonFields):
 class ParameterSchema(CommonFields):
     template: AttributeGroupTemplateSchema
     # values: dict[str, AttributeTemplateSchema]
-    values: dict[str, Any]
+    values: BaseModel  # dict[str, Any]
+
+    @model_validator(mode="before")
+    def coerce_from_orm(cls, data):
+        if isinstance(data, Parameter):
+            tmpl = data.template
+            tmpl_key = tuple(
+                (vt.name, vt.slug, vt.value_type) for vt in tmpl.attribute_templates
+            )
+            values_model = build_param_values_model(tmpl.slug or tmpl.name, tmpl_key)
+            raw_values = {av.template.name: av.value for av in data._values.values()}
+            return {
+                "id": data.id,
+                "create_date": data.create_date,
+                "modified_date": data.modified_date,
+                "template": tmpl,
+                "values": values_model.model_validate(raw_values),
+            }
+        if isinstance(data, dict) and isinstance(data.get("values"), dict):
+            tmpl = data.get("template")
+            if tmpl:
+                tmpl_key = tuple(
+                    (vt.name, vt.slug, vt.value_type) for vt in tmpl.attribute_templates
+                )
+                values_model = build_param_values_model(
+                    tmpl.slug or tmpl.name, tmpl_key
+                )
+                data["values"] = values_model.model_validate(data["values"])
+        return data
+
+    @model_validator(mode="before")
+    def coerce_and_reject_unknown(cls, data):
+        if not isinstance(data, dict):
+            return data
+        template = data.get("template")
+        raw_values = data.get("values") or {}
+        if template and isinstance(raw_values, dict):
+            tmpl_names = {a.name for a in template.attribute_templates}
+            unknown = set(raw_values) - tmpl_names
+            if unknown:
+                raise ValueError(
+                    f"Unknown parameter(s) for template {template.name}: "
+                    f"{', '.join(sorted(unknown))}"
+                )
+            tmpl_key = tuple(
+                (vt.name, vt.slug, vt.value_type) for vt in template.attribute_templates
+            )
+            values_model = build_param_values_model(
+                template.slug or template.name, tmpl_key
+            )
+            data["values"] = values_model.model_validate(raw_values)
+        return data
 
     @model_validator(mode="after")
     def validate_and_coerce_values(self) -> "ParameterSchema":
         # Build template lookup: attr name -> template schema
         tmpl_by_name = {a.name: a for a in self.template.attribute_templates}
 
+        values_dict = (
+            self.values.model_dump(by_alias=True)
+            if isinstance(self.values, BaseModel)
+            else dict(self.values)
+        )
+
         # 1) no unknown keys
-        unknown_keys = set(self.values) - set(tmpl_by_name)
+        unknown_keys = set(values_dict) - set(tmpl_by_name)
         if unknown_keys:
             raise ValueError(
                 f"Unknown parameter(s) for template {self.template.name}: "
@@ -41,7 +100,7 @@ class ParameterSchema(CommonFields):
 
         # 2) coerce each value using your AttributeTemplateValidator
         coerced: dict[str, Any] = {}
-        for name, raw_value in self.values.items():
+        for name, raw_value in values_dict.items():
             attr_tmpl = tmpl_by_name[name]
 
             # Reuse your validator to perform type coercion & checks
@@ -54,7 +113,7 @@ class ParameterSchema(CommonFields):
             )
             coerced[name] = validator.default  # already converted by coerce_default
 
-        self.values = coerced
+        self.values = self.values.__class__.model_validate(coerced)
         return self
 
 

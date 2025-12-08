@@ -485,8 +485,9 @@ class LocalBackend(Backend):
         )
         self.session.add(process_run)
         self.session.flush()
-
-        return ProcessRunSchema.model_validate(process_run)
+        pr = ProcessRunSchema.model_validate(process_run)
+        pr._init_state(self)
+        return pr
 
     def assign_resource(
         self,
@@ -558,7 +559,9 @@ class LocalBackend(Backend):
                 f"to slot {resource_slot_model.name!r}: {exc}"
             ) from exc
 
-        return ProcessRunSchema.model_validate(process_run_model)
+        pr = ProcessRunSchema.model_validate(process_run_model)
+        pr._init_state(self)
+        return pr
 
     def check_resource_assignment(
         self,
