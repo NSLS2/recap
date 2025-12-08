@@ -33,7 +33,6 @@ from recap.db.step import (
     StepTemplate,
     StepTemplateResourceSlotBinding,
 )
-from recap.dsl.process_builder import map_dtype_to_pytype
 from recap.dsl.query import QuerySpec, SchemaT
 from recap.schemas.attribute import AttributeGroupRef, AttributeTemplateSchema
 from recap.schemas.process import (
@@ -52,7 +51,11 @@ from recap.schemas.resource import (
 )
 from recap.schemas.step import StepSchema, StepTemplateRef
 from recap.utils.database import get_or_create, load_single
-from recap.utils.dsl import AliasMixin, resolve_path
+from recap.utils.dsl import (
+    AliasMixin,
+    build_param_values_model,
+    resolve_path,
+)
 
 SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
     CampaignSchema: Campaign,
@@ -614,27 +617,19 @@ class LocalBackend(Backend):
             "step_id": (UUID, Field(default=step.id)),
         }
         for _name, param in step.parameters.items():
-            param_fields: dict[str, tuple] = {}
-            for val_name, value in param.values.items():
-                value_template = None
-                for vt in param.template.attribute_templates:
-                    if vt.name == val_name:
-                        value_template = vt
-                        break
-                if value_template is None:
-                    raise LookupError(f"Could not find value with name {val_name}")
-                pytype = map_dtype_to_pytype(value_template.value_type)
-                param_fields[value_template.slug] = (
-                    pytype | None,
-                    Field(default=value, alias=value_template.name),
-                )
-                param_model = create_model(
-                    f"{val_name}", **param_fields, __base__=(AliasMixin, BaseModel)
-                )
-                params[param.template.slug] = (
-                    param_model,
-                    Field(default_factory=param_model, alias=param.template.name),
-                )
+            tmpl_key = tuple(
+                (vt.name, vt.slug, vt.value_type)
+                for vt in param.template.attribute_templates
+            )
+            values_model = build_param_values_model(param.template.slug, tmpl_key)
+            params[param.template.slug] = (
+                values_model,
+                Field(
+                    default_factory=lambda vm=values_model,
+                    values=param.values: vm.model_validate(values),
+                    alias=param.template.name,
+                ),
+            )
         model = create_model(
             f"{step_schema.name}", **params, __base__=(AliasMixin, BaseModel)
         )
@@ -862,3 +857,32 @@ class LocalBackend(Backend):
             elif model is CampaignSchema and name == "process_run":
                 opts.append(selectinload(Campaign.process_runs))
         return opts
+
+    def update_process_run(self, process_run: ProcessRunSchema) -> ProcessRunSchema:
+        with self._session_scope() as session:
+            for step_schema in process_run.steps:
+                step: Step = load_single(
+                    session,
+                    select(Step)
+                    .where(Step.id == step_schema.id)
+                    .options(
+                        selectinload(Step.parameters).selectinload(Parameter._values)
+                    ),
+                    label="Step",
+                )
+                for group_name, param_schema in step_schema.parameters.items():
+                    if group_name not in step.parameters:
+                        raise ValueError(
+                            f"Step {step_schema.name} has no parameter group {group_name}"
+                        )
+                    param = step.parameters[group_name]
+
+                    new_values = param_schema.values.model_dump(by_alias=True)
+                    for key, value in new_values.items():
+                        if key not in param.values:
+                            raise ValueError(
+                                f"Parameter {key} not found in group {group_name}"
+                            )
+                        param.values[key] = value
+            session.flush()
+        return process_run

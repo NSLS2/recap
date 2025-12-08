@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import InstrumentedAttribute
 from sqlalchemy.sql import Select
@@ -92,3 +94,14 @@ class AliasMixin:
                 setattr(self, name, value)
                 return
         raise KeyError(f"No field with alias '{alias}'")
+
+
+def map_dtype_to_pytype(dtype: str):
+    return {
+        "float": float,
+        "int": int,
+        "str": str,
+        "bool": bool,
+        "datetime": datetime,
+        "array": list,
+    }[dtype]

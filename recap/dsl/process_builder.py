@@ -218,14 +218,3 @@ class ProcessRunBuilder:
         # refresh cached steps so subsequent operations see the new child
         self._steps = None
         return child
-
-
-def map_dtype_to_pytype(dtype: str):
-    return {
-        "float": float,
-        "int": int,
-        "str": str,
-        "bool": bool,
-        "datetime": str,
-        "array": list,
-    }[dtype]

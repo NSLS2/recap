@@ -6,14 +6,13 @@ from pydantic import BaseModel, Field, create_model
 from recap.adapter import Backend
 from recap.db.resource import Resource
 from recap.dsl.attribute_builder import AttributeGroupBuilder
-from recap.dsl.process_builder import map_dtype_to_pytype
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.resource import (
     ResourceSchema,
     ResourceTemplateRef,
     ResourceTypeSchema,
 )
-from recap.utils.dsl import AliasMixin
+from recap.utils.dsl import AliasMixin, map_dtype_to_pytype
 
 
 class ResourceBuilder:
