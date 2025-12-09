@@ -3,10 +3,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from alembic import command
-from alembic.config import Config
 from recap.client.base_client import RecapClient
 from recap.db.base import Base
+from recap.utils.migrations import apply_migrations as upgrade_database
+from recap.utils.migrations import downgrade_migrations
 
 
 @pytest.fixture(scope="session")
@@ -21,16 +21,12 @@ def apply_migrations(db_url):
     """
     Run alembic migrations once before all tests.
     """
-    alembic_cfg = Config("alembic.ini")
-    alembic_cfg.set_main_option("sqlalchemy.url", db_url)
-
-    # Upgrade to latest revision
-    command.upgrade(alembic_cfg, "head")
+    upgrade_database(db_url)
 
     yield
 
     # Optional cleanup for SQLite or temporary DB
-    command.downgrade(alembic_cfg, "base")
+    downgrade_migrations(db_url)
 
 
 @pytest.fixture(scope="session")

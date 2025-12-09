@@ -1,7 +1,9 @@
 from collections.abc import Iterable
+from pathlib import Path
+from tempfile import gettempdir
 from typing import Any
 from urllib.parse import urlparse
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -13,6 +15,7 @@ from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
 from recap.schemas.process import CampaignSchema
 from recap.schemas.resource import ResourceSchema
+from recap.utils.migrations import apply_migrations
 
 
 class RecapClient:
@@ -22,12 +25,15 @@ class RecapClient:
         echo: bool = False,
     ):
         self._campaign: CampaignSchema | None = None
-        self.backend: Backend
+        self.database_path: Path | None = None
+        self.backend: Backend | None = None
         if url is not None:
             parsed = urlparse(url)
             if parsed.scheme in ("http", "https"):
                 raise NotImplementedError("Rest api via HTTP(S) is not yet implemented")
             elif "sqlite" in parsed.scheme:
+                if parsed.path and parsed.path != "/:memory:":
+                    self.database_path = Path(parsed.path)
                 self.engine = create_engine(url, echo=echo)
                 self._sessionmaker = sessionmaker(
                     bind=self.engine, expire_on_commit=False, future=True
@@ -50,6 +56,33 @@ class RecapClient:
 
     def __exit__(self, exc_type, exc, tb):
         self.close()
+
+    @classmethod
+    def from_sqlite(
+        cls, path: str | Path | None = None, echo: bool = False
+    ) -> "RecapClient":
+        """
+        Create or upgrade a local SQLite database and return a connected client.
+
+        If no path is provided a new database file is created under the system
+        temp directory. When the file already exists, migrations are applied to
+        bring it up to date.
+        """
+        target_path = (
+            Path(path)
+            if path is not None
+            else Path(gettempdir()) / f"recap-{uuid4().hex}.db"
+        )
+        if target_path.is_dir():
+            raise ValueError("Path must point to a database file, not a directory")
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        db_url = f"sqlite:///{target_path}"
+        apply_migrations(db_url)
+
+        client = cls(url=db_url, echo=echo)
+        client.database_path = target_path
+        return client
 
     def build_process_template(self, name: str, version: str) -> ProcessTemplateBuilder:
         return ProcessTemplateBuilder(name=name, version=version, backend=self.backend)
