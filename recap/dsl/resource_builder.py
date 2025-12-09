@@ -23,12 +23,17 @@ class ResourceBuilder:
         template_name: str,
         backend: Backend | None = None,
         create_new: bool = False,
-        parent: Optional["ResourceBuilder"] = None,
+        parent: "ResourceBuilder | ResourceSchema | None" = None,
     ):
         self.name = name
         self._children: list[Resource] = []
-        self.parent = parent
-        self.parent_resource = parent._resource if parent else None
+        self.parent = None
+        self.parent_resource = None
+        if isinstance(parent, self.__class__):
+            self.parent = parent
+            self.parent_resource = parent._resource if parent else None
+        elif isinstance(parent, ResourceSchema):
+            self.parent_resource = parent
         self.create_new = create_new
         self.template_name = template_name
         if backend:
@@ -37,21 +42,26 @@ class ResourceBuilder:
         elif self.parent:
             self.backend = self.parent.backend
             self._uow = self.parent._uow
-        if self.create_new:
-            template = self.backend.get_resource_template(name=self.template_name)
-            self._resource = self.backend.create_resource(
-                self.name,
-                resource_template=template,
-                parent_resource=self.parent_resource,
-                expand=True,
-            )
-        else:
-            self._resource = self.backend.get_resource(
-                self.name, self.template_name, expand=True
-            )
-        if self.parent_resource:
-            print(f"adding child {self._resource.name} to {self.parent_resource.name}")
-            self.backend.add_child_resources(self.parent_resource, [self._resource])
+        try:
+            if self.create_new:
+                template = self.backend.get_resource_template(name=self.template_name)
+                self._resource = self.backend.create_resource(
+                    self.name,
+                    resource_template=template,
+                    parent_resource=self.parent_resource,
+                    expand=True,
+                )
+            else:
+                self._resource = self.backend.get_resource(
+                    self.name, self.template_name, expand=True
+                )
+            if self.parent_resource:
+                print(
+                    f"adding child {self._resource.name} to {self.parent_resource.name}"
+                )
+                self.backend.add_child_resources(self.parent_resource, [self._resource])
+        except Exception as e:
+            print(f"Exception occured while creating resource: {e}")
 
     @classmethod
     def create(cls, name: str, template_name: str, backend: Backend, parent=None):
@@ -165,18 +175,23 @@ class ResourceTemplateBuilder:
         self._children: list[ResourceTemplateRef] = []
         self.parent = parent
         self.resource_types: dict[str, ResourceTypeSchema] = {}
-        for rt_schema in self.backend.add_resource_types(type_names):
-            self.resource_types[rt_schema.name] = rt_schema
-        if self.parent:
-            self._template = self.backend.add_child_resource_template(
-                self.name,
-                [rt for rt in self.resource_types.values()],
-                parent_resource_template=self.parent._template,
-            )
-        else:
-            self._template: ResourceTemplateRef = self.backend.add_resource_template(
-                name, list(self.resource_types.values())
-            )
+        try:
+            for rt_schema in self.backend.add_resource_types(type_names):
+                self.resource_types[rt_schema.name] = rt_schema
+            if self.parent:
+                self._template = self.backend.add_child_resource_template(
+                    self.name,
+                    [rt for rt in self.resource_types.values()],
+                    parent_resource_template=self.parent._template,
+                )
+            else:
+                self._template: ResourceTemplateRef = (
+                    self.backend.add_resource_template(
+                        name, list(self.resource_types.values())
+                    )
+                )
+        except Exception as e:
+            print(f"Exception occured when creating a ResourceTemplate: {e}")
 
     def __enter__(self):
         return self
