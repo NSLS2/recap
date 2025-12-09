@@ -436,13 +436,15 @@ class LocalBackend(Backend):
         self.session.add(resource)
         self.session.flush()
         if expand:
-            return ResourceSchema.model_validate(resource)
+            rs = ResourceSchema.model_validate(resource)
+            rs._init_state(self)
+            return rs
         return ResourceRef.model_validate(resource)
 
     def get_resource(
         self, name: str, template_name: str, expand: bool = False
     ) -> ResourceRef | ResourceSchema:
-        statement = (
+        stmt = (
             select(Resource)
             .join(Resource.template)
             .where(
@@ -452,16 +454,19 @@ class LocalBackend(Backend):
             )
         )
         if expand:
-            statement = statement.options(
+            stmt = stmt.options(
                 selectinload(Resource.children).selectinload(Resource.children),
                 selectinload(Resource.template),
                 selectinload(Resource.children).selectinload(Resource.properties),
                 selectinload(Resource.properties),
             )
-        resource = load_single(self.session, statement, label="Resource")
+        with self._session_scope() as session:
+            resource = load_single(session, stmt, label="Resource")
 
         if expand:
-            return ResourceSchema.model_validate(resource)
+            rs = ResourceSchema.model_validate(resource)
+            rs._init_state(self)
+            return rs
 
         return ResourceRef.model_validate(resource)
 
@@ -864,6 +869,8 @@ class LocalBackend(Backend):
 
     def update_process_run(self, process_run: ProcessRunSchema) -> ProcessRunSchema:
         with self._session_scope() as session:
+            owns_tx = not session.in_transaction()
+            tx = session.begin() if owns_tx else None
             for step_schema in process_run.steps:
                 step: Step = load_single(
                     session,
@@ -889,6 +896,8 @@ class LocalBackend(Backend):
                             )
                         param.values[key] = value
             session.flush()
+            if tx:
+                tx.commit()
         return process_run
 
     def update_resource(self, resource: ResourceSchema) -> ResourceSchema:

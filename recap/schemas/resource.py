@@ -4,46 +4,84 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, model_validator
 
 from recap.db.process import Direction
+from recap.db.resource import Property
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
     AttributeTemplateValidator,
 )
 from recap.schemas.common import CommonFields
+from recap.utils.dsl import build_param_values_model
 
 
 class PropertySchema(CommonFields):
     template: AttributeGroupTemplateSchema
-    values: dict[str, Any]
+    values: BaseModel
+
+    @model_validator(mode="before")
+    def coerce_from_orm_or_dict(cls, data):
+        if isinstance(data, Property):
+            tmpl = data.template
+            tmpl_key = tuple(
+                (vt.name, vt.slug, vt.value_type) for vt in tmpl.attribute_templates
+            )
+            values_model = build_param_values_model(tmpl.slug or tmpl.name, tmpl_key)
+            raw_values = {av.template.name: av.value for av in data._values.values()}
+            return {
+                "id": data.id,
+                "create_date": data.create_date,
+                "modified_date": data.modified_date,
+                "template": tmpl,
+                "values": values_model.model_validate(raw_values),
+            }
+        if isinstance(data, dict) and isinstance(data.get("values"), dict):
+            tmpl = data.get("template")
+            if tmpl:
+                tmpl_names = {a.name for a in tmpl.attribute_templates}
+                unknown = set(data["values"]) - tmpl_names
+                if unknown:
+                    raise ValueError(
+                        f"Unknown property(s) for template {tmpl.name}: "
+                        f"{', '.join(sorted(unknown))}"
+                    )
+                tmpl_key = tuple(
+                    (vt.name, vt.slug, vt.value_type) for vt in tmpl.attribute_templates
+                )
+                values_model = build_param_values_model(
+                    tmpl.slug or tmpl.name, tmpl_key
+                )
+                data["values"] = values_model.model_validate(data["values"])
+        return data
 
     @model_validator(mode="after")
     def validate_and_coerce_values(self) -> "PropertySchema":
-        # Build template lookup: attr name -> template schema
         tmpl_by_name = {a.name: a for a in self.template.attribute_templates}
 
-        # 1) no unknown keys
-        unknown_keys = set(self.values) - set(tmpl_by_name)
+        values_dict = (
+            self.values.model_dump(by_alias=True)
+            if isinstance(self.values, BaseModel)
+            else dict(self.values)
+        )
+
+        unknown_keys = set(values_dict) - set(tmpl_by_name)
         if unknown_keys:
             raise ValueError(
-                f"Unknown parameter(s) for template {self.template.name}: "
+                f"Unknown property(s) for template {self.template.name}: "
                 f"{', '.join(sorted(unknown_keys))}"
             )
 
-        # 2) coerce each value using your AttributeTemplateValidator
         coerced: dict[str, Any] = {}
-        for name, raw_value in self.values.items():
+        for name, raw_value in values_dict.items():
             attr_tmpl = tmpl_by_name[name]
 
-            # Reuse your validator to perform type coercion & checks
-            # Note: we shove `raw_value` into 'default' to leverage coerce_default()
             validator = AttributeTemplateValidator(
                 name=attr_tmpl.name,
                 type=attr_tmpl.value_type,
                 unit=attr_tmpl.unit,
                 default=raw_value,
             )
-            coerced[name] = validator.default  # already converted by coerce_default
+            coerced[name] = validator.default
 
-        self.values = coerced
+        self.values = self.values.__class__.model_validate(coerced)
         return self
 
 
@@ -84,6 +122,22 @@ class ResourceSchema(CommonFields):
     )
     children: list["ResourceSchema"]
     properties: dict[str, PropertySchema]
+    backend: Any = Field(default=None, exclude=True, repr=False)
+    model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
+
+    def _init_state(self, backend):
+        object.__setattr__(self, "backend", backend)
+
+    def save(self):
+        if not self.backend:
+            raise RuntimeError("No backend attached")
+        updated_resource = self.backend.update_resource(self)
+        # Update this instance in place so callers don't need to reassign.
+        for field_name in self.model_fields:
+            if field_name == "backend":
+                continue
+            object.__setattr__(self, field_name, getattr(updated_resource, field_name))
+        return self
 
 
 class ResourceRef(CommonFields):
