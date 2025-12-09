@@ -12,6 +12,7 @@ from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
 from recap.schemas.process import CampaignSchema
+from recap.schemas.resource import ResourceSchema
 
 
 class RecapClient:
@@ -86,11 +87,11 @@ class RecapClient:
             create_new=create_new,
         )
 
-    def create_resource(self, name: str, template_name: str):
+    def create_resource(
+        self, name: str, template_name: str, parent: ResourceSchema | None = None
+    ):
         return ResourceBuilder.create(
-            name=name,
-            template_name=template_name,
-            backend=self.backend,
+            name=name, template_name=template_name, backend=self.backend, parent=parent
         )
 
     def create_campaign(
