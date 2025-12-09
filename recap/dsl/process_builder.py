@@ -1,9 +1,12 @@
+from typing import Any
+
 from pydantic import BaseModel
 from sqlalchemy.exc import NoResultFound
 
 from recap.adapter import Backend
 from recap.db.process import Direction
 from recap.dsl.attribute_builder import AttributeGroupBuilder
+from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.process import (
     CampaignSchema,
     ProcessRunSchema,
@@ -100,6 +103,23 @@ class StepTemplateBuilder:
             role, slot_name, self.process_template, self._template
         )
         self._bound_slots[slot.name] = slot
+        return self
+
+    def add_parameters(self, param_def: dict[str, list[dict[str, Any]]]):
+        """
+        Add parameters in the form of a dictionary, first level of keys represents groupts which have a list of dictionaries representing parameters
+        {
+            "harvest": [
+                {"name":"arrival", "type": "datetime", "unit": "", default: ""},
+            ]
+        }
+        """
+        for group_key, params in param_def.items():
+            agb = AttributeGroupBuilder(group_name=group_key, parent=self)
+            for param in params:
+                attr = AttributeTemplateValidator.model_validate(param)
+                agb.add_attribute(attr.name, attr.type, attr.unit, attr.default)
+            agb.close_group()
         return self
 
 
