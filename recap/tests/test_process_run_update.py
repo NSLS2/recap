@@ -1,28 +1,7 @@
-import pytest
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload, sessionmaker
+def test_process_run_update_persists_param_changes(client):
+    client.create_campaign("Campaign", "proposal-1", saf=None)
 
-from recap.adapter.local import LocalBackend
-from recap.db.step import Parameter, Step
-from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
-
-
-@pytest.fixture
-def backend(apply_migrations, engine):
-    SessionLocal = sessionmaker(bind=engine)
-    backend = LocalBackend(SessionLocal)
-    try:
-        yield backend
-    finally:
-        backend.close()
-
-
-def test_process_run_update_persists_param_changes(backend):
-    uow = backend.begin()
-    campaign = backend.create_campaign("Campaign", "proposal-1", saf=None)
-    uow.commit()
-
-    with ProcessTemplateBuilder(backend, "PT-update", "1.0") as ptb:
+    with client.build_process_template("PT-update", "1.0") as ptb:
         (
             ptb.add_step("Mix")
             .param_group("Inputs")
@@ -31,13 +10,11 @@ def test_process_run_update_persists_param_changes(backend):
             .close_step()
         )
 
-    with ProcessRunBuilder(
+    with client.build_process_run(
         name="run-update",
         description="desc",
         template_name="PT-update",
         version="1.0",
-        campaign=campaign,
-        backend=backend,
     ) as prb:
         run = prb.process_run
         step = run.steps[0]
@@ -46,33 +23,33 @@ def test_process_run_update_persists_param_changes(backend):
         step.parameters["Inputs"].values.voltage = 42
         run.update()
 
-    uow_read = backend.begin()
-    orm_step = (
-        backend.session.execute(
-            select(Step)
-            .where(Step.id == step.id)
-            .options(selectinload(Step.parameters).selectinload(Parameter._values))
-        )
-        .scalars()
-        .one()
+    refreshed_run = (
+        client.query_maker()
+        .process_runs()
+        .include_steps(include_parameters=True)
+        .filter(id=run.id)
+        .first()
     )
-    assert orm_step.parameters["Inputs"].values["Voltage"] == 42
-    uow_read.rollback()
+    assert refreshed_run is not None
+    assert refreshed_run.steps[0].parameters["Inputs"].values.voltage == 42
 
 
-def test_resource_save_persists_property_changes(backend):
-    uow = backend.begin()
-    rt = backend.add_resource_types(["instrument"])[0]
-    tmpl = backend.add_resource_template("Robot", [rt])
-    details = backend.add_attr_group("Details", tmpl)
-    backend.add_attribute("serial", "str", "", "abc", details)
-    resource = backend.create_resource("R1", tmpl, None, expand=True)
-    uow.commit()
+def test_resource_save_persists_property_changes(client):
+    with client.build_resource_template("Robot", ["instrument"]) as rtb:
+        rtb.prop_group("Details").add_attribute(
+            "serial", "str", "", "abc"
+        ).close_group()
+
+    resource = client.create_resource("R1", "Robot")
 
     resource.properties["Details"].values.serial = "xyz"
     resource.save()
 
-    uow_read = backend.begin()
-    refreshed = backend.get_resource("R1", "Robot", expand=True)
+    refreshed = (
+        client.query_maker()
+        .resources()
+        .filter(name="R1", template__name="Robot")
+        .first()
+    )
+    assert refreshed is not None
     assert refreshed.properties["Details"].values.serial == "xyz"
-    uow_read.rollback()
