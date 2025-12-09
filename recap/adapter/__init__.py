@@ -174,6 +174,7 @@ class Backend(Protocol):
         resource: ResourceRef | ResourceSchema,
         process_run: ProcessRunSchema,
     ) -> ProcessRunSchema: ...
+    def update_resource(self, resource: ResourceSchema) -> ResourceSchema: ...
 
     def check_resource_assignment(
         self,

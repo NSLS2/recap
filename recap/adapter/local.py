@@ -22,6 +22,7 @@ from recap.db.process import (
     ResourceSlot,
 )
 from recap.db.resource import (
+    Property,
     Resource,
     ResourceTemplate,
     ResourceType,
@@ -889,3 +890,37 @@ class LocalBackend(Backend):
                         param.values[key] = value
             session.flush()
         return process_run
+
+    def update_resource(self, resource: ResourceSchema) -> ResourceSchema:
+        with self._session_scope() as session:
+            owns_tx = not session.in_transaction()
+            tx = session.begin() if owns_tx else None
+            res: Resource = load_single(
+                session,
+                select(Resource)
+                .where(Resource.id == resource.id)
+                .options(
+                    selectinload(Resource.properties).selectinload(Property._values),
+                    selectinload(Resource.children),
+                ),
+                label="Resource",
+            )
+            for group_name, prop_schema in resource.properties.items():
+                if group_name not in res.properties:
+                    raise ValueError(
+                        f"Resource {resource.name} has no property group {group_name}"
+                    )
+                prop = res.properties[group_name]
+                new_values = prop_schema.values.model_dump(by_alias=True)
+                for key, value in new_values.items():
+                    if key not in prop.values:
+                        raise ValueError(
+                            f"Property {key} not found in group {group_name}"
+                        )
+                    prop.values[key] = value
+            session.flush()
+            if tx:
+                tx.commit()
+            updated_resource = ResourceSchema.model_validate(res)
+            updated_resource._init_state(self)
+        return updated_resource
