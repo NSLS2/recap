@@ -152,8 +152,8 @@ def test_platemate_via_client_child_steps(client):  # noqa
     # Resources
     with client.build_resource("DSI-poised", "PM Library Plate") as lib_plate:
         for well in lib_plate.resource.children:
-            well.properties["content"].values["catalog_id"] = f"CAT-{well.name}"
-            well.properties["content"].values["smiles"] = f"SMILES-{well.name}"
+            well.properties["content"].values.catalog_id = f"CAT-{well.name}"
+            well.properties["content"].values.smiles = f"SMILES-{well.name}"
 
     with client.build_resource("pmtest", "PM Xtal Plate"):
         pass
@@ -307,7 +307,7 @@ def test_platemate_via_client_child_steps(client):  # noqa
                     "dest_puck": puck_pins[idx],
                 },
             )
-            lib_children[idx].properties["status"].values["used"] = True
+            lib_children[idx].properties["status"].values.used = True
             harvest_children_created.append(harvest_child)
         assert len(harvest_children_created) == 2
 
@@ -319,11 +319,11 @@ def test_platemate_via_client_child_steps(client):  # noqa
         drop = dest.properties["drop"].values
         echo_rows.append(
             {
-                "dest": mapping["echo_position"],
+                "dest": mapping.echo_position,
                 "source": source.name,
                 "volume": echo_params.echo.volume,
-                "x": mapping["well_origin_x"] + drop["x_offset"],
-                "y": mapping["well_origin_y"] + drop["y_offset"],
+                "x": mapping.well_origin_x + drop.x_offset,
+                "y": mapping.well_origin_y + drop.y_offset,
             }
         )
 
@@ -338,7 +338,7 @@ def test_platemate_via_client_child_steps(client):  # noqa
         arrival = base_time + timedelta(minutes=5 + idx * 10)
         departure = arrival + timedelta(minutes=5)
         catalog = f"CAT-{lib_children[idx].name}"
-        lib_children[idx].properties["content"].values["catalog_id"] = catalog
+        lib_children[idx].properties["content"].values.catalog_id = catalog
         manifest.append(
             {
                 "sample": f"mpro-{idx + 1:02d}",
@@ -352,7 +352,7 @@ def test_platemate_via_client_child_steps(client):  # noqa
             {
                 "sample": f"mpro-{idx + 1:02d}",
                 "catalog": catalog,
-                "smiles": lib_children[idx].properties["content"].values["smiles"],
+                "smiles": lib_children[idx].properties["content"].values.smiles,
                 "soak_min": round((departure - base_time).total_seconds() / 60, 1),
                 "harvest_sec": round((departure - arrival).total_seconds(), 1),
                 "dest_resource": puck_pins[idx].name,

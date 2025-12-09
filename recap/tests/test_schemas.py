@@ -126,7 +126,7 @@ def test_property_schema_value_coercion_matches_template():
         values={"Temp": "25.5"},
     )
 
-    assert property_schema.values["Temp"] == pytest.approx(25.5)
+    assert property_schema.values.temp == pytest.approx(25.5)
 
 
 def test_parameter_schema_rejects_uncoercible_values():
