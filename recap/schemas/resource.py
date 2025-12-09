@@ -1,7 +1,14 @@
 from typing import Annotated, Any, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, SkipValidation, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SkipValidation,
+    create_model,
+    model_validator,
+)
 
 from recap.db.process import Direction
 from recap.db.resource import Property
@@ -10,7 +17,7 @@ from recap.schemas.attribute import (
     AttributeTemplateValidator,
 )
 from recap.schemas.common import CommonFields
-from recap.utils.dsl import build_param_values_model
+from recap.utils.dsl import AliasMixin, build_param_values_model
 
 
 class PropertySchema(CommonFields):
@@ -121,19 +128,47 @@ class ResourceSchema(CommonFields):
         default=None, exclude=True
     )
     children: list["ResourceSchema"]
-    properties: dict[str, PropertySchema]
+    properties: BaseModel | dict[str, PropertySchema]
     backend: Any = Field(default=None, exclude=True, repr=False)
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
 
     def _init_state(self, backend):
         object.__setattr__(self, "backend", backend)
 
+    @model_validator(mode="after")
+    def build_property_model(self) -> "ResourceSchema":
+        if isinstance(self.properties, BaseModel):
+            return self
+
+        prop_fields: dict[str, tuple] = {}
+        prop_values: dict[str, PropertySchema] = {}
+        for prop in self.properties.values():
+            tmpl = prop.template
+            field_name = getattr(tmpl, "slug", None) or tmpl.name
+            prop_fields[field_name] = (PropertySchema, Field(alias=tmpl.name))
+            prop_values[field_name] = prop
+
+        if prop_fields:
+            model = create_model(
+                f"ResourceProperties_{self.template.slug or self.template.name}",
+                __base__=(AliasMixin, BaseModel),
+                __config__=ConfigDict(
+                    validate_assignment=True,
+                    populate_by_name=True,
+                    arbitrary_types_allowed=True,
+                ),
+                **prop_fields,
+            )
+            self.properties = model.model_validate(prop_values)
+
+        return self
+
     def save(self):
         if not self.backend:
             raise RuntimeError("No backend attached")
         updated_resource = self.backend.update_resource(self)
         # Update this instance in place so callers don't need to reassign.
-        for field_name in self.model_fields:
+        for field_name in self.__class__.model_fields:
             if field_name == "backend":
                 continue
             object.__setattr__(self, field_name, getattr(updated_resource, field_name))

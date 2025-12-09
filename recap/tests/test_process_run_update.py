@@ -20,7 +20,7 @@ def test_process_run_update_persists_param_changes(client):
         step = run.steps[0]
 
         # mutate typed param values and persist
-        step.parameters["Inputs"].values.voltage = 42
+        step.parameters.inputs.values.voltage = 42
         run.update()
 
     refreshed_run = (
@@ -31,7 +31,7 @@ def test_process_run_update_persists_param_changes(client):
         .first()
     )
     assert refreshed_run is not None
-    assert refreshed_run.steps[0].parameters["Inputs"].values.voltage == 42
+    assert refreshed_run.steps[0].parameters.inputs.values.voltage == 42
 
 
 def test_resource_save_persists_property_changes(client):
@@ -42,14 +42,9 @@ def test_resource_save_persists_property_changes(client):
 
     resource = client.create_resource("R1", "Robot")
 
-    resource.properties["Details"].values.serial = "xyz"
+    resource.properties.details.values.serial = "xyz"
     resource.save()
 
-    refreshed = (
-        client.query_maker()
-        .resources()
-        .filter(name="R1", template__name="Robot")
-        .first()
-    )
+    refreshed = client.query_maker().resources().filter(name="R1").first()
     assert refreshed is not None
-    assert refreshed.properties["Details"].values.serial == "xyz"
+    assert refreshed.properties.details.values.serial == "xyz"

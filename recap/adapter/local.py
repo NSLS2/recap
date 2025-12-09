@@ -881,7 +881,8 @@ class LocalBackend(Backend):
                     ),
                     label="Step",
                 )
-                for group_name, param_schema in step_schema.parameters.items():
+                for _, param_schema in step_schema.parameters.items():
+                    group_name = param_schema.template.name
                     if group_name not in step.parameters:
                         raise ValueError(
                             f"Step {step_schema.name} has no parameter group {group_name}"
@@ -914,17 +915,18 @@ class LocalBackend(Backend):
                 ),
                 label="Resource",
             )
-            for group_name, prop_schema in resource.properties.items():
-                if group_name not in res.properties:
+            for _, prop_schema in resource.properties.items():
+                tmpl_name = prop_schema.template.name
+                if tmpl_name not in res.properties:
                     raise ValueError(
-                        f"Resource {resource.name} has no property group {group_name}"
+                        f"Resource {resource.name} has no property group {tmpl_name}"
                     )
-                prop = res.properties[group_name]
+                prop = res.properties[tmpl_name]
                 new_values = prop_schema.values.model_dump(by_alias=True)
                 for key, value in new_values.items():
                     if key not in prop.values:
                         raise ValueError(
-                            f"Property {key} not found in group {group_name}"
+                            f"Property {key} not found in group {tmpl_name}"
                         )
                     prop.values[key] = value
             session.flush()

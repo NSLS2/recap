@@ -1,7 +1,7 @@
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from recap.db.step import Parameter
 from recap.schemas.attribute import (
@@ -10,7 +10,7 @@ from recap.schemas.attribute import (
 )
 from recap.schemas.common import CommonFields, StepStatus
 from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
-from recap.utils.dsl import build_param_values_model
+from recap.utils.dsl import AliasMixin, build_param_values_model
 
 
 class StepTemplateRef(CommonFields):
@@ -120,12 +120,40 @@ class ParameterSchema(CommonFields):
 class StepSchema(CommonFields):
     name: str
     template: StepTemplateSchema
-    parameters: dict[str, ParameterSchema]
+    parameters: BaseModel | dict[str, ParameterSchema]
     state: StepStatus
     process_run_id: UUID
     parent_id: UUID | None = None
     children: list["StepSchema"] = Field(default_factory=list)
     resources: dict[str, "ResourceSchema"] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def build_parameter_model(self) -> "StepSchema":
+        if isinstance(self.parameters, BaseModel):
+            return self
+
+        param_fields: dict[str, tuple] = {}
+        param_values: dict[str, ParameterSchema] = {}
+        for param in self.parameters.values():
+            tmpl = param.template
+            field_name = getattr(tmpl, "slug", None) or tmpl.name
+            param_fields[field_name] = (ParameterSchema, Field(alias=tmpl.name))
+            param_values[field_name] = param
+
+        if param_fields:
+            model = create_model(
+                f"StepParameters_{self.template.name}",
+                __base__=(AliasMixin, BaseModel),
+                __config__=ConfigDict(
+                    validate_assignment=True,
+                    populate_by_name=True,
+                    arbitrary_types_allowed=True,
+                ),
+                **param_fields,
+            )
+            self.parameters = model.model_validate(param_values)
+
+        return self
 
 
 StepSchema.model_rebuild()

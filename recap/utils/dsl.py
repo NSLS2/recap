@@ -97,6 +97,23 @@ class AliasMixin:
                 return
         raise KeyError(f"No field with alias '{alias}'")
 
+    def __getitem__(self, alias: str):
+        return self.get(alias)
+
+    def __setitem__(self, alias: str, value):
+        self.set(alias, value)
+
+    def items(self):
+        for name in self.__class__.model_fields:
+            yield name, getattr(self, name)
+
+    def keys(self):
+        return self.__class__.model_fields.keys()
+
+    def values(self):
+        for name in self.__class__.model_fields:
+            yield getattr(self, name)
+
 
 def map_dtype_to_pytype(dtype: str):
     return {
