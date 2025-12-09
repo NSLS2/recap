@@ -758,6 +758,7 @@ class LocalBackend(Backend):
                     f"Resource {resource_model.name} is not allowed for role {role}; "
                     f"must be the assigned resource {root_resource.name} or its child"
                 )
+            else:
                 step.assignments[slot.id] = ResourceAssignment(
                     process_run=process_run_model,
                     resource_slot=slot,

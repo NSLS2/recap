@@ -134,6 +134,8 @@ class ResourceSchema(CommonFields):
 
     def _init_state(self, backend):
         object.__setattr__(self, "backend", backend)
+        for child in self.children:
+            child._init_state(backend)
 
     @model_validator(mode="after")
     def build_property_model(self) -> "ResourceSchema":
