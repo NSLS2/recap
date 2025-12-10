@@ -758,13 +758,17 @@ class LocalBackend(Backend):
                     f"Resource {resource_model.name} is not allowed for role {role}; "
                     f"must be the assigned resource {root_resource.name} or its child"
                 )
-            else:
-                step.assignments[slot.id] = ResourceAssignment(
-                    process_run=process_run_model,
-                    resource_slot=slot,
-                    resource=resource_model,
-                    step=step,
-                )
+            assignment = ResourceAssignment(
+                process_run=process_run_model,
+                resource_slot=slot,
+                resource_slot_id=slot.id,  # ensure collection key is populated
+                resource=resource_model,
+                step=step,
+            )
+            # Explicitly add to the session before attaching to the mapped collection
+            # to avoid KeyFuncDict errors when SQLAlchemy derives the dict key.
+            self.session.add(assignment)
+            step.assignments[slot.id] = assignment
 
     def _resource_is_descendant_or_same(self, candidate: Resource, root: Resource):
         current = candidate
