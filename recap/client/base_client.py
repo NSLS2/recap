@@ -1,7 +1,7 @@
 from collections.abc import Iterable
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Any
+from typing import Any, overload
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -13,8 +13,17 @@ from recap.adapter.local import LocalBackend
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
-from recap.schemas.process import CampaignSchema
-from recap.schemas.resource import ResourceSchema
+from recap.schemas.process import (
+    CampaignSchema,
+    ProcessRunSchema,
+    ProcessTemplateRef,
+    ProcessTemplateSchema,
+)
+from recap.schemas.resource import (
+    ResourceSchema,
+    ResourceTemplateRef,
+    ResourceTemplateSchema,
+)
 from recap.utils.migrations import apply_migrations
 
 
@@ -84,16 +93,111 @@ class RecapClient:
         client.database_path = target_path
         return client
 
-    def build_process_template(self, name: str, version: str) -> ProcessTemplateBuilder:
+    @overload
+    def build_process_template(
+        self, name: str, version: str
+    ) -> ProcessTemplateBuilder: ...
+
+    @overload
+    def build_process_template(
+        self, *, process_template: ProcessTemplateRef | ProcessTemplateSchema
+    ) -> ProcessTemplateBuilder: ...
+
+    def build_process_template(
+        self,
+        *args,
+        process_template: ProcessTemplateRef | ProcessTemplateSchema | None = None,
+        **kwargs,
+    ) -> ProcessTemplateBuilder:
+        if self.backend is None:
+            raise RuntimeError("Backend not initialized")
+
+        if process_template is not None:
+            if args or kwargs:
+                raise TypeError(
+                    "Pass either an existing process_template or name/version, not both"
+                )
+            return ProcessTemplateBuilder(
+                name=process_template.name,
+                version=process_template.version,
+                backend=self.backend,
+                process_template=process_template,
+            )
+
+        if args:
+            if len(args) != 2:
+                raise TypeError("Provide name and version")
+            name, version = args
+        else:
+            try:
+                name = kwargs.pop("name")
+                version = kwargs.pop("version")
+            except KeyError as exc:
+                raise TypeError("name and version are required") from exc
+            if kwargs:
+                raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
+
         return ProcessTemplateBuilder(name=name, version=version, backend=self.backend)
 
+    @overload
     def build_process_run(
         self, name: str, description: str, template_name: str, version: str
-    ):
+    ) -> ProcessRunBuilder: ...
+
+    @overload
+    def build_process_run(
+        self, *, process_run: ProcessRunSchema
+    ) -> ProcessRunBuilder: ...
+
+    def build_process_run(
+        self,
+        *args,
+        process_run: ProcessRunSchema | None = None,
+        **kwargs,
+    ) -> ProcessRunBuilder:
+        if self.backend is None:
+            raise RuntimeError("Backend not initialized")
+
+        if process_run is not None:
+            if args or kwargs:
+                raise TypeError(
+                    "Pass either an existing process_run or name/description/template_name/version, not both"
+                )
+            template = process_run.template
+            return ProcessRunBuilder(
+                name=process_run.name,
+                description=process_run.description,
+                template_name=template.name,
+                campaign=self._campaign,
+                backend=self.backend,
+                version=template.version,
+                process_run=process_run,
+            )
+
+        if args:
+            if len(args) != 4:
+                raise TypeError(
+                    "Provide exactly four positional arguments: name, description, template_name, version"
+                )
+            name, description, template_name, version = args
+        else:
+            try:
+                name = kwargs.pop("name")
+                description = kwargs.pop("description")
+                template_name = kwargs.pop("template_name")
+                version = kwargs.pop("version")
+            except KeyError as exc:
+                raise TypeError(
+                    "name, description, template_name, and version are required"
+                ) from exc
+            if kwargs:
+                raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
+
         if self._campaign is None:
             raise ValueError(
                 "Campaign not set, cannot create process run. Use create_campaign() or set_campaign() first"
             )
+
         return ProcessRunBuilder(
             name=name,
             description=description,
@@ -103,7 +207,41 @@ class RecapClient:
             version=version,
         )
 
-    def build_resource_template(self, name: str, type_names: list[str]):
+    @overload
+    def build_resource_template(
+        self, *, name: str, type_names: list[str]
+    ) -> ResourceTemplateBuilder: ...
+
+    @overload
+    def build_resource_template(
+        self, *, resource_template: ResourceTemplateRef | ResourceTemplateSchema
+    ) -> ResourceTemplateBuilder: ...
+
+    def build_resource_template(
+        self,
+        *,
+        name: str | None = None,
+        type_names: list[str] | None = None,
+        resource_template: ResourceTemplateRef | ResourceTemplateSchema | None = None,
+    ):
+        if self.backend is None:
+            raise RuntimeError("Backend not initialized")
+
+        if resource_template is not None:
+            if name is not None or type_names is not None:
+                raise TypeError(
+                    "Pass either an existing resource_template or name/type_names, not both"
+                )
+            return ResourceTemplateBuilder(
+                name=resource_template.name,
+                type_names=[rt.name for rt in resource_template.types],
+                backend=self.backend,
+                resource_template=resource_template,
+            )
+
+        if name is None or type_names is None:
+            raise TypeError("name and type_names are required")
+
         if isinstance(type_names, str) or not isinstance(type_names, Iterable):
             raise TypeError("type_names must be a collection, not a string")
         if not all(isinstance(item, str) for item in type_names):
@@ -112,12 +250,50 @@ class RecapClient:
             name=name, type_names=type_names, backend=self.backend
         )
 
-    def build_resource(self, name: str, template_name: str, create_new=True):
+    @overload
+    def build_resource(self, name: str, template_name: str) -> ResourceBuilder: ...
+
+    @overload
+    def build_resource(self, *, resource: ResourceSchema) -> ResourceBuilder: ...
+
+    def build_resource(
+        self,
+        *args,
+        resource: ResourceSchema | None = None,
+        **kwargs,
+    ):
+        if self.backend is None:
+            raise RuntimeError("Backend not initialized")
+
+        if resource is not None:
+            if args or kwargs:
+                raise TypeError(
+                    "Pass either an existing resource or name/template_name, not both"
+                )
+            return ResourceBuilder(
+                name=resource.name,
+                template_name=resource.template.name,
+                backend=self.backend,
+                resource=resource,
+            )
+
+        if args:
+            if len(args) != 2:
+                raise TypeError("Provide name and template_name")
+            name, template_name = args
+        else:
+            try:
+                name = kwargs.pop("name")
+                template_name = kwargs.pop("template_name")
+            except KeyError as exc:
+                raise TypeError("name and template_name are required") from exc
+            if kwargs:
+                raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
+
         return ResourceBuilder(
             name=name,
             template_name=template_name,
             backend=self.backend,
-            create_new=create_new,
         )
 
     def create_resource(

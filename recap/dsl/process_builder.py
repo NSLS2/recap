@@ -1,4 +1,5 @@
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel
 from sqlalchemy.exc import NoResultFound
@@ -6,18 +7,26 @@ from sqlalchemy.exc import NoResultFound
 from recap.adapter import Backend
 from recap.db.process import Direction
 from recap.dsl.attribute_builder import AttributeGroupBuilder
+from recap.dsl.query import QuerySpec
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.process import (
     CampaignSchema,
     ProcessRunSchema,
     ProcessTemplateRef,
+    ProcessTemplateSchema,
 )
-from recap.schemas.resource import ResourceSlotSchema
+from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
 from recap.schemas.step import StepSchema, StepTemplateRef
 
 
 class ProcessTemplateBuilder:
-    def __init__(self, backend: Backend, name: str, version: str):
+    def __init__(
+        self,
+        backend: Backend,
+        name: str,
+        version: str,
+        process_template: ProcessTemplateRef | ProcessTemplateSchema | None = None,
+    ):
         self.backend = backend
         self._uow = self.backend.begin()
         self.name = name
@@ -25,6 +34,12 @@ class ProcessTemplateBuilder:
         self._template: ProcessTemplateRef | None = None
         self._resource_slots: dict[str, ResourceSlotSchema] = {}
         self._current_step_builder: StepTemplateBuilder | None = None
+        if process_template is not None:
+            self.name = process_template.name
+            self.version = process_template.version
+            self._template = self.backend.get_process_template(
+                process_template.name, process_template.version, expand=False
+            )
 
     def __enter__(self):
         return self
@@ -129,32 +144,45 @@ class ProcessRunBuilder:
         name: str,
         description: str,
         template_name: str,
-        campaign: CampaignSchema,
+        campaign: CampaignSchema | None,
         backend: Backend,
         version: str | None = None,
+        process_run: ProcessRunSchema | None = None,
     ):
-        # self.session = session
-        # self._tx = session.begin_nested()
         self.backend = backend
         self._uow = self.backend.begin()
         self.name = name
         self.template_name = template_name
         self.version = version
-        self._process_template = self.backend.get_process_template(
-            self.template_name, self.version, expand=True
-        )
-        self._process_run = self.backend.create_process_run(
-            name, description, self._process_template, campaign
-        )
-        self.process_run._init_state(self.backend)
-        self._steps = None
-        self._resources = {}
+        self._process_template: ProcessTemplateSchema | ProcessTemplateRef | None = None
+        try:
+            if process_run is not None:
+                self._process_run = self._reload_process_run(process_run.id)
+                template = self._process_run.template
+                self._process_template = self.backend.get_process_template(
+                    template.name, template.version, expand=True
+                )
+            else:
+                if campaign is None:
+                    raise ValueError("Campaign is required to create a process run")
+                self._process_template = self.backend.get_process_template(
+                    self.template_name, self.version, expand=True
+                )
+                self._process_run = self.backend.create_process_run(
+                    name, description, self._process_template, campaign
+                )
+            self._steps = list(self._process_run.steps)
+            self._resources = {}
+        except Exception as e:
+            print(f"Exception occured while creating a procces run: {e}")
+            raise e
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb):
         if exc_type is None:
+            self.persist()
             self.save()
         else:
             self._uow.rollback()
@@ -163,19 +191,26 @@ class ProcessRunBuilder:
         self._uow.commit()
         return self
 
+    def persist(self):
+        self._process_run = self.backend.update_process_run(self._process_run)
+        return self
+
     @property
     def process_run(self) -> ProcessRunSchema:
         return self._process_run
 
     def assign_resource(
-        self, resource_slot_name: str, resource_name: str, resource_template_name: str
+        # self, resource_slot_name: str, resource_name: str, resource_template_name: str
+        self,
+        resource_slot_name: str,
+        resource: ResourceSchema,
     ) -> "ProcessRunBuilder":
         resource_slot = None
         for slot in self._process_template.resource_slots:
             if slot.name == resource_slot_name:
                 resource_slot = slot
                 break
-        resource = self.backend.get_resource(resource_name, resource_template_name)
+        # resource = self.backend.get_resource(resource_name, resource_template_name)
         if resource_slot is None:
             raise NoResultFound(f"Resource slot {resource_slot_name} not found")
         self._process_run = self.backend.assign_resource(
@@ -239,3 +274,15 @@ class ProcessRunBuilder:
         # refresh cached steps so subsequent operations see the new child
         self._steps = None
         return child
+
+    def _reload_process_run(self, process_run_id: UUID) -> ProcessRunSchema:
+        runs = self.backend.query(
+            ProcessRunSchema,
+            QuerySpec(
+                filters={"id": process_run_id},
+                preloads=["steps", "steps.parameters", "resources"],
+            ),
+        )
+        if not runs:
+            raise ValueError(f"ProcessRun with id {process_run_id} not found")
+        return runs[0]

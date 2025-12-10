@@ -6,10 +6,12 @@ from pydantic import BaseModel, Field, create_model
 from recap.adapter import Backend
 from recap.db.resource import Resource
 from recap.dsl.attribute_builder import AttributeGroupBuilder
+from recap.dsl.query import QuerySpec
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.resource import (
     ResourceSchema,
     ResourceTemplateRef,
+    ResourceTemplateSchema,
     ResourceTypeSchema,
 )
 from recap.utils.dsl import AliasMixin, map_dtype_to_pytype
@@ -22,8 +24,8 @@ class ResourceBuilder:
         name: str,
         template_name: str,
         backend: Backend | None = None,
-        create_new: bool = False,
         parent: "ResourceBuilder | ResourceSchema | None" = None,
+        resource: ResourceSchema | None = None,
     ):
         self.name = name
         self._children: list[Resource] = []
@@ -34,26 +36,28 @@ class ResourceBuilder:
             self.parent_resource = parent._resource if parent else None
         elif isinstance(parent, ResourceSchema):
             self.parent_resource = parent
-        self.create_new = create_new
         self.template_name = template_name
+        self._resource: ResourceSchema | None = None
         if backend:
             self.backend = backend
             self._uow = self.backend.begin()
         elif self.parent:
             self.backend = self.parent.backend
             self._uow = self.parent._uow
+        else:
+            raise ValueError("backend is required")
         try:
-            if self.create_new:
+            if resource is not None:
+                self._resource = self._reload_resource(resource.id)
+                self.name = self._resource.name
+                self.template_name = self._resource.template.name
+            else:
                 template = self.backend.get_resource_template(name=self.template_name)
                 self._resource = self.backend.create_resource(
                     self.name,
                     resource_template=template,
                     parent_resource=self.parent_resource,
                     expand=True,
-                )
-            else:
-                self._resource = self.backend.get_resource(
-                    self.name, self.template_name, expand=True
                 )
             if self.parent_resource:
                 print(
@@ -65,7 +69,7 @@ class ResourceBuilder:
 
     @classmethod
     def create(cls, name: str, template_name: str, backend: Backend, parent=None):
-        with cls(name, template_name, backend, create_new=True, parent=parent) as rb:
+        with cls(name, template_name, backend, parent=parent) as rb:
             return rb.resource
 
     def __enter__(self):
@@ -73,6 +77,7 @@ class ResourceBuilder:
 
     def __exit__(self, exc_type, exc, tb):
         if exc_type is None:
+            self.persist()
             self.save()
         else:
             self._uow.rollback()
@@ -84,6 +89,21 @@ class ResourceBuilder:
         )
         self._uow.end_session()
         return self
+
+    def persist(self):
+        if self._resource is None:
+            raise RuntimeError("Resource not initialized")
+        self._resource = self.backend.update_resource(self._resource)
+        return self
+
+    def _reload_resource(self, resource_id: UUID) -> ResourceSchema:
+        resources = self.backend.query(
+            ResourceSchema,
+            QuerySpec(filters={"id": resource_id}, preloads=["children", "properties"]),
+        )
+        if not resources:
+            raise ValueError(f"Resource with id {resource_id} not found")
+        return resources[0]
 
     @property
     def resource(self) -> ResourceSchema:
@@ -98,8 +118,6 @@ class ResourceBuilder:
             name=name,
             template_name=template_name,
             parent=self,
-            # backend=self.backend,
-            create_new=True,
         )
         return child_builder
 
@@ -162,12 +180,14 @@ class ResourceTemplateBuilder:
         type_names: list[str],
         parent: Optional["ResourceTemplateBuilder"] = None,
         backend: Backend | None = None,
+        resource_template: ResourceTemplateRef | ResourceTemplateSchema | None = None,
     ):
         if backend:
             self.backend = backend
             self._uow = self.backend.begin()
         elif parent:
             self.backend = parent.backend
+            self._uow = parent._uow
         else:
             raise ValueError("No parent builder or backend provided")
         self.name = name
@@ -176,20 +196,32 @@ class ResourceTemplateBuilder:
         self.parent = parent
         self.resource_types: dict[str, ResourceTypeSchema] = {}
         try:
-            for rt_schema in self.backend.add_resource_types(type_names):
-                self.resource_types[rt_schema.name] = rt_schema
-            if self.parent:
-                self._template = self.backend.add_child_resource_template(
-                    self.name,
-                    [rt for rt in self.resource_types.values()],
-                    parent_resource_template=self.parent._template,
+            if resource_template is not None:
+                self.name = resource_template.name
+                self.type_names = [rt.name for rt in resource_template.types]
+                tmpl = self.backend.get_resource_template(
+                    resource_template.name,
+                    id=resource_template.id,
+                    expand=True,
                 )
+                self._template = tmpl
+                for rt_schema in tmpl.types:
+                    self.resource_types[rt_schema.name] = rt_schema
             else:
-                self._template: ResourceTemplateRef = (
-                    self.backend.add_resource_template(
-                        name, list(self.resource_types.values())
+                for rt_schema in self.backend.add_resource_types(type_names):
+                    self.resource_types[rt_schema.name] = rt_schema
+                if self.parent:
+                    self._template = self.backend.add_child_resource_template(
+                        self.name,
+                        [rt for rt in self.resource_types.values()],
+                        parent_resource_template=self.parent._template,
                     )
-                )
+                else:
+                    self._template: ResourceTemplateRef = (
+                        self.backend.add_resource_template(
+                            name, list(self.resource_types.values())
+                        )
+                    )
         except Exception as e:
             print(f"Exception occured when creating a ResourceTemplate: {e}")
 
