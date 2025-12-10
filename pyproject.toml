@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Scientific framework for Reproducible Experiment Capture and Provenance"
 authors = [{ name = "Venkateswaran Shekar", email = "vshekar1@bnl.gov" }]
 requires-python = ">=3.10"
-readme = "README.rst"
+readme = "README.md"
 license = { text = "BSD-3-Clause" }
 dependencies = [
     "sqlalchemy>=2.0",
@@ -51,7 +51,7 @@ packages = ["recap"]
 [tool.hatch.build]
 include = [
     "recap/**",
-    "README.rst",
+    "README.md",
     "LICENSE*"
 ]
 
@@ -116,6 +116,7 @@ twine = "*"
 [tool.pixi.feature.build.tasks]
 build = { cmd = ["hatch", "build"] }
 publish = { cmd = ["hatch", "publish"]}
+check-build = { cmd = ["twine", "check", "dist/*"] }
 
 [tool]
 
