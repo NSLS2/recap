@@ -20,8 +20,6 @@ keywords = ["experiments", "provenance", "reproducibility"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -106,9 +104,20 @@ pyrecap = { path = ".", editable = true }
 default = { solve-group = "default" }
 dev = { features = ["lint", "test"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
+build = { features = [ "build" ], solve-group = "default"}
 
 [tool.pixi.feature.test.dependencies]
 pytest = ">=8.4.2,<9"
+
+[tool.pixi.feature.build.dependencies]
+hatch = "*"
+twine = "*"
+
+[tool.pixi.feature.build.tasks]
+build = { cmd = ["hatch", "build"] }
+publish = { cmd = ["hatch", "publish"]}
+
+[tool]
 
 [tool.pixi.feature.lint.tasks]
 lint = { cmd = ["pre-commit", "run", "--all-files"] }
