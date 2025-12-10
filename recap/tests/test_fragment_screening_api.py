@@ -189,17 +189,18 @@ def test_fragment_screening_api(client):
 
     assert runs.filter(campaign__proposal="123").count() == 1
 
-    for run in runs.include_steps(include_parameters=True).all():
-        print(f"Run: {run.name}")
-        for step_num, step in enumerate(run.steps):
-            print(f"\tStep {step_num}: {step.name}")
-            for pg_num, (param_group_name, param_group) in enumerate(
-                step.parameters.items()
-            ):
-                vals = param_group.values
-                print(f"\t\tGroup {pg_num}: {param_group_name}")
-                for param_name, param_value in vals.model_dump(by_alias=True).items():
-                    print(f"\t\t\t{param_name} : {param_value}")
+    # for run in runs.include_steps(include_parameters=True).all():
+    #     # print(f"Run: {run.name}")
+    #     for step_num, step in enumerate(run.steps):
+    #         # print(f"\tStep {step_num}: {step.name}")
+    #         for pg_num, (param_group_name, param_group) in enumerate(
+    #             step.parameters.items()
+    #         ):
+    #             vals = param_group.values
+    #             # print(f"\t\tGroup {pg_num}: {param_group_name}")
+    #             for param_name, param_value in vals.model_dump(by_alias=True).items():
+    #                 pass
+    # print(f"\t\t\t{param_name} : {param_value}")
 
     # for c in campaigns.include_process_runs().all():
     #     print(c.name)
