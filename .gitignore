@@ -181,3 +181,5 @@ site/
 
 # MacOS
 .DS_Store
+
+recap/_version.py
