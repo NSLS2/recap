@@ -17,7 +17,7 @@ def test_platemate_via_client_child_steps(client):  # noqa
 
     # Resource templates
     with client.build_resource_template(
-        "PM Library Plate", ["container", "library_plate", "plate"]
+        name="PM Library Plate", type_names=["container", "library_plate", "plate"]
     ) as lp:
         lp.add_properties(
             {
@@ -46,7 +46,7 @@ def test_platemate_via_client_child_steps(client):  # noqa
             )
 
     with client.build_resource_template(
-        "PM Xtal Plate", ["container", "xtal_plate", "plate"]
+        name="PM Xtal Plate", type_names=["container", "xtal_plate", "plate"]
     ) as xt:
         xt.add_properties(
             {
@@ -96,12 +96,14 @@ def test_platemate_via_client_child_steps(client):  # noqa
             )
 
     with client.build_resource_template(
-        "Puck Collection", ["container", "puck_collection"]
+        name="Puck Collection", type_names=["container", "puck_collection"]
     ) as pc:
         pc.add_child("FGZ001", ["container", "puck"])
         pc.add_child("FGZ002", ["container", "puck"])
 
-    with client.build_resource_template("PM Puck", ["container", "puck"]) as pk:
+    with client.build_resource_template(
+        name="PM Puck", type_names=["container", "puck"]
+    ) as pk:
         for idx in range(1, 4):
             (
                 pk.add_child(f"Pin-{idx}", ["container", "pin"])
@@ -155,8 +157,7 @@ def test_platemate_via_client_child_steps(client):  # noqa
             well.properties["content"].values.catalog_id = f"CAT-{well.name}"
             well.properties["content"].values.smiles = f"SMILES-{well.name}"
 
-    with client.build_resource("pmtest", "PM Xtal Plate"):
-        pass
+    xtal_plate = client.create_resource("pmtest", "PM Xtal Plate")
 
     # Build puck collection and ensure duplicate child creation raises
     collection_ref = client.create_resource("Test Puck Collection", "Puck Collection")
@@ -230,11 +231,9 @@ def test_platemate_via_client_child_steps(client):  # noqa
     with client.build_process_run(
         "pm-run", "Platemate via client", "PM Workflow", "1.0"
     ) as prb:
-        prb.assign_resource("library_plate", "DSI-poised", "PM Library Plate")
-        prb.assign_resource("xtal_plate", "pmtest", "PM Xtal Plate")
-        prb.assign_resource(
-            "puck_collection", "Test Puck Collection", "Puck Collection"
-        )
+        prb.assign_resource("library_plate", lib_plate.resource)
+        prb.assign_resource("xtal_plate", xtal_plate)
+        prb.assign_resource("puck_collection", collection_ref)
 
         echo_params = prb.get_params("Echo Transfer")
         echo_params.echo.batch = 7

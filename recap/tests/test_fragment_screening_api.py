@@ -19,7 +19,8 @@ def test_fragment_screening_api(client):
     #     -
 
     with client.build_resource_template(
-        "Library Plate 1536", type_names=["container", "library_plate", "plate"]
+        name="Library Plate 1536",
+        type_names=["container", "library_plate", "plate"],
     ) as lp:
         lp.add_properties(
             {
@@ -57,7 +58,7 @@ def test_fragment_screening_api(client):
     assert rt.name == "Library Plate 1536"
 
     with client.build_resource_template(
-        "SwissCI-MRC-2d", ["container", "xtal_plate", "plate"]
+        name="SwissCI-MRC-2d", type_names=["container", "xtal_plate", "plate"]
     ) as plate:
         a_to_h = generate_uppercase_alphabets(8)
         a_to_p = generate_uppercase_alphabets(16)
@@ -105,16 +106,20 @@ def test_fragment_screening_api(client):
     assert rt.name == "SwissCI-MRC-2d"
 
     with client.build_resource_template(
-        "puck_collection", ["container"]
+        name="puck_collection", type_names=["container"]
     ) as puck_collection:
         puck_collection.prop_group("contents").add_attribute("count", "int", "", 0)
 
-    with client.build_resource_template("puck", ["container", "puck"]) as puck_template:
+    with client.build_resource_template(
+        name="puck", type_names=["container", "puck"]
+    ) as puck_template:
         puck_template.prop_group("pin_count").add_attribute(
             "total", "int", "", 16
         ).add_attribute("occupied", "int", "", 0).close_group()
 
-    with client.build_resource_template("pin", ["container", "pin"]) as pin_template:
+    with client.build_resource_template(
+        name="pin", type_names=["container", "pin"]
+    ) as pin_template:
         pin_template.prop_group("content").add_attribute(
             "position", "int", "", 0
         ).close_group()

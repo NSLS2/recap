@@ -15,10 +15,10 @@ def test_build_process_run_requires_campaign(client):
 def test_build_resource_template_validates_type_names(apply_migrations, db_url):
     with RecapClient(url=db_url) as client:
         with pytest.raises(TypeError):
-            client.build_resource_template("Bad", "not-a-list")
+            client.build_resource_template(name="Bad", type_names="not-a-list")
 
         with pytest.raises(TypeError):
-            client.build_resource_template("Bad2", ["ok", 123])
+            client.build_resource_template(name="Bad2", type_names=["ok", 123])
 
 
 def test_from_sqlite_uses_temp_dir():

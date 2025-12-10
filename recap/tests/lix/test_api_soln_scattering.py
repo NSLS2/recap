@@ -29,7 +29,9 @@ def test_client(client):
             "temperature", "float", "degC", "0.0"
         ).close_group().close_step()
 
-    with client.build_resource_template("96 well plate", ["container", "plate"]) as rt:
+    with client.build_resource_template(
+        name="96 well plate", type_names=["container", "plate"]
+    ) as rt:
         rt.prop_group("dimensions").add_attribute("rows", "float", "", 8).add_attribute(
             "columns", "float", "", 12
         )
@@ -68,7 +70,9 @@ def test_client(client):
                 default="",
             ).close_group().close_child()
 
-    with client.build_resource_template("sample holder", ["container", "plate"]) as rt:
+    with client.build_resource_template(
+        name="sample holder", type_names=["container", "plate"]
+    ) as rt:
         rt.prop_group("dimensions").add_attribute("rows", "int", "", 2).add_attribute(
             "columns", "int", "", 9
         )
@@ -93,7 +97,7 @@ def test_client(client):
             ).close_group().close_child()
 
     with client.build_resource_template(
-        "robot", ["robot", "liquid_transfer", "operator"]
+        name="robot", type_names=["robot", "liquid_transfer", "operator"]
     ) as rt:
         rt.prop_group("details").add_attribute(
             "serial_no", "str", "", "xyz"
@@ -101,9 +105,9 @@ def test_client(client):
 
     client.create_campaign(name="Test campaign", proposal="1")
 
-    client.create_resource("Test destination plate", "sample holder")
-    client.create_resource("96 well plate", "96 well plate")
-    client.create_resource("LHR", "robot")
+    sample_holder = client.create_resource("Test destination plate", "sample holder")
+    source_plate = client.create_resource("96 well plate", "96 well plate")
+    robot = client.create_resource("LHR", "robot")
 
     with client.build_process_run(
         name="test_run",
@@ -113,18 +117,10 @@ def test_client(client):
     ) as run:
         run: ProcessRunBuilder
         run.assign_resource(
-            "Input plate 1",
-            resource_name="96 well plate",
-            resource_template_name="96 well plate",
+            resource_slot_name="Input plate 1", resource=source_plate
         ).assign_resource(
-            "Input plate 2",
-            resource_name="Test destination plate",
-            resource_template_name="sample holder",
-        ).assign_resource(
-            "Liquid transfer operator",
-            resource_name="LHR",
-            resource_template_name="robot",
-        )
+            resource_slot_name="Input plate 2", resource=sample_holder
+        ).assign_resource("Liquid transfer operator", resource=robot)
 
         transfer_params = run.get_params("Transfer")
         transfer_params.volume_transfer.volume = 50
