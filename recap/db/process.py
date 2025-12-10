@@ -181,9 +181,14 @@ class ResourceAssignment(TimestampMixin, Base):
                 if (
                     assignment.process_run
                     and assignment.process_run.campaign_id == campaign_id
+                    and assignment.resource.parent_id == resource.parent_id
+                    and assignment.step_id == self.step_id
                 ):
                     raise DuplicateResourceError(
-                        resource.name, self.process_run.campaign.name
+                        resource.name,
+                        assignment.process_run.campaign.name,
+                        assignment.process_run.name,
+                        assignment.step.name if assignment.step else None,
                     )
         return resource
 
