@@ -129,13 +129,7 @@ class ResourceSchema(CommonFields):
     )
     children: list["ResourceSchema"]
     properties: BaseModel | dict[str, PropertySchema]
-    backend: Any = Field(default=None, exclude=True, repr=False)
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
-
-    def _init_state(self, backend):
-        object.__setattr__(self, "backend", backend)
-        for child in self.children:
-            child._init_state(backend)
 
     @model_validator(mode="after")
     def build_property_model(self) -> "ResourceSchema":
@@ -163,17 +157,6 @@ class ResourceSchema(CommonFields):
             )
             self.properties = model.model_validate(prop_values)
 
-        return self
-
-    def save(self):
-        if not self.backend:
-            raise RuntimeError("No backend attached")
-        updated_resource = self.backend.update_resource(self)
-        # Update this instance in place so callers don't need to reassign.
-        for field_name in self.__class__.model_fields:
-            if field_name == "backend":
-                continue
-            object.__setattr__(self, field_name, getattr(updated_resource, field_name))
         return self
 
 

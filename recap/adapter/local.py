@@ -436,9 +436,7 @@ class LocalBackend(Backend):
         self.session.add(resource)
         self.session.flush()
         if expand:
-            rs = ResourceSchema.model_validate(resource)
-            rs._init_state(self)
-            return rs
+            return ResourceSchema.model_validate(resource)
         return ResourceRef.model_validate(resource)
 
     def get_resource(
@@ -464,9 +462,7 @@ class LocalBackend(Backend):
             resource = load_single(session, stmt, label="Resource")
 
         if expand:
-            rs = ResourceSchema.model_validate(resource)
-            rs._init_state(self)
-            return rs
+            return ResourceSchema.model_validate(resource)
 
         return ResourceRef.model_validate(resource)
 
@@ -491,9 +487,7 @@ class LocalBackend(Backend):
         )
         self.session.add(process_run)
         self.session.flush()
-        pr = ProcessRunSchema.model_validate(process_run)
-        pr._init_state(self)
-        return pr
+        return ProcessRunSchema.model_validate(process_run)
 
     def assign_resource(
         self,
@@ -565,9 +559,7 @@ class LocalBackend(Backend):
                 f"to slot {resource_slot_model.name!r}: {exc}"
             ) from exc
 
-        pr = ProcessRunSchema.model_validate(process_run_model)
-        pr._init_state(self)
-        return pr
+        return ProcessRunSchema.model_validate(process_run_model)
 
     def check_resource_assignment(
         self,
@@ -870,6 +862,14 @@ class LocalBackend(Backend):
                 )
             elif model is CampaignSchema and name == "process_run":
                 opts.append(selectinload(Campaign.process_runs))
+            elif model is ResourceSchema and name == "properties":
+                opts.append(
+                    selectinload(Resource.properties).selectinload(Property._values)
+                )
+            elif model is ResourceSchema and name == "children":
+                opts.append(selectinload(Resource.children))
+            elif model is ResourceSchema and name == "template":
+                opts.append(selectinload(Resource.template))
         return opts
 
     def update_process_run(self, process_run: ProcessRunSchema) -> ProcessRunSchema:
@@ -937,6 +937,4 @@ class LocalBackend(Backend):
             session.flush()
             if tx:
                 tx.commit()
-            updated_resource = ResourceSchema.model_validate(res)
-            updated_resource._init_state(self)
-        return updated_resource
+            return ResourceSchema.model_validate(res)

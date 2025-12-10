@@ -1,7 +1,7 @@
 from typing import Any
 from uuid import UUID
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict
 
 from recap.schemas.common import CommonFields
 from recap.schemas.resource import ResourceAssignmentSchema, ResourceSlotSchema
@@ -28,18 +28,7 @@ class ProcessRunSchema(CommonFields):
     template: ProcessTemplateSchema
     steps: list[StepSchema]
     assigned_resources: list[ResourceAssignmentSchema]
-
-    backend: Any = Field(default=None, exclude=True, repr=False)
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
-
-    def _init_state(self, backend):
-        object.__setattr__(self, "backend", backend)
-
-    def update(self):
-        if not self.backend:
-            raise RuntimeError("No backend attached")
-        self.backend.update_process_run(self)
-        return self
 
 
 class CampaignSchema(CommonFields):
