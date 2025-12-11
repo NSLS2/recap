@@ -55,16 +55,11 @@ class AttributeGroupTemplate(TimestampMixin, Base):
 
     __table_args__ = (
         # Enforce XOR: exactly one FK must be non-null
-        # CheckConstraint(
-        #     "(resource_template_id IS NOT NULL) <> (step_template_id IS NOT NULL)",
-        #     name="ck_attr_group_exactly_one_owner",
-        # ),
-        # Enforce at most one fk must be NULL
         CheckConstraint(
-            "(resource_template_id IS NULL) OR (step_template_id IS NULL)",
-            name="ck_attr_group_at_most_one_owner",
+            "(resource_template_id IS NOT NULL) <> (step_template_id IS NOT NULL)",
+            name="ck_attr_group_exactly_one_owner",
         ),
-        # Optional but handy: keep names unique per owner
+        # Keep names unique per owner
         UniqueConstraint(
             "resource_template_id", "name", name="uq_attr_group_name_per_resource"
         ),

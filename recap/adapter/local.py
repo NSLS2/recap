@@ -50,7 +50,7 @@ from recap.schemas.resource import (
     ResourceTemplateSchema,
     ResourceTypeSchema,
 )
-from recap.schemas.step import StepSchema, StepTemplateRef
+from recap.schemas.step import StepSchema, StepTemplateRef, StepTemplateSchema
 from recap.utils.database import get_or_create, load_single
 from recap.utils.dsl import (
     AliasMixin,
@@ -253,14 +253,26 @@ class LocalBackend(Backend):
         self, group_name: str, template_ref: StepTemplateRef | ResourceTemplateRef
     ) -> AttributeGroupRef:
         filter_params: dict[str, Any] = {"name": group_name}
-        if isinstance(template_ref, StepTemplateRef):
+        if isinstance(template_ref, StepTemplateRef | StepTemplateSchema):
             filter_params["step_template_id"] = template_ref.id
-        elif isinstance(template_ref, ResourceTemplateRef):
+        elif isinstance(template_ref, ResourceTemplateRef | ResourceTemplateSchema):
             filter_params["resource_template_id"] = template_ref.id
-        attr_group_template: AttributeGroupTemplate | None = self.session.execute(
-            select(AttributeGroupTemplate).filter_by(**filter_params)
-        ).scalar_one_or_none()
-        if attr_group_template is None:
+        results = list(
+            self.session.scalars(
+                select(AttributeGroupTemplate)
+                .filter_by(**filter_params)
+                .order_by(AttributeGroupTemplate.create_date)
+            )
+        )
+        if results:
+            if len(results) > 1:
+                warnings.warn(
+                    f"Multiple attribute groups named {group_name!r} exist for template "
+                    f"{template_ref}; using the first existing group.",
+                    stacklevel=2,
+                )
+            attr_group_template = results[0]
+        else:
             attr_group_template = AttributeGroupTemplate(**filter_params)
             self.session.add(attr_group_template)
             self.session.flush()
@@ -400,7 +412,7 @@ class LocalBackend(Backend):
         if isinstance(id, str):
             id = UUID(id)
         if id:
-            statement = statement.where(ResourceTemplate.id == UUID(id))
+            statement = statement.where(ResourceTemplate.id == id)
         if parent:
             statement = statement.where(ResourceTemplate.parent_id == parent.id)
         if expand:
