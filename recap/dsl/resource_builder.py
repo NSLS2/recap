@@ -21,12 +21,12 @@ class ResourceBuilder:
     def __init__(
         self,
         # session: Session,
-        name: str,
-        template_name: str,
+        name: str | None,
+        template_name: str | None,
         template_version: str = "1.0",
         backend: Backend | None = None,
         parent: "ResourceBuilder | ResourceSchema | None" = None,
-        resource: ResourceSchema | None = None,
+        resource_id: UUID | None = None,
     ):
         self.name = name
         self._children: list[Resource] = []
@@ -51,12 +51,14 @@ class ResourceBuilder:
         else:
             raise ValueError("backend is required")
         try:
-            if resource is not None:
-                self._resource = self._reload_resource(resource.id)
+            if resource_id is not None:
+                self._resource = self._reload_resource(resource_id)
                 self.name = self._resource.name
                 self.template_name = self._resource.template.name
                 self.template_version = self._resource.template.version
             else:
+                if name is None or template_name is None:
+                    raise ValueError("name and template_name are required")
                 template = self.backend.get_resource_template(
                     name=self.template_name, version=self.template_version
                 )
@@ -230,12 +232,12 @@ class ResourceBuilder:
 class ResourceTemplateBuilder:
     def __init__(
         self,
-        name: str,
-        type_names: list[str],
+        name: str | None,
+        type_names: list[str] | None,
         version: str = "1.0",
         parent: Optional["ResourceTemplateBuilder"] = None,
         backend: Backend | None = None,
-        resource_template: ResourceTemplateRef | ResourceTemplateSchema | None = None,
+        resource_template_id: UUID | None = None,
     ):
         self._uow = None
         if backend:
@@ -255,20 +257,19 @@ class ResourceTemplateBuilder:
         self.version = version
         self._template: ResourceTemplateRef | ResourceTemplateSchema | None = None
         try:
-            if resource_template is not None:
-                self.name = resource_template.name
-                self.type_names = [rt.name for rt in resource_template.types]
-                self.version = resource_template.version
+            if resource_template_id is not None:
                 tmpl = self.backend.get_resource_template(
-                    resource_template.name,
-                    version=resource_template.version,
-                    id=resource_template.id,
-                    expand=True,
+                    name=None, version=None, id=resource_template_id, expand=True
                 )
+                self.name = tmpl.name
+                self.type_names = [rt.name for rt in tmpl.types]
+                self.version = tmpl.version
                 self._template = tmpl
                 for rt_schema in tmpl.types:
                     self.resource_types[rt_schema.name] = rt_schema
             else:
+                if name is None or type_names is None:
+                    raise ValueError("name and type_names are required")
                 for rt_schema in self.backend.add_resource_types(type_names):
                     self.resource_types[rt_schema.name] = rt_schema
                 if self.parent:

@@ -13,17 +13,8 @@ from recap.adapter.local import LocalBackend
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
-from recap.schemas.process import (
-    CampaignSchema,
-    ProcessRunSchema,
-    ProcessTemplateRef,
-    ProcessTemplateSchema,
-)
-from recap.schemas.resource import (
-    ResourceSchema,
-    ResourceTemplateRef,
-    ResourceTemplateSchema,
-)
+from recap.schemas.process import CampaignSchema
+from recap.schemas.resource import ResourceSchema
 from recap.utils.migrations import apply_migrations
 
 
@@ -100,28 +91,28 @@ class RecapClient:
 
     @overload
     def build_process_template(
-        self, *, process_template: ProcessTemplateRef | ProcessTemplateSchema
+        self, *, process_template_id: UUID
     ) -> ProcessTemplateBuilder: ...
 
     def build_process_template(
         self,
         *args,
-        process_template: ProcessTemplateRef | ProcessTemplateSchema | None = None,
+        process_template_id: UUID | None = None,
         **kwargs,
     ) -> ProcessTemplateBuilder:
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
 
-        if process_template is not None:
+        if process_template_id is not None:
             if args or kwargs:
                 raise TypeError(
-                    "Pass either an existing process_template or name/version, not both"
+                    "Pass either an existing process_template_id or name/version, not both"
                 )
             return ProcessTemplateBuilder(
-                name=process_template.name,
-                version=process_template.version,
+                name=None,
+                version=None,
                 backend=self.backend,
-                process_template=process_template,
+                process_template_id=process_template_id,
             )
 
         if args:
@@ -145,33 +136,30 @@ class RecapClient:
     ) -> ProcessRunBuilder: ...
 
     @overload
-    def build_process_run(
-        self, *, process_run: ProcessRunSchema
-    ) -> ProcessRunBuilder: ...
+    def build_process_run(self, *, process_run_id: UUID) -> ProcessRunBuilder: ...
 
     def build_process_run(
         self,
         *args,
-        process_run: ProcessRunSchema | None = None,
+        process_run_id: UUID | None = None,
         **kwargs,
     ) -> ProcessRunBuilder:
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
 
-        if process_run is not None:
+        if process_run_id is not None:
             if args or kwargs:
                 raise TypeError(
-                    "Pass either an existing process_run or name/description/template_name/version, not both"
+                    "Pass either an existing process_run_id or name/description/template_name/version, not both"
                 )
-            template = process_run.template
             return ProcessRunBuilder(
-                name=process_run.name,
-                description=process_run.description,
-                template_name=template.name,
+                name=None,
+                description=None,
+                template_name=None,
                 campaign=self._campaign,
                 backend=self.backend,
-                version=template.version,
-                process_run=process_run,
+                version=None,
+                process_run_id=process_run_id,
             )
 
         if args:
@@ -214,9 +202,7 @@ class RecapClient:
 
     @overload
     def build_resource_template(
-        self,
-        *,
-        resource_template: ResourceTemplateRef | ResourceTemplateSchema,
+        self, *, resource_template_id: UUID
     ) -> ResourceTemplateBuilder: ...
 
     def build_resource_template(
@@ -225,22 +211,22 @@ class RecapClient:
         name: str | None = None,
         type_names: list[str] | None = None,
         version: str = "1.0",
-        resource_template: ResourceTemplateRef | ResourceTemplateSchema | None = None,
+        resource_template_id: UUID | None = None,
     ):
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
 
-        if resource_template is not None:
+        if resource_template_id is not None:
             if name is not None or type_names is not None:
                 raise TypeError(
-                    "Pass either an existing resource_template or name/type_names, not both"
+                    "Pass either an existing resource_template_id or name/type_names, not both"
                 )
             return ResourceTemplateBuilder(
-                name=resource_template.name,
-                type_names=[rt.name for rt in resource_template.types],
-                version=resource_template.version,
+                name=None,
+                type_names=None,
+                version=version,
                 backend=self.backend,
-                resource_template=resource_template,
+                resource_template_id=resource_template_id,
             )
 
         if name is None or type_names is None:
@@ -260,28 +246,28 @@ class RecapClient:
     ) -> ResourceBuilder: ...
 
     @overload
-    def build_resource(self, *, resource: ResourceSchema) -> ResourceBuilder: ...
+    def build_resource(self, *, resource_id: UUID) -> ResourceBuilder: ...
 
     def build_resource(
         self,
         *args,
-        resource: ResourceSchema | None = None,
+        resource_id: UUID | None = None,
         **kwargs,
     ):
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
 
-        if resource is not None:
+        if resource_id is not None:
             if args or kwargs:
                 raise TypeError(
-                    "Pass either an existing resource or name/template_name, not both"
+                    "Pass either an existing resource_id or name/template_name, not both"
                 )
             return ResourceBuilder(
-                name=resource.name,
-                template_name=resource.template.name,
-                template_version=resource.template.version,
+                name=None,
+                template_name=None,
+                template_version="1.0",
                 backend=self.backend,
-                resource=resource,
+                resource_id=resource_id,
             )
 
         if args:

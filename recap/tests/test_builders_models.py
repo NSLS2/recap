@@ -35,7 +35,7 @@ def test_resource_builder_set_model_rejects_mismatch(client):
     )
 
     def set_mismatched_model():
-        with client.build_resource(resource=res1) as rb:
+        with client.build_resource(resource_id=res1.id) as rb:
             rb.set_model(res2_model)
 
     with pytest.raises(ValueError):
@@ -52,7 +52,7 @@ def test_resource_template_builder_set_model_handles_same_and_mismatch(client):
     rt2 = client.query_maker().resource_templates().filter(name="RTM-2").first()
 
     def set_mismatched_model():
-        with client.build_resource_template(resource_template=rt1) as builder:
+        with client.build_resource_template(resource_template_id=rt1.id) as builder:
             model = builder.get_model(update=True)
             builder.set_model(model)  # same ID should pass
             builder.set_model(rt2)  # mismatch ID should fail
@@ -71,7 +71,7 @@ def test_process_template_builder_set_model_handles_mismatch(client):
     pt2 = client.query_maker().process_templates().filter(name="PTM-2").first()
 
     def set_mismatched_model():
-        with client.build_process_template(process_template=pt1) as builder:
+        with client.build_process_template(process_template_id=pt1.id) as builder:
             model = builder.get_model(update=True)
             builder.set_model(model)  # same ID ok
             builder.set_model(pt2)
@@ -109,7 +109,7 @@ def test_process_run_builder_set_model_handles_mismatch(client):
     )
 
     def set_mismatched_model():
-        with client.build_process_run(process_run=run1_model) as builder:
+        with client.build_process_run(process_run_id=run1_model.id) as builder:
             model = builder.get_model(update=True)
             builder.set_model(model)  # same ID ok
             builder.set_model(run2_model)

@@ -24,9 +24,9 @@ class ProcessTemplateBuilder:
     def __init__(
         self,
         backend: Backend,
-        name: str,
-        version: str,
-        process_template: ProcessTemplateRef | ProcessTemplateSchema | None = None,
+        name: str | None,
+        version: str | None,
+        process_template_id: UUID | None = None,
     ):
         self.backend = backend
         self._uow = None
@@ -36,11 +36,16 @@ class ProcessTemplateBuilder:
         self._template: ProcessTemplateRef | None = None
         self._resource_slots: dict[str, ResourceSlotSchema] = {}
         self._current_step_builder: StepTemplateBuilder | None = None
-        if process_template is not None:
-            self.name = process_template.name
-            self.version = process_template.version
-            self._template = self.backend.get_process_template(
-                process_template.name, process_template.version, expand=False
+        if process_template_id is not None:
+            tmpl = self.backend.get_process_template(
+                name=None, version=None, id=process_template_id, expand=False
+            )
+            self.name = tmpl.name
+            self.version = tmpl.version
+            self._template = tmpl
+        elif self.name is None or self.version is None:
+            raise ValueError(
+                "name and version are required to create a process template"
             )
 
     def __enter__(self):
@@ -77,6 +82,10 @@ class ProcessTemplateBuilder:
         self._ensure_uow()
         if self._template:
             return
+        if self.name is None or self.version is None:
+            raise ValueError(
+                "name and version are required to create a process template"
+            )
         self._template = self.backend.create_process_template(self.name, self.version)
 
     def _reload_template(self):
@@ -190,29 +199,43 @@ class StepTemplateBuilder:
 class ProcessRunBuilder:
     def __init__(
         self,
-        name: str,
-        description: str,
-        template_name: str,
+        name: str | None,
+        description: str | None,
+        template_name: str | None,
         campaign: CampaignSchema | None,
         backend: Backend,
         version: str | None = None,
-        process_run: ProcessRunSchema | None = None,
+        process_run_id: UUID | None = None,
     ):
         self.backend = backend
         self._uow = None
         self.name = name
+        self.description = description
         self.template_name = template_name
         self.version = version
         self._process_template: ProcessTemplateSchema | ProcessTemplateRef | None = None
         try:
-            if process_run is not None:
+            if process_run_id is not None:
                 self._ensure_uow()
-                self._process_run = self._reload_process_run(process_run.id)
+                self._process_run = self._reload_process_run(process_run_id)
                 template = self._process_run.template
                 self._process_template = self.backend.get_process_template(
                     template.name, template.version, expand=True
                 )
+                self.name = self._process_run.name
+                self.description = self._process_run.description
+                self.template_name = template.name
+                self.version = template.version
             else:
+                if (
+                    name is None
+                    or description is None
+                    or template_name is None
+                    or version is None
+                ):
+                    raise ValueError(
+                        "name, description, template_name, and version are required to create a process run"
+                    )
                 if campaign is None:
                     raise ValueError("Campaign is required to create a process run")
                 self._ensure_uow()
@@ -236,6 +259,10 @@ class ProcessRunBuilder:
             self._process_template = self.backend.get_process_template(
                 template.name, template.version, expand=True
             )
+            self.name = self._process_run.name
+            self.description = self._process_run.description
+            self.template_name = template.name
+            self.version = template.version
             self._steps = list(self._process_run.steps.values())
         return self
 

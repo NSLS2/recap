@@ -51,12 +51,20 @@ class Backend(Protocol):
 
     @overload
     def get_process_template(
-        self, name: str, version: str | None, expand: Literal[False]
+        self,
+        name: str | None,
+        version: str | None,
+        expand: Literal[False] = False,
+        id: UUID | str | None = None,
     ) -> ProcessTemplateRef: ...
 
     @overload
     def get_process_template(
-        self, name: str, version: str | None, expand: Literal[True]
+        self,
+        name: str | None,
+        version: str | None,
+        expand: Literal[True] = True,
+        id: UUID | str | None = None,
     ) -> ProcessTemplateSchema: ...
 
     def add_resource_slot(

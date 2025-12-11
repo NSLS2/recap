@@ -167,19 +167,29 @@ class LocalBackend(Backend):
             return ProcessTemplateRef.model_validate(template)
 
     def get_process_template(
-        self, name: str, version: str | None, expand: bool = False
+        self,
+        name: str | None,
+        version: str | None,
+        expand: bool = False,
+        id: UUID | str | None = None,
     ) -> ProcessTemplateRef | ProcessTemplateSchema:
-        statement = select(ProcessTemplate).filter_by(name=name, version=version)
+        statement = select(ProcessTemplate)
+        if name:
+            statement = statement.where(ProcessTemplate.name == name)
+        if version:
+            statement = statement.where(ProcessTemplate.version == version)
+        if isinstance(id, str):
+            id = UUID(id)
+        if id:
+            statement = statement.where(ProcessTemplate.id == id)
+        if not name and not id:
+            raise ValueError("name or id required to fetch ProcessTemplate")
         if expand:
-            statement.options(
+            statement = statement.options(
                 selectinload(ProcessTemplate.step_templates),
                 selectinload(ProcessTemplate.resource_slots),
             )
-        process_template = self.session.execute(statement).scalar_one_or_none()
-        if process_template is None:
-            raise ValueError(
-                f"Could not find process template by name: {name} version: {version}"
-            )
+        process_template = load_single(self.session, statement, label="ProcessTemplate")
         if expand:
             return ProcessTemplateSchema.model_validate(process_template)
         return ProcessTemplateRef.model_validate(process_template)

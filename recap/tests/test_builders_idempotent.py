@@ -14,7 +14,7 @@ def test_resource_builder_reuse_same_resource(client):
     # build resource and mutate props, then reopen builder and mutate again
     with client.build_resource("RB-1", "RB-Template") as rb:
         rb.resource.properties["details"].values["serial"] = "xyz"
-    with client.build_resource(resource=rb.resource) as rb2:
+    with client.build_resource(resource_id=rb.resource.id) as rb2:
         rb2.resource.properties["details"].values["serial"] = "xyz2"
 
     refreshed = (
@@ -34,7 +34,7 @@ def test_resource_template_builder_reuse_same_template(client):
         name="RTB",
         type_names=["container"],
         backend=client.backend,
-        resource_template=existing,
+        resource_template_id=existing.id,
     ) as rtb2:
         rtb2.prop_group("meta").add_attribute("bar", "str", "", "").close_group()
 
@@ -78,7 +78,7 @@ def test_process_builder_reuse_same_run(client):
         pass
     container_res = client.create_resource("SlotRes", "ContainerRT")
 
-    with client.build_process_run(process_run=run) as prb2:
+    with client.build_process_run(process_run_id=run.id) as prb2:
         prb2.assign_resource("slot1", container_res)
         params = prb2.get_params("S1")
         params.pg.v = 5
