@@ -14,7 +14,7 @@ from recap.schemas.resource import (
     ResourceTemplateSchema,
     ResourceTypeSchema,
 )
-from recap.utils.dsl import AliasMixin, map_dtype_to_pytype
+from recap.utils.dsl import AliasMixin, lock_instance_fields, map_dtype_to_pytype
 
 
 class ResourceBuilder:
@@ -113,6 +113,18 @@ class ResourceBuilder:
             )
         return self._resource
 
+    def get_model(self, *, update: bool = False) -> ResourceSchema:
+        """
+        Return a pydantic model representing the resource, optionally reloading
+        from the backend first. Critical fields are locked against mutation.
+        """
+        if update and self._resource:
+            self._resource = self._reload_resource(self._resource.id)
+        model = (self._resource or self.resource).model_copy(deep=True)
+        return lock_instance_fields(
+            model, {"id", "create_date", "modified_date", "slug", "template"}
+        )
+
     def add_child(self, name: str, template_name: str) -> "ResourceBuilder":
         child_builder = ResourceBuilder(
             name=name,
@@ -195,6 +207,7 @@ class ResourceTemplateBuilder:
         self._children: list[ResourceTemplateRef] = []
         self.parent = parent
         self.resource_types: dict[str, ResourceTypeSchema] = {}
+        self._template: ResourceTemplateRef | ResourceTemplateSchema | None = None
         try:
             if resource_template is not None:
                 self.name = resource_template.name
@@ -283,6 +296,27 @@ class ResourceTemplateBuilder:
             name=name, type_names=type_names, parent=self
         )
         return child_builder
+
+    def _reload_template(self):
+        self._template = self.backend.get_resource_template(
+            self.name, id=self._template.id if self._template else None, expand=True
+        )
+
+    def get_model(self, *, update: bool = False) -> ResourceTemplateSchema:
+        """
+        Return a pydantic model for the resource template, optionally reloading
+        from the backend first. Critical fields are locked against mutation.
+        """
+        if update and self._template:
+            self._reload_template()
+        model = self.backend.get_resource_template(
+            self.name,
+            id=self._template.id if self._template else None,
+            expand=True,
+        )
+        return lock_instance_fields(
+            model.model_copy(deep=True), {"id", "create_date", "modified_date"}
+        )
 
     def close_child(self):
         if self.parent:

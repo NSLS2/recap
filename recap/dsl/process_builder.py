@@ -17,6 +17,7 @@ from recap.schemas.process import (
 )
 from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
 from recap.schemas.step import StepSchema, StepTemplateRef
+from recap.utils.dsl import lock_instance_fields
 
 
 class ProcessTemplateBuilder:
@@ -67,6 +68,11 @@ class ProcessTemplateBuilder:
             return
         self._template = self.backend.create_process_template(self.name, self.version)
 
+    def _reload_template(self):
+        self._template = self.backend.get_process_template(
+            self.name, self.version, expand=True
+        )
+
     def add_resource_slot(
         self,
         name: str,
@@ -90,6 +96,22 @@ class ProcessTemplateBuilder:
             parent=self, step_template=step_template
         )
         return step_template_builder
+
+    def get_model(self, *, update: bool = False) -> ProcessTemplateSchema:
+        """
+        Return a pydantic model for the process template, optionally reloading
+        from the backend first. Critical fields are locked against mutation.
+        """
+        if update:
+            self._reload_template()
+        elif self._template is None:
+            self._ensure_template()
+
+        model = self.backend.get_process_template(self.name, self.version, expand=True)
+        return lock_instance_fields(
+            model.model_copy(deep=True),
+            {"id", "create_date", "modified_date"},
+        )
 
 
 class StepTemplateBuilder:
@@ -274,6 +296,18 @@ class ProcessRunBuilder:
         # refresh cached steps so subsequent operations see the new child
         self._steps = None
         return child
+
+    def get_model(self, *, update: bool = False) -> ProcessRunSchema:
+        """
+        Return a pydantic model representing the process run, optionally reloading
+        from the backend first. Critical fields are locked against mutation.
+        """
+        if update:
+            self._process_run = self._reload_process_run(self._process_run.id)
+        model = self._process_run.model_copy(deep=True)
+        return lock_instance_fields(
+            model, {"id", "create_date", "modified_date", "template"}
+        )
 
     def _reload_process_run(self, process_run_id: UUID) -> ProcessRunSchema:
         runs = self.backend.query(

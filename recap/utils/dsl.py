@@ -126,6 +126,23 @@ def map_dtype_to_pytype(dtype: str):
     }[dtype]
 
 
+def lock_instance_fields(model: BaseModel, fields: set[str]) -> BaseModel:
+    """
+    Return the given model instance with selected fields made read-only.
+    We override __setattr__ on the instance to guard critical attributes.
+    """
+    locked = set(fields)
+    original_setattr = model.__setattr__
+
+    def _locked_setattr(self, name, value):
+        if name in locked:
+            raise TypeError(f"{name} is read-only")
+        return original_setattr(name, value)
+
+    object.__setattr__(model, "__setattr__", _locked_setattr.__get__(model))
+    return model
+
+
 @lru_cache(maxsize=256)
 def build_param_values_model(group_slug: str, attr_templates):
     fields: dict[str, tuple] = {}
