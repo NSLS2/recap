@@ -29,7 +29,8 @@ class ProcessTemplateBuilder:
         process_template: ProcessTemplateRef | ProcessTemplateSchema | None = None,
     ):
         self.backend = backend
-        self._uow = self.backend.begin()
+        self._uow = None
+        self._ensure_uow()
         self.name = name
         self.version = version
         self._template: ProcessTemplateRef | None = None
@@ -43,16 +44,25 @@ class ProcessTemplateBuilder:
             )
 
     def __enter__(self):
+        self._ensure_uow()
+        if self._template is not None:
+            self._reload_template()
+            self.name = self._template.name
+            self.version = self._template.version
         return self
 
     def __exit__(self, exc_type, exc, tb):
         if exc_type is None:
             self.save()
         else:
-            self._uow.rollback()
+            if self._uow:
+                self._uow.rollback()
+            self._uow = None
 
     def save(self):
+        self._ensure_uow()
         self._uow.commit()
+        self._uow = None
         return self
 
     @property
@@ -64,11 +74,13 @@ class ProcessTemplateBuilder:
         return self._template
 
     def _ensure_template(self):
+        self._ensure_uow()
         if self._template:
             return
         self._template = self.backend.create_process_template(self.name, self.version)
 
     def _reload_template(self):
+        self._ensure_uow()
         self._template = self.backend.get_process_template(
             self.name, self.version, expand=True
         )
@@ -80,6 +92,7 @@ class ProcessTemplateBuilder:
         direction: Direction,
         create_resource_type=False,
     ) -> "ProcessTemplateBuilder":
+        self._ensure_uow()
         self._ensure_template()
         self._resource_slots[name] = self.backend.add_resource_slot(
             name, resource_type, direction, self.template, create_resource_type
@@ -90,6 +103,7 @@ class ProcessTemplateBuilder:
         self,
         name: str,
     ):
+        self._ensure_uow()
         self._ensure_template()
         step_template = self.backend.add_step(name, self.template)
         step_template_builder = StepTemplateBuilder(
@@ -102,6 +116,7 @@ class ProcessTemplateBuilder:
         Return a pydantic model for the process template, optionally reloading
         from the backend first. Critical fields are locked against mutation.
         """
+        self._ensure_uow()
         if update:
             self._reload_template()
         elif self._template is None:
@@ -112,6 +127,11 @@ class ProcessTemplateBuilder:
             model.model_copy(deep=True),
             {"id", "create_date", "modified_date", "version"},
         )
+
+    def _ensure_uow(self):
+        if self._uow is None:
+            self._uow = self.backend.begin()
+        return self._uow
 
 
 class StepTemplateBuilder:
@@ -172,13 +192,14 @@ class ProcessRunBuilder:
         process_run: ProcessRunSchema | None = None,
     ):
         self.backend = backend
-        self._uow = self.backend.begin()
+        self._uow = None
         self.name = name
         self.template_name = template_name
         self.version = version
         self._process_template: ProcessTemplateSchema | ProcessTemplateRef | None = None
         try:
             if process_run is not None:
+                self._ensure_uow()
                 self._process_run = self._reload_process_run(process_run.id)
                 template = self._process_run.template
                 self._process_template = self.backend.get_process_template(
@@ -187,6 +208,7 @@ class ProcessRunBuilder:
             else:
                 if campaign is None:
                     raise ValueError("Campaign is required to create a process run")
+                self._ensure_uow()
                 self._process_template = self.backend.get_process_template(
                     self.template_name, self.version, expand=True
                 )
@@ -200,6 +222,14 @@ class ProcessRunBuilder:
             raise e
 
     def __enter__(self):
+        self._ensure_uow()
+        if getattr(self, "_process_run", None) is not None:
+            self._process_run = self._reload_process_run(self._process_run.id)
+            template = self._process_run.template
+            self._process_template = self.backend.get_process_template(
+                template.name, template.version, expand=True
+            )
+            self._steps = list(self._process_run.steps.values())
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -207,10 +237,14 @@ class ProcessRunBuilder:
             self.persist()
             self.save()
         else:
-            self._uow.rollback()
+            if self._uow:
+                self._uow.rollback()
+            self._uow = None
 
     def save(self):
+        self._ensure_uow()
         self._uow.commit()
+        self._uow = None
         return self
 
     def persist(self):
@@ -227,6 +261,7 @@ class ProcessRunBuilder:
         resource_slot_name: str,
         resource: ResourceSchema,
     ) -> "ProcessRunBuilder":
+        self._ensure_uow()
         resource_slot = None
         for slot in self._process_template.resource_slots:
             if slot.name == resource_slot_name:
@@ -241,10 +276,12 @@ class ProcessRunBuilder:
         return self
 
     def _check_resource_assignment(self):
+        self._ensure_uow()
         self.backend.check_resource_assignment(self._process_template, self.process_run)
 
     @property
     def steps(self) -> list[StepSchema]:
+        self._ensure_uow()
         self._check_resource_assignment()
         if self._steps is None:
             self._steps = self.backend.get_steps(self.process_run)
@@ -255,6 +292,7 @@ class ProcessRunBuilder:
         # step_schema: StepSchema,
         step_name: str,
     ) -> type[BaseModel]:
+        self._ensure_uow()
         step_schema = None
         for step in self.steps:
             if step.name == step_name:
@@ -267,6 +305,7 @@ class ProcessRunBuilder:
         return self.backend.get_params(step_schema)
 
     def set_params(self, filled_params: type[BaseModel]):
+        self._ensure_uow()
         self.backend.set_params(filled_params)
         return self
 
@@ -278,6 +317,7 @@ class ProcessRunBuilder:
         resources: dict[str, ResourceRef | ResourceSchema] | None = None,
         step_name: str | None = None,
     ) -> StepSchema:
+        self._ensure_uow()
         parent_step = None
         for step in self.steps:
             if step.name == parent_step_name:
@@ -310,6 +350,11 @@ class ProcessRunBuilder:
         return lock_instance_fields(
             model, {"id", "create_date", "modified_date", "template"}
         )
+
+    def _ensure_uow(self):
+        if self._uow is None:
+            self._uow = self.backend.begin()
+        return self._uow
 
     def _reload_process_run(self, process_run_id: UUID) -> ProcessRunSchema:
         runs = self.backend.query(

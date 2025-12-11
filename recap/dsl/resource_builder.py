@@ -40,11 +40,13 @@ class ResourceBuilder:
         self.template_name = template_name
         self.template_version = template_version
         self._resource: ResourceSchema | None = None
+        self._uow = None
         if backend:
             self.backend = backend
-            self._uow = self.backend.begin()
+            self._ensure_uow()
         elif self.parent:
             self.backend = self.parent.backend
+            self.parent._ensure_uow()
             self._uow = self.parent._uow
         else:
             raise ValueError("backend is required")
@@ -85,6 +87,12 @@ class ResourceBuilder:
             return rb.resource
 
     def __enter__(self):
+        self._ensure_uow()
+        if self._resource is not None:
+            self._resource = self._reload_resource(self._resource.id)
+            self.name = self._resource.name
+            self.template_name = self._resource.template.name
+            self.template_version = self._resource.template.version
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -92,9 +100,17 @@ class ResourceBuilder:
             self.persist()
             self.save()
         else:
-            self._uow.rollback()
+            if self._uow:
+                self._uow.rollback()
+            self._uow = None
+
+    def _ensure_uow(self):
+        if self._uow is None:
+            self._uow = self.backend.begin()
+        return self._uow
 
     def save(self):
+        self._ensure_uow()
         self._uow.commit(clear_session=False)
         self._resource = self.backend.get_resource(
             self.name,
@@ -103,6 +119,7 @@ class ResourceBuilder:
             expand=True,
         )
         self._uow.end_session()
+        self._uow = None
         return self
 
     def persist(self):
@@ -139,6 +156,13 @@ class ResourceBuilder:
         return lock_instance_fields(
             model, {"id", "create_date", "modified_date", "slug", "template"}
         )
+
+    def set_model(self, model: ResourceSchema):
+        if self.resource.id != model.id:
+            raise ValueError(
+                "ID for this Resource does not match the builder's resource"
+            )
+        self._resource = model
 
     def add_child(
         self, name: str, template_name: str, template_version: str = "1.0"
@@ -213,11 +237,13 @@ class ResourceTemplateBuilder:
         backend: Backend | None = None,
         resource_template: ResourceTemplateRef | ResourceTemplateSchema | None = None,
     ):
+        self._uow = None
         if backend:
             self.backend = backend
-            self._uow = self.backend.begin()
+            self._ensure_uow()
         elif parent:
             self.backend = parent.backend
+            parent._ensure_uow()
             self._uow = parent._uow
         else:
             raise ValueError("No parent builder or backend provided")
@@ -264,16 +290,26 @@ class ResourceTemplateBuilder:
             print(f"Exception occured when creating a ResourceTemplate: {e}")
 
     def __enter__(self):
+        self._ensure_uow()
+        if self._template is not None:
+            self._reload_template()
+            self.name = self._template.name
+            self.type_names = [rt.name for rt in self._template.types]
+            self.version = self._template.version
         return self
 
     def __exit__(self, exc_type, exc, tb):
         if exc_type is None:
             self.save()
         else:
-            self._uow.rollback()
+            if self._uow:
+                self._uow.rollback()
+            self._uow = None
 
     def save(self):
+        self._ensure_uow()
         self._uow.commit()
+        self._uow = None
         return self
 
     @property
@@ -287,6 +323,7 @@ class ResourceTemplateBuilder:
     def prop_group(
         self, group_name: str
     ) -> AttributeGroupBuilder["ResourceTemplateBuilder"]:
+        self._ensure_uow()
         agb: AttributeGroupBuilder[ResourceTemplateBuilder] = AttributeGroupBuilder(
             group_name=group_name, parent=self
         )
@@ -307,6 +344,7 @@ class ResourceTemplateBuilder:
             ]
         }
         """
+        self._ensure_uow()
 
         for group_key, props in prop_def.items():
             agb = AttributeGroupBuilder(group_name=group_key, parent=self)
@@ -319,12 +357,14 @@ class ResourceTemplateBuilder:
     def add_child(
         self, name: str, type_names: list[str], version: str = "1.0"
     ) -> "ResourceTemplateBuilder":
+        self._ensure_uow()
         child_builder = ResourceTemplateBuilder(
             name=name, type_names=type_names, version=version, parent=self
         )
         return child_builder
 
     def _reload_template(self):
+        self._ensure_uow()
         self._template = self.backend.get_resource_template(
             self.name,
             version=self.version,
@@ -337,6 +377,7 @@ class ResourceTemplateBuilder:
         Return a pydantic model for the resource template, optionally reloading
         from the backend first. Critical fields are locked against mutation.
         """
+        self._ensure_uow()
         if update and self._template:
             self._reload_template()
         model = self.backend.get_resource_template(
@@ -349,6 +390,11 @@ class ResourceTemplateBuilder:
             model.model_copy(deep=True),
             {"id", "create_date", "modified_date", "version"},
         )
+
+    def _ensure_uow(self):
+        if self._uow is None:
+            self._uow = self.backend.begin()
+        return self._uow
 
     def close_child(self):
         if self.parent:
