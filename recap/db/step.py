@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey, UniqueConstraint
+from sqlalchemy import ForeignKey, UniqueConstraint, event, func, inspect, select
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import (
     Mapped,
@@ -11,7 +11,6 @@ from sqlalchemy.orm import (
     mapped_column,
     relationship,
 )
-from sqlalchemy.sql import func
 
 from recap.db.attribute import AttributeGroupTemplate, AttributeValue
 from recap.db.base import Base, TimestampMixin
@@ -93,6 +92,35 @@ class StepTemplate(TimestampMixin, Base):
             "process_template_id", "name", name="uq_step_name_per_process"
         ),
     )
+
+
+@event.listens_for(StepTemplate, "before_update", propagate=True)
+@event.listens_for(StepTemplate, "before_delete", propagate=True)
+def _guard_step_template(mapper, connection, target: StepTemplate):
+    # Prevent editing/deleting a step template if runs already exist for the parent process template.
+    from recap.db.process import ProcessRun
+
+    state = inspect(target)
+    column_changes = [
+        col.key
+        for col in mapper.column_attrs
+        if state.attrs[col.key].history.has_changes()
+        and col.key not in {"modified_date"}
+    ]
+    if not column_changes:
+        return
+
+    count_stmt = (
+        select(func.count())
+        .select_from(ProcessRun)
+        .where(ProcessRun.process_template_id == target.process_template_id)
+    )
+    cnt = connection.scalar(count_stmt)
+    if cnt and cnt > 0:
+        raise ValueError(
+            "Cannot modify or delete a process template step when runs exist. "
+            "Create a new process template version instead."
+        )
 
 
 class StepTemplateResourceSlotBinding(TimestampMixin, Base):

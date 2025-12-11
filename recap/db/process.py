@@ -3,7 +3,7 @@ import typing
 from collections import namedtuple
 from uuid import UUID, uuid4
 
-from sqlalchemy import Enum, ForeignKey, UniqueConstraint
+from sqlalchemy import Enum, ForeignKey, UniqueConstraint, event, func, inspect, select
 from sqlalchemy.ext import associationproxy
 from sqlalchemy.orm import (
     Mapped,
@@ -150,6 +150,31 @@ class ProcessRun(TimestampMixin, Base):
         for resource_slot, resource in self.resources.items():
             ar.append(AssignedResource(slot=resource_slot, resource=resource))
         return ar
+
+
+@event.listens_for(ProcessTemplate, "before_update", propagate=True)
+@event.listens_for(ProcessTemplate, "before_delete", propagate=True)
+def _guard_process_template(mapper, connection, target: ProcessTemplate):
+    state = inspect(target)
+    column_changes = [
+        col.key
+        for col in mapper.column_attrs
+        if state.attrs[col.key].history.has_changes()
+        and col.key not in {"modified_date"}
+    ]
+    if not column_changes:
+        return
+    count_stmt = (
+        select(func.count())
+        .select_from(ProcessRun)
+        .where(ProcessRun.process_template_id == target.id)
+    )
+    cnt = connection.scalar(count_stmt)
+    if cnt and cnt > 0:
+        raise ValueError(
+            "Cannot modify or delete a process template with existing runs. "
+            "Create a new template version instead."
+        )
 
 
 class ResourceAssignment(TimestampMixin, Base):

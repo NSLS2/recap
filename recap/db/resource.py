@@ -1,7 +1,16 @@
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, ForeignKey, Table, UniqueConstraint, event, func
+from sqlalchemy import (
+    Column,
+    ForeignKey,
+    Table,
+    UniqueConstraint,
+    event,
+    func,
+    inspect,
+    select,
+)
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import Mapped, mapped_collection, mapped_column, relationship
 
@@ -74,6 +83,7 @@ class ResourceTemplate(TimestampMixin, Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(nullable=False)
     slug: Mapped[str] = mapped_column(nullable=True)
+    version: Mapped[str] = mapped_column(nullable=False, default="1.0")
 
     types: Mapped[list["ResourceType"]] = relationship(
         "ResourceType",
@@ -103,7 +113,8 @@ class ResourceTemplate(TimestampMixin, Base):
         UniqueConstraint(
             "parent_id",
             "name",
-            name="uq_resource_template_parent_name",
+            "version",
+            name="uq_resource_template_parent_name_version",
         ),
     )
 
@@ -238,6 +249,40 @@ def _before_insert(mapper, connection, target: Resource):
         tbl = Resource.__table__
         connection.execute(
             tbl.update().where(tbl.c.name == target.name).values(active=False)
+        )
+
+
+def _descendant_templates_cte(template_id):
+    rt = ResourceTemplate.__table__
+    base = select(rt.c.id).where(rt.c.id == template_id).cte(recursive=True)
+    descendants = select(rt.c.id).where(rt.c.parent_id == base.c.id)
+    return base.union_all(descendants)
+
+
+@event.listens_for(ResourceTemplate, "before_update", propagate=True)
+@event.listens_for(ResourceTemplate, "before_delete", propagate=True)
+def _guard_resource_template(mapper, connection, target: ResourceTemplate):
+    state = inspect(target)
+    column_changes = [
+        col.key
+        for col in mapper.column_attrs
+        if state.attrs[col.key].history.has_changes()
+        and col.key not in {"modified_date"}
+    ]
+    if not column_changes:
+        return
+    cte = _descendant_templates_cte(target.id)
+    res_tbl = Resource.__table__
+    count_stmt = (
+        select(func.count())
+        .select_from(res_tbl)
+        .where(res_tbl.c.resource_template_id.in_(select(cte.c.id)))
+    )
+    cnt = connection.scalar(count_stmt)
+    if cnt and cnt > 0:
+        raise ValueError(
+            "Cannot modify or delete a resource template that already has resources. "
+            "Create a new template version instead."
         )
 
 
