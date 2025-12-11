@@ -209,12 +209,14 @@ class RecapClient:
 
     @overload
     def build_resource_template(
-        self, *, name: str, type_names: list[str]
+        self, *, name: str, type_names: list[str], version: str = "1.0"
     ) -> ResourceTemplateBuilder: ...
 
     @overload
     def build_resource_template(
-        self, *, resource_template: ResourceTemplateRef | ResourceTemplateSchema
+        self,
+        *,
+        resource_template: ResourceTemplateRef | ResourceTemplateSchema,
     ) -> ResourceTemplateBuilder: ...
 
     def build_resource_template(
@@ -222,6 +224,7 @@ class RecapClient:
         *,
         name: str | None = None,
         type_names: list[str] | None = None,
+        version: str = "1.0",
         resource_template: ResourceTemplateRef | ResourceTemplateSchema | None = None,
     ):
         if self.backend is None:
@@ -235,6 +238,7 @@ class RecapClient:
             return ResourceTemplateBuilder(
                 name=resource_template.name,
                 type_names=[rt.name for rt in resource_template.types],
+                version=resource_template.version,
                 backend=self.backend,
                 resource_template=resource_template,
             )
@@ -247,11 +251,13 @@ class RecapClient:
         if not all(isinstance(item, str) for item in type_names):
             raise TypeError("type_names must only contain strings")
         return ResourceTemplateBuilder(
-            name=name, type_names=type_names, backend=self.backend
+            name=name, type_names=type_names, version=version, backend=self.backend
         )
 
     @overload
-    def build_resource(self, name: str, template_name: str) -> ResourceBuilder: ...
+    def build_resource(
+        self, name: str, template_name: str, template_version: str = "1.0"
+    ) -> ResourceBuilder: ...
 
     @overload
     def build_resource(self, *, resource: ResourceSchema) -> ResourceBuilder: ...
@@ -273,6 +279,7 @@ class RecapClient:
             return ResourceBuilder(
                 name=resource.name,
                 template_name=resource.template.name,
+                template_version=resource.template.version,
                 backend=self.backend,
                 resource=resource,
             )
@@ -281,10 +288,12 @@ class RecapClient:
             if len(args) != 2:
                 raise TypeError("Provide name and template_name")
             name, template_name = args
+            template_version = "1.0"
         else:
             try:
                 name = kwargs.pop("name")
                 template_name = kwargs.pop("template_name")
+                template_version = kwargs.pop("template_version", "1.0")
             except KeyError as exc:
                 raise TypeError("name and template_name are required") from exc
             if kwargs:
@@ -293,14 +302,23 @@ class RecapClient:
         return ResourceBuilder(
             name=name,
             template_name=template_name,
+            template_version=template_version,
             backend=self.backend,
         )
 
     def create_resource(
-        self, name: str, template_name: str, parent: ResourceSchema | None = None
+        self,
+        name: str,
+        template_name: str,
+        template_version: str = "1.0",
+        parent: ResourceSchema | None = None,
     ):
         return ResourceBuilder.create(
-            name=name, template_name=template_name, backend=self.backend, parent=parent
+            name=name,
+            template_name=template_name,
+            template_version=template_version,
+            backend=self.backend,
+            parent=parent,
         )
 
     def create_campaign(

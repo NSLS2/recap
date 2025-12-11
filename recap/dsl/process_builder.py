@@ -110,7 +110,7 @@ class ProcessTemplateBuilder:
         model = self.backend.get_process_template(self.name, self.version, expand=True)
         return lock_instance_fields(
             model.model_copy(deep=True),
-            {"id", "create_date", "modified_date"},
+            {"id", "create_date", "modified_date", "version"},
         )
 
 

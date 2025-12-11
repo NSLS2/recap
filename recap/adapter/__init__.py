@@ -102,7 +102,7 @@ class Backend(Protocol):
     def add_resource_types(self, type_names: list[str]) -> list[ResourceTypeSchema]: ...
 
     def add_resource_template(
-        self, name: str, type_names: list[ResourceTypeSchema]
+        self, name: str, type_names: list[ResourceTypeSchema], version: str = "1.0"
     ) -> ResourceTemplateRef: ...
 
     def add_child_resource_template(
@@ -110,12 +110,14 @@ class Backend(Protocol):
         name: str,
         resource_types: list[ResourceTypeSchema],
         parent_resource_template: ResourceTemplateRef | ResourceTemplateSchema,
+        version: str = "1.0",
     ) -> ResourceTemplateRef: ...
 
     @overload
     def get_resource_template(
         self,
-        name: str,
+        name: str | None,
+        version: str | None = None,
         id: UUID | str | None = None,
         parent: ResourceTemplateRef | ResourceTemplateSchema | None = None,
         expand: Literal[False] = False,
@@ -124,7 +126,8 @@ class Backend(Protocol):
     @overload
     def get_resource_template(
         self,
-        name: str,
+        name: str | None,
+        version: str | None = None,
         id: UUID | str | None = None,
         parent: ResourceTemplateRef | ResourceTemplateSchema | None = None,
         expand: Literal[True] = False,
@@ -151,7 +154,11 @@ class Backend(Protocol):
     ) -> ResourceSchema: ...
 
     def get_resource(
-        self, name: str, template_name: str, expand: bool = False
+        self,
+        name: str,
+        template_name: str,
+        template_version: str | None = "1.0",
+        expand: bool = False,
     ) -> ResourceSchema: ...
 
     def add_child_resources(

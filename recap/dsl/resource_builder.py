@@ -23,6 +23,7 @@ class ResourceBuilder:
         # session: Session,
         name: str,
         template_name: str,
+        template_version: str = "1.0",
         backend: Backend | None = None,
         parent: "ResourceBuilder | ResourceSchema | None" = None,
         resource: ResourceSchema | None = None,
@@ -37,6 +38,7 @@ class ResourceBuilder:
         elif isinstance(parent, ResourceSchema):
             self.parent_resource = parent
         self.template_name = template_name
+        self.template_version = template_version
         self._resource: ResourceSchema | None = None
         if backend:
             self.backend = backend
@@ -51,8 +53,11 @@ class ResourceBuilder:
                 self._resource = self._reload_resource(resource.id)
                 self.name = self._resource.name
                 self.template_name = self._resource.template.name
+                self.template_version = self._resource.template.version
             else:
-                template = self.backend.get_resource_template(name=self.template_name)
+                template = self.backend.get_resource_template(
+                    name=self.template_name, version=self.template_version
+                )
                 self._resource = self.backend.create_resource(
                     self.name,
                     resource_template=template,
@@ -68,8 +73,15 @@ class ResourceBuilder:
             print(f"Exception occured while creating resource: {e}")
 
     @classmethod
-    def create(cls, name: str, template_name: str, backend: Backend, parent=None):
-        with cls(name, template_name, backend, parent=parent) as rb:
+    def create(
+        cls,
+        name: str,
+        template_name: str,
+        template_version: str,
+        backend: Backend,
+        parent=None,
+    ):
+        with cls(name, template_name, template_version, backend, parent=parent) as rb:
             return rb.resource
 
     def __enter__(self):
@@ -85,7 +97,10 @@ class ResourceBuilder:
     def save(self):
         self._uow.commit(clear_session=False)
         self._resource = self.backend.get_resource(
-            self.name, self.template_name, expand=True
+            self.name,
+            self.template_name,
+            self.template_version,
+            expand=True,
         )
         self._uow.end_session()
         return self
@@ -125,10 +140,13 @@ class ResourceBuilder:
             model, {"id", "create_date", "modified_date", "slug", "template"}
         )
 
-    def add_child(self, name: str, template_name: str) -> "ResourceBuilder":
+    def add_child(
+        self, name: str, template_name: str, template_version: str = "1.0"
+    ) -> "ResourceBuilder":
         child_builder = ResourceBuilder(
             name=name,
             template_name=template_name,
+            template_version=template_version,
             parent=self,
         )
         return child_builder
@@ -190,6 +208,7 @@ class ResourceTemplateBuilder:
         self,
         name: str,
         type_names: list[str],
+        version: str = "1.0",
         parent: Optional["ResourceTemplateBuilder"] = None,
         backend: Backend | None = None,
         resource_template: ResourceTemplateRef | ResourceTemplateSchema | None = None,
@@ -207,13 +226,16 @@ class ResourceTemplateBuilder:
         self._children: list[ResourceTemplateRef] = []
         self.parent = parent
         self.resource_types: dict[str, ResourceTypeSchema] = {}
+        self.version = version
         self._template: ResourceTemplateRef | ResourceTemplateSchema | None = None
         try:
             if resource_template is not None:
                 self.name = resource_template.name
                 self.type_names = [rt.name for rt in resource_template.types]
+                self.version = resource_template.version
                 tmpl = self.backend.get_resource_template(
                     resource_template.name,
+                    version=resource_template.version,
                     id=resource_template.id,
                     expand=True,
                 )
@@ -227,12 +249,15 @@ class ResourceTemplateBuilder:
                     self._template = self.backend.add_child_resource_template(
                         self.name,
                         [rt for rt in self.resource_types.values()],
+                        version=self.version,
                         parent_resource_template=self.parent._template,
                     )
                 else:
                     self._template: ResourceTemplateRef = (
                         self.backend.add_resource_template(
-                            name, list(self.resource_types.values())
+                            name,
+                            list(self.resource_types.values()),
+                            version=self.version,
                         )
                     )
         except Exception as e:
@@ -291,15 +316,20 @@ class ResourceTemplateBuilder:
             agb.close_group()
         return self
 
-    def add_child(self, name: str, type_names: list[str]) -> "ResourceTemplateBuilder":
+    def add_child(
+        self, name: str, type_names: list[str], version: str = "1.0"
+    ) -> "ResourceTemplateBuilder":
         child_builder = ResourceTemplateBuilder(
-            name=name, type_names=type_names, parent=self
+            name=name, type_names=type_names, version=version, parent=self
         )
         return child_builder
 
     def _reload_template(self):
         self._template = self.backend.get_resource_template(
-            self.name, id=self._template.id if self._template else None, expand=True
+            self.name,
+            version=self.version,
+            id=self._template.id if self._template else None,
+            expand=True,
         )
 
     def get_model(self, *, update: bool = False) -> ResourceTemplateSchema:
@@ -311,11 +341,13 @@ class ResourceTemplateBuilder:
             self._reload_template()
         model = self.backend.get_resource_template(
             self.name,
+            version=self.version,
             id=self._template.id if self._template else None,
             expand=True,
         )
         return lock_instance_fields(
-            model.model_copy(deep=True), {"id", "create_date", "modified_date"}
+            model.model_copy(deep=True),
+            {"id", "create_date", "modified_date", "version"},
         )
 
     def close_child(self):

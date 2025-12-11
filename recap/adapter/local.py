@@ -317,10 +317,11 @@ class LocalBackend(Backend):
         return resource_type_schemas
 
     def add_resource_template(
-        self, name: str, types: list[ResourceTypeSchema]
+        self, name: str, types: list[ResourceTypeSchema], version: str = "1.0"
     ) -> ResourceTemplateRef:
         template = ResourceTemplate(
             name=name,
+            version=version,
             # types=types,
         )
         self.session.add(template)
@@ -341,6 +342,7 @@ class LocalBackend(Backend):
         name: str,
         resource_types: list[ResourceTypeSchema],
         parent_resource_template: ResourceTemplateRef | ResourceTemplateSchema,
+        version: str = "1.0",
     ) -> ResourceTemplateRef:
         stmt = select(ResourceType).where(
             ResourceType.id.in_([type.id for type in resource_types])
@@ -349,6 +351,7 @@ class LocalBackend(Backend):
 
         template = ResourceTemplate(
             name=name,
+            version=version,
             types=resource_type_results,
         )
         parent_template = self.session.get(
@@ -381,12 +384,19 @@ class LocalBackend(Backend):
 
     def get_resource_template(
         self,
-        name: str,
+        name: str | None,
+        version: str | None = None,
         id: UUID | str | None = None,
         parent: ResourceTemplateRef | ResourceTemplate | None = None,
         expand: bool = False,
     ) -> ResourceTemplateRef | ResourceTemplateSchema:
-        statement = select(ResourceTemplate).where(ResourceTemplate.name == name)
+        statement = select(ResourceTemplate)
+        if name:
+            statement = statement.where(ResourceTemplate.name == name)
+        if version:
+            statement = statement.where(ResourceTemplate.version == version)
+        if not name and not id:
+            raise ValueError("name or id required to fetch ResourceTemplate")
         if isinstance(id, str):
             id = UUID(id)
         if id:
@@ -440,7 +450,11 @@ class LocalBackend(Backend):
         return ResourceRef.model_validate(resource)
 
     def get_resource(
-        self, name: str, template_name: str, expand: bool = False
+        self,
+        name: str,
+        template_name: str,
+        template_version: str | None = "1.0",
+        expand: bool = False,
     ) -> ResourceRef | ResourceSchema:
         stmt = (
             select(Resource)
@@ -448,6 +462,7 @@ class LocalBackend(Backend):
             .where(
                 Resource.name == name,
                 ResourceTemplate.name == template_name,
+                ResourceTemplate.version == template_version,
                 Resource.active.is_(True),
             )
         )

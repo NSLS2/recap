@@ -99,6 +99,7 @@ class ResourceTypeSchema(CommonFields):
 class ResourceTemplateRef(CommonFields):
     name: str
     slug: str | None
+    version: str
     parent: Self | None = Field(default=None, exclude=True)
     types: list[ResourceTypeSchema] = Field(default_factory=list)
 
@@ -106,6 +107,7 @@ class ResourceTemplateRef(CommonFields):
 class ResourceTemplateSchema(CommonFields):
     name: str
     slug: "str | None"
+    version: str
     types: list[ResourceTypeSchema] = Field(default_factory=list)
     parent: Annotated[Self | None, SkipValidation] = Field(default=None, exclude=True)
     children: list[Self] = Field(default_factory=list)
