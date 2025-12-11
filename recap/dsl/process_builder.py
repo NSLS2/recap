@@ -307,6 +307,11 @@ class ProcessRunBuilder:
     def set_params(self, filled_params: type[BaseModel]):
         self._ensure_uow()
         self.backend.set_params(filled_params)
+        if getattr(self, "_process_run", None) is not None:
+            # Refresh in-memory schema so subsequent persist writes current values
+            self._process_run = self._reload_process_run(self._process_run.id)
+        # Persist immediately so subsequent operations see updated values
+        self.persist()
         return self
 
     def add_child_step(

@@ -1,7 +1,9 @@
 import pytest
 
+from recap.adapter.local import LocalBackend
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate, AttributeValue
 from recap.db.resource import Resource, ResourceTemplate
+from recap.schemas.resource import ResourceTemplateSchema
 
 
 def test_attribute_value_coercion_and_exclusive_field(db_session):
@@ -59,3 +61,19 @@ def test_attribute_value_unsupported_type_prevents_resource_init(db_session):
 
     with pytest.raises(ValueError):
         Resource(name="BrokenRes", template=tmpl)
+
+
+def test_add_attr_group_reuses_existing_group(db_session):
+    tmpl = ResourceTemplate(name="RT")
+    db_session.add(tmpl)
+    db_session.flush()
+
+    backend = LocalBackend(lambda: db_session)
+    # Manually bind the existing session for this test
+    backend._session = db_session
+    ref = ResourceTemplateSchema.model_validate(tmpl)
+
+    first = backend.add_attr_group("content", ref)
+    second = backend.add_attr_group("content", ref)
+
+    assert first.id == second.id
