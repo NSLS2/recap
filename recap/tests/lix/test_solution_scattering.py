@@ -201,4 +201,4 @@ def test_solution_scattering_sample_prep(db_session):
     process_run1.resources[holder_resource_slot] = destination_plate
     db_session.commit()
 
-    assert process_run1.steps[0].template.name == "Robot transfer"
+    assert process_run1.steps["Robot transfer"].template.name == "Robot transfer"

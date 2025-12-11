@@ -234,7 +234,8 @@ def test_platemate_workflow_with_recap(db_session):  # noqa
     harvest_step_template.resource_slots["source_plate"] = xtal_slot
     harvest_step_template.resource_slots["dest_puck"] = puck_slot
 
-    process_template.step_templates.extend([echo_step_template, harvest_step_template])
+    process_template.step_templates[echo_step_template.name] = echo_step_template
+    process_template.step_templates[harvest_step_template.name] = harvest_step_template
     db_session.add_all(
         [
             lib_plate_template,
@@ -283,7 +284,7 @@ def test_platemate_workflow_with_recap(db_session):  # noqa
         content.values["catalog_id"] = meta["catalog_id"]
         content.values["smiles"] = meta["smiles"]
 
-    echo_step = next(step for step in process_run.steps if step.name == "Echo Transfer")
+    echo_step = process_run.steps["Echo Transfer"]
     echo_settings = echo_step.parameters["echo_settings"]
     echo_settings.values["batch_id"] = 7
     echo_settings.values["volume_nl"] = 25.0

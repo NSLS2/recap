@@ -91,7 +91,7 @@ def test_campaign_include_process_runs_and_steps(db_session):
     )
     assert loaded_campaign is not None
     assert loaded_campaign.process_runs[0].name.startswith("Run-include")
-    step = loaded_campaign.process_runs[0].steps[0]
+    step = loaded_campaign.process_runs[0].steps["Step-include"]
     exposure = step.parameters["Exposure-include"]
     assert exposure.values.dwell_time == 5
 

@@ -15,7 +15,7 @@ from recap.schemas.process import (
     ProcessTemplateRef,
     ProcessTemplateSchema,
 )
-from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
+from recap.schemas.resource import ResourceRef, ResourceSchema, ResourceSlotSchema
 from recap.schemas.step import StepSchema, StepTemplateRef
 from recap.utils.dsl import lock_instance_fields
 
@@ -193,7 +193,7 @@ class ProcessRunBuilder:
                 self._process_run = self.backend.create_process_run(
                     name, description, self._process_template, campaign
                 )
-            self._steps = list(self._process_run.steps)
+            self._steps = list(self._process_run.steps.values())
             self._resources = {}
         except Exception as e:
             print(f"Exception occured while creating a procces run: {e}")
@@ -274,8 +274,9 @@ class ProcessRunBuilder:
         self,
         parent_step_name: str,
         step_template_name: str,
-        parameters: dict[str, dict[str, object]] | None = None,
-        resources: dict[str, object] | None = None,
+        parameters: dict[str, dict[str, Any]] | None = None,
+        resources: dict[str, ResourceRef | ResourceSchema] | None = None,
+        step_name: str | None = None,
     ) -> StepSchema:
         parent_step = None
         for step in self.steps:
@@ -292,6 +293,7 @@ class ProcessRunBuilder:
             step_template_name,
             parameters,
             resources,
+            step_name,
         )
         # refresh cached steps so subsequent operations see the new child
         self._steps = None

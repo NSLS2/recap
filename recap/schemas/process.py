@@ -17,7 +17,7 @@ class ProcessTemplateSchema(CommonFields):
     name: str
     version: str
     is_active: bool
-    step_templates: list[StepTemplateSchema]
+    step_templates: dict[str, StepTemplateSchema]
     resource_slots: list["ResourceSlotSchema"]
 
 
@@ -26,7 +26,7 @@ class ProcessRunSchema(CommonFields):
     description: str
     campaign_id: UUID
     template: ProcessTemplateSchema
-    steps: list[StepSchema]
+    steps: dict[str, StepSchema]
     assigned_resources: list[ResourceAssignmentSchema]
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
 

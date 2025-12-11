@@ -17,7 +17,7 @@ def test_process_run_update_persists_param_changes(client):
         version="1.0",
     ) as prb:
         run = prb.process_run
-        step = run.steps[0]
+        step = run.steps["Mix"]
 
         # mutate typed param values and persist
         step.parameters.inputs.values.voltage = 42
@@ -30,7 +30,7 @@ def test_process_run_update_persists_param_changes(client):
         .first()
     )
     assert refreshed_run is not None
-    assert refreshed_run.steps[0].parameters.inputs.values.voltage == 42
+    assert refreshed_run.steps["Mix"].parameters.inputs.values.voltage == 42
 
 
 def test_resource_builder_persists_property_changes(client):

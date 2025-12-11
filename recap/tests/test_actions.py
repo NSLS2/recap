@@ -83,4 +83,7 @@ def test_container(db_session):
     )
 
     assert result.resources[container_1_resource_slot].name == "A1"
-    assert result.steps[0].parameters["TestParamType"].values["volume"] == 4.0
+    assert (
+        result.steps["TestActionType"].parameters["TestParamType"].values["volume"]
+        == 4.0
+    )

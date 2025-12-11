@@ -8,6 +8,7 @@ from sqlalchemy.ext import associationproxy
 from sqlalchemy.orm import (
     Mapped,
     attribute_mapped_collection,
+    mapped_collection,
     mapped_column,
     object_session,
     relationship,
@@ -37,8 +38,9 @@ class ProcessTemplate(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
     version: Mapped[str] = mapped_column(nullable=False)
     is_active: Mapped[bool] = mapped_column(nullable=False, default=False)
-    step_templates: Mapped[list["StepTemplate"]] = relationship(
-        back_populates="process_template"
+    step_templates: Mapped[dict[str, "StepTemplate"]] = relationship(
+        back_populates="process_template",
+        collection_class=mapped_collection(lambda st: st.name),
     )
     edges: Mapped["StepTemplateEdge"] = relationship(
         "StepTemplateEdge",
@@ -104,7 +106,10 @@ class ProcessRun(TimestampMixin, Base):
             resource_slot=res_slot, resource=resource
         ),
     )
-    steps: Mapped[list["Step"]] = relationship(back_populates="process_run")
+    steps: Mapped[dict[str, "Step"]] = relationship(
+        back_populates="process_run",
+        collection_class=mapped_collection(lambda s: s.name),
+    )
     campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaign.id"), nullable=False)
     campaign: Mapped[Campaign] = relationship("Campaign", back_populates="process_runs")
 
@@ -113,8 +118,11 @@ class ProcessRun(TimestampMixin, Base):
         template: ProcessTemplate | None = kwargs.get("template")
         if template is None:
             raise ValueError("Missing template for ProcessRun")
-        for step_template in template.step_templates:
-            Step(process_run=self, template=step_template)
+        for step_template in template.step_templates.values():
+            step = Step(template=step_template, name=step_template.name)
+            # Attach via the mapped collection to ensure the dict key is derived
+            # from the final name instead of a default/None during construction.
+            self.steps[step.name] = step
 
     @validates("assignments")
     def _check_assignment(self, key, assignment: "ResourceAssignment"):

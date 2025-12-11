@@ -200,3 +200,13 @@ class Backend(Protocol):
     def count(self, schema: type[SchemaT], spec: QuerySpec) -> int: ...
 
     def update_process_run(self, process_run: ProcessRunSchema) -> ProcessRunSchema: ...
+
+    def add_child_step(
+        self,
+        process_run: ProcessRunSchema,
+        parent_step_id: UUID,
+        step_template_name: str,
+        parameter_values: dict[str, dict[str, Any]] | None = None,
+        resources: dict[str, ResourceRef | ResourceSchema] | None = None,
+        step_name: str | None = None,
+    ) -> StepSchema: ...

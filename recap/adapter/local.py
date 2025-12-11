@@ -670,6 +670,7 @@ class LocalBackend(Backend):
         step_template_name: str,
         parameter_values: dict[str, dict[str, Any]] | None = None,
         resources: dict[str, ResourceRef | ResourceSchema] | None = None,
+        step_name: str | None = None,
     ) -> StepSchema:
         pr_model = load_single(
             self.session,
@@ -693,7 +694,9 @@ class LocalBackend(Backend):
             label="ProcessRun",
         )
 
-        parent_step = next((s for s in pr_model.steps if s.id == parent_step_id), None)
+        parent_step = next(
+            (s for s in pr_model.steps.values() if s.id == parent_step_id), None
+        )
         if parent_step is None:
             raise ValueError(
                 f"Parent step with id {parent_step_id} not found in run {pr_model.name}"
@@ -714,7 +717,15 @@ class LocalBackend(Backend):
             label="StepTemplate",
         )
 
-        step = Step(process_run=pr_model, template=template, parent=parent_step)
+        step_name = step_name if step_name else template.name
+        if pr_model.steps:
+            idx = 1
+            while step_name in pr_model.steps:
+                idx += 1
+                step_name = f"{step_name} ({idx})"
+
+        step = Step(template=template, parent=parent_step, name=step_name)
+        pr_model.steps[step.name] = step
         # Add early to session to avoid autoflush warnings when binding children/resources
         self.session.add(step)
 
@@ -891,7 +902,7 @@ class LocalBackend(Backend):
         with self._session_scope() as session:
             owns_tx = not session.in_transaction()
             tx = session.begin() if owns_tx else None
-            for step_schema in process_run.steps:
+            for step_schema in process_run.steps.values():
                 step: Step = load_single(
                     session,
                     select(Step)

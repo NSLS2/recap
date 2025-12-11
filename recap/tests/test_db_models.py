@@ -156,7 +156,7 @@ def test_step_initializes_parameters_from_template(db_session):
     db_session.add_all([process_template, step_template, attr_group, campaign, run])
     db_session.flush()
 
-    (step,) = run.steps
+    step = run.steps["Incubate"]
     assert step.name == step_template.name
     assert set(step.parameters.keys()) == {"Conditions"}
     param = step.parameters["Conditions"]
@@ -248,7 +248,7 @@ def test_step_uses_template_name_when_missing(db_session):
     db_session.flush()
 
     # ProcessRun __init__ auto-creates steps; ensure the default naming uses the template
-    (auto_step,) = run.steps
+    auto_step = run.steps[st.name]
     assert auto_step.name == st.name
 
 

@@ -322,8 +322,10 @@ def test_fragment_screening(db_session):
     db_session.add(harvesting_step_template)
     db_session.commit()
 
-    process_template.step_templates.extend(
-        [image_plate_template, echo_tx_template, harvesting_step_template]
+    process_template.step_templates[image_plate_template.name] = image_plate_template
+    process_template.step_templates[echo_tx_template.name] = echo_tx_template
+    process_template.step_templates[harvesting_step_template.name] = (
+        harvesting_step_template
     )
     db_session.add(process_template)
     db_session.commit()
@@ -347,7 +349,17 @@ def test_fragment_screening(db_session):
 
     statement = select(ProcessRun).where(ProcessRun.name == "FS1")
     process_run: ProcessRun = db_session.scalars(statement).one()
-    assert process_run.steps[0].template.name == "Image plate"
-    assert process_run.steps[0].parameters["drop_volume"].values["volume"] == 0
-    assert process_run.steps[1].parameters["volume_transferred"].values["volume"] == 0
-    assert process_run.steps[1].parameters["batch_number"].values["batch"] == 0
+    assert process_run.steps["Image plate"].template.name == "Image plate"
+    assert (
+        process_run.steps["Image plate"].parameters["drop_volume"].values["volume"] == 0
+    )
+    assert (
+        process_run.steps["Echo Transfer"]
+        .parameters["volume_transferred"]
+        .values["volume"]
+        == 0
+    )
+    assert (
+        process_run.steps["Echo Transfer"].parameters["batch_number"].values["batch"]
+        == 0
+    )
