@@ -63,6 +63,7 @@ SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
     ResourceTemplateSchema: ResourceTemplate,
     ProcessRunSchema: ProcessRun,
     ResourceSchema: Resource,
+    ProcessTemplateSchema: ProcessTemplate,
 }
 
 

@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 from recap.schemas.process import (
     CampaignSchema,
     ProcessRunSchema,
+    ProcessTemplateSchema,
 )
 
 try:
@@ -167,6 +168,11 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema]):
         return self.filter(types__names_in=type_list)
 
 
+class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema]):
+    model = ProcessTemplateSchema
+    default_schema = None
+
+
 class QueryDSL:
     def __init__(self, backend: "Backend"):
         self.backend = backend
@@ -176,6 +182,9 @@ class QueryDSL:
 
     def process_runs(self) -> ProcessRunQuery:
         return ProcessRunQuery(self.backend)
+
+    def process_templates(self) -> ProcessTemplateQuery:
+        return ProcessTemplateQuery(self.backend)
 
     def resources(self) -> ResourceQuery:
         return ResourceQuery(self.backend)

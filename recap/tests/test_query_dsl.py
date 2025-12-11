@@ -100,7 +100,12 @@ def test_process_run_pagination_and_filtering(db_session):
     runs = [seed_process_run(db_session, name=f"batch-{idx}")[1] for idx in range(3)]
     names = sorted(run.name for run in runs)
 
-    query = make_query(db_session).process_runs().order_by(ProcessRun.name)
+    query = (
+        make_query(db_session)
+        .process_runs()
+        .where(ProcessRun.name.like("Run-batch%"))
+        .order_by(ProcessRun.name)
+    )
 
     # head = query.limit(2).as_models()
     # assert [run.name for run in head] == names[:2]
