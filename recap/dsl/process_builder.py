@@ -128,6 +128,13 @@ class ProcessTemplateBuilder:
             {"id", "create_date", "modified_date", "version"},
         )
 
+    def set_model(self, model: ProcessTemplateSchema | ProcessTemplateRef):
+        if self._template is None:
+            raise RuntimeError("Template not initialized")
+        if model.id != self._template.id:
+            raise ValueError("ID for this ProcessTemplate does not match the builder")
+        self._template = model
+
     def _ensure_uow(self):
         if self._uow is None:
             self._uow = self.backend.begin()
@@ -254,6 +261,13 @@ class ProcessRunBuilder:
     @property
     def process_run(self) -> ProcessRunSchema:
         return self._process_run
+
+    def set_model(self, model: ProcessRunSchema):
+        if self._process_run is None:
+            raise RuntimeError("ProcessRun not initialized")
+        if model.id != self._process_run.id:
+            raise ValueError("ID for this ProcessRun does not match the builder")
+        self._process_run = model
 
     def assign_resource(
         # self, resource_slot_name: str, resource_name: str, resource_template_name: str

@@ -391,6 +391,15 @@ class ResourceTemplateBuilder:
             {"id", "create_date", "modified_date", "version"},
         )
 
+    def set_model(self, model: ResourceTemplateSchema | ResourceTemplateRef):
+        if self._template is None:
+            raise RuntimeError("ResourceTemplate not initialized")
+        if model.id != self._template.id:
+            raise ValueError(
+                "ID for this ResourceTemplate does not match the builder's template"
+            )
+        self._template = model
+
     def _ensure_uow(self):
         if self._uow is None:
             self._uow = self.backend.begin()
