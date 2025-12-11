@@ -8,15 +8,7 @@ def test_container(db_session):
     from recap.db.resource import Resource, ResourceTemplate, ResourceType
     from recap.db.step import StepTemplate
 
-    param_type = AttributeGroupTemplate(
-        name="TestParamType",
-    )
-    param_value_template = AttributeTemplate(
-        name="volume", value_type="float", unit="uL", default_value="4.0"
-    )
-    param_type.attribute_templates.append(param_value_template)
-    db_session.add(param_type)
-    db_session.commit()
+    # db_session.commit()
     process_template = ProcessTemplate(name="TestProcessTemplate", version="1.0")
     db_session.add(process_template)
     # container_type = ResourceType(name="container")
@@ -39,6 +31,14 @@ def test_container(db_session):
     db_session.add(container_2_resource_slot)
     process_template.resource_slots.append(container_1_resource_slot)
     process_template.resource_slots.append(container_2_resource_slot)
+    param_type = AttributeGroupTemplate(
+        name="TestParamType",
+    )
+    param_value_template = AttributeTemplate(
+        name="volume", value_type="float", unit="uL", default_value="4.0"
+    )
+    param_type.attribute_templates.append(param_value_template)
+    db_session.add(param_type)
     step_template = StepTemplate(
         name="TestActionType",
         attribute_group_templates=[param_type],

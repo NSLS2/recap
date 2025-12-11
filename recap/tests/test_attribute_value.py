@@ -29,18 +29,20 @@ def test_attribute_value_coercion_and_exclusive_field(db_session):
 
 
 def test_attribute_value_requires_target_owner(db_session):
-    group = AttributeGroupTemplate(name="Specs")
+    tmpl = ResourceTemplate(name="SpecsTemplate")
+    group = AttributeGroupTemplate(name="Specs", resource_template=tmpl)
     attr = AttributeTemplate(
         name="Orphaned",
         value_type="int",
         default_value=1,
         attribute_group_template=group,
     )
-    db_session.add_all([group, attr])
+    db_session.add_all([tmpl, group, attr])
     db_session.flush()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as excinfo:
         AttributeValue(template=attr)  # neither parameter nor property set
+    assert "Parameter or Property must be set" in str(excinfo.value)
 
 
 def test_attribute_value_unsupported_type_prevents_resource_init(db_session):

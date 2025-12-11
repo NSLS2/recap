@@ -6,6 +6,10 @@ def test_attribute(db_session):
     from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
     from recap.db.resource import ResourceTemplate, ResourceType
 
+    # container_type = ResourceType(name="container")
+    container_type, _ = get_or_create(
+        db_session, ResourceType, where={"name": "container"}
+    )
     prop_type = AttributeGroupTemplate(
         name="TestProp"
     )  # , value_type="int", unit="kg")
@@ -14,11 +18,6 @@ def test_attribute(db_session):
     )
     prop_type.attribute_templates.append(prop_value_template)
     db_session.add(prop_type)
-
-    # container_type = ResourceType(name="container")
-    container_type, _ = get_or_create(
-        db_session, ResourceType, where={"name": "container"}
-    )
     container_template = ResourceTemplate(
         name="TestContainer",
         attribute_group_templates=[prop_type],
@@ -54,15 +53,15 @@ def test_container(db_session):
     from recap.db.attribute import AttributeGroupTemplate
     from recap.db.resource import Resource, ResourceTemplate, ResourceType
 
+    container_type, _ = get_or_create(
+        db_session, ResourceType, where={"name": "container"}
+    )
     prop_type = AttributeGroupTemplate(name="TestPropType")  # ,
     prop_value_template = AttributeTemplate(
         name="test_prop_val", value_type="int", unit="kg", default_value="10"
     )
     prop_type.attribute_templates.append(prop_value_template)
     db_session.add(prop_type)
-    container_type, _ = get_or_create(
-        db_session, ResourceType, where={"name": "container"}
-    )
     container_template = ResourceTemplate(
         name="TestContainerType",
         attribute_group_templates=[prop_type],
