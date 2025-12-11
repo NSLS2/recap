@@ -13,7 +13,32 @@ RECAP is a Python framework that captures **experimental provenance** using a SQ
 - Pydantic validators
 - A DSL builder API
 - SQLAlchemy ORM persistence
-- A unified provenance graph connecting campaigns -> runs -> steps -> resources
+- A unified provenance graph
+
+## Installation
+
+Recap is available from Pypi, install using:
+```
+    pip install pyrecap
+```
+
+## Getting started
+
+As of Dec 2025, Recap clients only connect directly with sqlite databases, a REST API backend is on the roadmap.
+
+To create and connect to a temporary sqlite database:
+```python
+from recap.client import RecapClient
+
+client = RecapClient.from_sqlite() 
+print(client.database_path) # print path of your database
+```
+
+if you want to generate a database at a specific location pass in the database path. You can also connect to an existing databases similarly
+
+```python
+client = RecapClient.from_sqlite("/path/to/database.db")
+```
 
 ## Resources
 
@@ -31,42 +56,107 @@ Plate
  └── H12
 ```
 
-Each child is also a resource with its own attributes.
+Each child is also a resource with its own attributes. But before we create a resource we must create a definition or a `ResourceTemplate`. This is the canonical definition of the resource to be created
+
+
+### Resource Template
 
 Example: creating a plate template with child wells:
 
 ```python
-with client.build_resource_template("96 Well Plate", ["container", "plate"]) as t:
-    t.add_properties({
+with client.build_resource_template(name="Xtal Plate",
+                                    type_names=["container", "plate", "library_plate"]) as template_builder:
+    for row in "ABC":
+        for col in range(1, 4):
+            template_builder.add_child(f"{row}{col:02d}", ["container", "well"]).close_child()
+```
+
+In the example above we create a `template_builder` that creates or modifies an existing template in the database. The `template_builder` needs a unique name and a number of tags called `type_names` which are needed to associate a `Resource` to an experiment/workflow, called `ProcessRun`. The example also shows the ability of adding child resource templates, `well` in this case.
+
+
+### Properties and Property Groups
+
+Resources can carry metadata organized into groups of related properties.
+
+Example: We create a similar template, but this time we add properties to the plate template. The group is called `dimensions` within which we create two parameters `rows` and `columns`, we also have to specify the data `type` for the property and a `default` value. If the property has a unit, you can specify that with a `unit` key.
+
+```python
+with client.build_resource_template(name="Library Plate",
+                                    type_names=["container", "plate", "library_plate"]) as template_builder:
+    template_builder.add_properties({
         "dimensions": [
-            {"name": "rows", "type": "int", "default": 8},
-            {"name": "columns", "type": "int", "default": 12},
+            {"name": "rows", "type": "int", "default": 3},
+            {"name": "columns", "type": "int", "default": 1},
         ]
     })
 
-    for row in "ABCDEFGH":
-        for col in range(1, 13):
-            t.add_child(f"{row}{col:02d}", ["container", "well"])\
+    for row in "ABC":
+        for col in range(1, 4):
+            template_builder.add_child(f"{row}{col:02d}", ["container", "well"])\
              .add_properties({
-                 "capacity": [
-                     {"name": "volume_uL", "type": "float", "default": 360.0}
+                "status": [
+                    {"name": "used", "type": "bool", "default": False},
+                ],
+                "content": [
+                     {"name": "catalog_id", "type": "str", "default": ""},
+                     {"name": "smiles", "type": "str", "default": ""},
+                     {"name": "sequence", "type": "int", "default": col},
+                     {"name": "volume", "type": "float", "default": 10.0, "unit": "uL"},
                  ]
              })\
              .close_child()
 ```
 
-### Properties and Property Groups
+### Resources
 
-Resources carry metadata organized into **PropertyGroup** containers.
-
-Example: modifying well content after instantiating a plate:
+Once the template is defined, you can create an instance of the Resource. When a resource is created based on a template, it automatically creates instances of the child resources as well. For example,
 
 ```python
-with client.build_resource("Library Plate A", "96 Well Plate") as plate:
-    for well in plate.resource.children:
-        well.properties["content"].values["catalog_id"] = ""
-        well.properties["content"].values["SMILES"] = ""
+
+plate = client.create_resource(name="Plate A", template_name="Library Plate")
+
 ```
+
+will create a Resource based on the `Library Plate` template we created previously. Child resources will automatically be created mirroring the template. When these resources are created, the value of properties are set to the defaults defined in the template. 
+
+The object returned is always a pydantic object that used as a reference/local copy, any change to the data should be made through the client. There are 2 ways to create resources. The first as shown above, simply creates the resource and returns a pydantic model. The second is with a builder where a user can specify what values to change or even add children that are not defined in the template. For example,
+
+```python
+
+with client.build_resource(name="Plate B", template_name="Library Plate") as resource_builder:
+    resource = resource_builder.get_model()
+    # Make changes to the resource and its default parameters
+    resource.children["A1"].properties["status"].values["used"] = True
+    # Then update the builder with the newly edited object
+    resource_builder.set_model(resource) 
+
+```
+
+**Note**: Values in the database can _only_ be changed via builders. Simply changing the pydantic models will only change the local copy of the data. Builders are python context managers that open and clean up database connections. So if there are any validation errors that happen while modifying the database, the context manager rolls back the database transaction to a safe checkpoint
+
+**Note**: `create_resource` and `build_resource` serve different purposes, `create_resource` simply generates the resource based on default property values and returns the corresponding pydantic model. `build_resource` creates a context manager to allow a user to modify values
+
+You can also re-open an existing builder,
+
+```python
+
+with resource_builder:
+    # This is the same builder as the one created above
+    # Any changes here modify the resource called "Plate B"
+    ...
+    
+```
+
+If you have a pydantic model of a resource (either from querying the database or using `client.create_resource`) you can use it to create a builder from that,
+
+```python
+
+with client.build_resource(resource=resource) as rb2:
+    rb2.set_model(resource)
+    
+```
+
+When creating the resource     
 
 ## ProcessRun
 
