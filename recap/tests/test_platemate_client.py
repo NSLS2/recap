@@ -153,7 +153,7 @@ def test_platemate_via_client_child_steps(client):  # noqa
 
     # Resources
     with client.build_resource("DSI-poised", "PM Library Plate") as lib_plate:
-        for well in lib_plate.resource.children:
+        for well in lib_plate.resource.children.values():
             well.properties["content"].values.catalog_id = f"CAT-{well.name}"
             well.properties["content"].values.smiles = f"SMILES-{well.name}"
 
@@ -195,7 +195,7 @@ def test_platemate_via_client_child_steps(client):  # noqa
             if existing_children:
                 uow_inner.commit()
                 return
-            for child_tmpl in tmpl.children:
+            for child_tmpl in tmpl.children.values():
                 client.backend.create_resource(
                     child_tmpl.name, child_tmpl, parent_resource=res
                 )
@@ -244,13 +244,13 @@ def test_platemate_via_client_child_steps(client):  # noqa
         xtal_wells = sorted(
             client.backend.get_resource(
                 "pmtest", "PM Xtal Plate", expand=True
-            ).children,
+            ).children.values(),
             key=lambda w: w.name,
         )
         lib_children = sorted(
             client.backend.get_resource(
                 "DSI-poised", "PM Library Plate", expand=True
-            ).children,
+            ).children.values(),
             key=lambda w: w.name,
         )
         assert len(xtal_wells) == 3, "xtal wells not initialized"
@@ -278,10 +278,10 @@ def test_platemate_via_client_child_steps(client):  # noqa
         )
         # Use the explicitly created puck with pins (FGZ003) for harvesting
         puck_with_pins = next(
-            (p for p in puck_collection.children if p.name == "FGZ003"), None
+            (p for p in puck_collection.children.values() if p.name == "FGZ003"), None
         )
         assert puck_with_pins is not None, "FGZ003 puck not initialized"
-        puck_pins = sorted(puck_with_pins.children, key=lambda p: p.name)
+        puck_pins = sorted(puck_with_pins.children.values(), key=lambda p: p.name)
         assert len(puck_pins) >= 2, "puck pins not initialized"
         harvest_parent = next(step for step in prb.steps if step.name == "Harvesting")
         harvest_children_created = []

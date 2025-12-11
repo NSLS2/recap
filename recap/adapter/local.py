@@ -361,7 +361,7 @@ class LocalBackend(Backend):
             raise NoResultFound(
                 f"Parent template: {parent_resource_template.name} with id {parent_resource_template.id} not found"
             )
-        parent_template.children.append(template)
+        parent_template.children[template.name] = template
         self.session.add(template)
         self.session.flush()
         return ResourceTemplateRef.model_validate(template)
@@ -378,7 +378,7 @@ class LocalBackend(Backend):
         child_resources_results = self.session.scalars(children_stmt).all()
         if parent:
             for c in child_resources_results:
-                parent.children.append(c)
+                parent.children[c.name] = c
         self.session.add(parent)
         self.session.flush()
 

@@ -98,14 +98,13 @@ def test_container(db_session):
     child_container_a1 = Resource(name="A1", template=child_container_type)
     child_container_a2 = Resource(name="A2", template=child_container_type)
 
-    container.children.append(child_container_a1)
-    container.children.append(child_container_a2)
+    container.children[child_container_a1.name] = child_container_a1
+    container.children[child_container_a2.name] = child_container_a2
     db_session.commit()
 
     result = db_session.query(Resource).filter_by(name="TestContainer").first()
 
     assert len(result.children) == 2
-    assert result.children[0].name == "A1"
-    assert (
-        result.children[1].properties["ChildPropTest"].values["child_prop_test"] == 2.2
-    )
+    children = sorted(result.children.values(), key=lambda c: c.name)
+    assert children[0].name == "A1"
+    assert children[1].properties["ChildPropTest"].values["child_prop_test"] == 2.2

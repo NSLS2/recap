@@ -173,7 +173,7 @@ def test_fragment_screening_api(client):
         with client.build_resource(
             "DSI-poised", library_plate_template.name
         ) as lib_plate_builder:
-            for well in lib_plate_builder.resource.children:
+            for well in lib_plate_builder.resource.children.values():
                 well.properties["content"].values["SMILES"] = ""
                 well.properties["content"].values["catalog_id"] = ""
 

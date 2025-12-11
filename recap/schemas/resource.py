@@ -110,7 +110,7 @@ class ResourceTemplateSchema(CommonFields):
     version: str
     types: list[ResourceTypeSchema] = Field(default_factory=list)
     parent: Annotated[Self | None, SkipValidation] = Field(default=None, exclude=True)
-    children: list[Self] = Field(default_factory=list)
+    children: dict[str, Self] = Field(default_factory=dict)
     attribute_group_templates: list[AttributeGroupTemplateSchema]
 
 
@@ -126,10 +126,8 @@ class ResourceSlotSchema(CommonFields):
 class ResourceSchema(CommonFields):
     name: str
     template: ResourceTemplateSchema
-    parent: Annotated["ResourceSchema | None", SkipValidation] = Field(
-        default=None, exclude=True
-    )
-    children: list["ResourceSchema"]
+    parent: Annotated[Self | None, SkipValidation] = Field(default=None, exclude=True)
+    children: dict[str, Self]
     properties: BaseModel | dict[str, PropertySchema]
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
 

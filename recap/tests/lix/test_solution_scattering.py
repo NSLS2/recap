@@ -100,7 +100,9 @@ def test_solution_scattering_sample_prep(db_session):
         db_session.add(well_resource_template)
         well_resource_template.attribute_group_templates.append(well_data)
         # db_session.add(well_resource_template)
-        sample_plate_96_well.children.append(well_resource_template)
+        sample_plate_96_well.children[well_resource_template.name] = (
+            well_resource_template
+        )
     db_session.add(sample_plate_96_well)
     db_session.commit()
 
@@ -119,7 +121,7 @@ def test_solution_scattering_sample_prep(db_session):
             attribute_templates=[sample_name, buffer_name, volume],
         )
         well_resource_template.attribute_group_templates.append(sample_well_data)
-        sample_holder.children.append(well_resource_template)
+        sample_holder.children[well_resource_template.name] = well_resource_template
         db_session.add(well_resource_template)
         # db_session.flush()
     db_session.add(sample_holder)

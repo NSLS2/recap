@@ -64,8 +64,8 @@ def test_resource_initialization_from_template(db_session):
     assert set(resource.properties.keys()) == {"Settings"}
     settings = resource.properties["Settings"]
     assert settings.values["Voltage"] == 5
-    assert len({id(child) for child in resource.children}) == 1
-    child = resource.children[0]
+    assert len({id(child) for child in resource.children.values()}) == 1
+    child = next(iter(resource.children.values()))
     assert child.template is child_template
     assert child.name == child_template.name
 
@@ -196,7 +196,7 @@ def test_resource_children_respect_max_depth(db_session):
     db_session.add(resource)
     db_session.flush()
 
-    assert resource.children == []
+    assert resource.children == {}
 
 
 def test_property_values_reject_unknown_keys(db_session):

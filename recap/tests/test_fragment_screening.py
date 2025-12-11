@@ -110,14 +110,14 @@ def test_fragment_screening(db_session):
         well.attribute_group_templates.append(used)
         well.attribute_group_templates.append(content_attr)
         db_session.add(well)
-        lib_plate_1536_template.children.append(well)
+        lib_plate_1536_template.children[well.name] = well
 
     db_session.commit()
     statement = select(ResourceTemplate).where(
         ResourceTemplate.name == "Library Plate 1536"
     )
     lib_plate_1536_template = db_session.scalars(statement).one()
-    assert lib_plate_1536_template.children[0].name == "A01"
+    assert lib_plate_1536_template.children["A01"].name == "A01"
 
     # Create a library plate resource
     lib_plate = Resource(
@@ -129,7 +129,7 @@ def test_fragment_screening(db_session):
 
     statement = select(Resource).where(Resource.name == "Test LP1536")
     lib_plate = db_session.scalars(statement).one()
-    assert lib_plate.children[0].template.name == "A01"
+    assert lib_plate.children["A01"].template.name == "A01"
     assert lib_plate.properties["LB1536_dimensions"].values["rows"] == 32
 
     from recap.db.attribute import (
@@ -189,7 +189,7 @@ def test_fragment_screening(db_session):
         echo_pos_attr.attribute_templates.append(x_offset)
         echo_pos_attr.attribute_templates.append(y_offset)
         echo_pos_attr.attribute_templates.append(echo_pos)
-        xtal_plate_type.children.append(xtal_well_type)
+        xtal_plate_type.children[xtal_well_type.name] = xtal_well_type
 
     # - Create Xtal plate resource
     xtal_plate = Resource(name="TestXtalPlate", template=xtal_plate_type)
@@ -198,7 +198,7 @@ def test_fragment_screening(db_session):
 
     statement = select(Resource).where(Resource.name == "TestXtalPlate")
     xtal_plate = db_session.scalars(statement).one()
-    assert xtal_plate.children[0].template.name == "A1a"
+    assert xtal_plate.children["A1a"].template.name == "A1a"
 
     # - Create Process template
     from recap.db.process import (

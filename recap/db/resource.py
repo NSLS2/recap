@@ -96,11 +96,10 @@ class ResourceTemplate(TimestampMixin, Base):
         "ResourceTemplate", back_populates="children", remote_side=[id]
     )
 
-    children: Mapped[list["ResourceTemplate"]] = relationship(
+    children: Mapped[dict[str, "ResourceTemplate"]] = relationship(
         "ResourceTemplate",
         back_populates="parent",
-        # Order by length first so names like A1a precede A10a
-        order_by=(func.length(name), name),
+        collection_class=mapped_collection(lambda c: c.name),
     )
 
     attribute_group_templates: Mapped[list["AttributeGroupTemplate"]] = relationship(
@@ -155,10 +154,10 @@ class Resource(TimestampMixin, Base):
     parent: Mapped["Resource"] = relationship(
         "Resource", back_populates="children", remote_side=[id]
     )
-    children: Mapped[list["Resource"]] = relationship(
+    children: Mapped[dict[str, "Resource"]] = relationship(
         "Resource",
         back_populates="parent",
-        order_by=(func.length(name), name),
+        collection_class=mapped_collection(lambda c: c.name),
     )
     properties = relationship(
         "Property",
@@ -216,7 +215,7 @@ class Resource(TimestampMixin, Base):
             if not any(p.template.id == prop.id for name, p in self.properties.items()):
                 self.properties[prop.name] = Property(template=prop)
 
-        for child_ct in self.template.children:
+        for child_ct in self.template.children.values():
             if child_ct.id is not None and child_ct.id in visited:
                 continue
             Resource(

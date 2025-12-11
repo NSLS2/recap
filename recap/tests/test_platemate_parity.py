@@ -73,7 +73,7 @@ def test_platemate_workflow_with_recap(db_session):  # noqa
                 ),
             ],
         )
-        lib_plate_template.children.append(well_template)
+        lib_plate_template.children[well_template.name] = well_template
 
     xtal_plate_template = ResourceTemplate(
         name="Platemate Xtal Plate",
@@ -157,7 +157,7 @@ def test_platemate_workflow_with_recap(db_session):  # noqa
                 ),
             ],
         )
-        xtal_plate_template.children.append(xtal_template)
+        xtal_plate_template.children[xtal_template.name] = xtal_template
 
     puck_template = ResourceTemplate(
         name="Platemate Puck",
@@ -182,7 +182,7 @@ def test_platemate_workflow_with_recap(db_session):  # noqa
                 )
             ],
         )
-        puck_template.children.append(pin_template)
+        puck_template.children[pin_template.name] = pin_template
 
         process_template = ProcessTemplate(
             name=f"Platemate Workflow {suffix}", version="1.0"
@@ -266,9 +266,12 @@ def test_platemate_workflow_with_recap(db_session):  # noqa
     process_run.resources[xtal_slot] = xtal_plate
     process_run.resources[puck_slot] = puck
 
-    library_wells = sorted(lib_plate.children, key=lambda w: w.name)
-    xtal_wells = sorted(xtal_plate.children, key=lambda w: w.name)
-    pins = sorted(puck.children, key=lambda p: p.properties["mount"].values["position"])
+    library_wells = sorted(lib_plate.children.values(), key=lambda w: w.name)
+    xtal_wells = sorted(xtal_plate.children.values(), key=lambda w: w.name)
+    pins = sorted(
+        puck.children.values(),
+        key=lambda p: p.properties["mount"].values["position"],
+    )
 
     sample_meta = [
         {"catalog_id": "CAT-001", "smiles": "CCO"},
