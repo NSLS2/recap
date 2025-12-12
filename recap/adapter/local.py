@@ -38,6 +38,7 @@ from recap.dsl.query import QuerySpec, SchemaT
 from recap.schemas.attribute import AttributeGroupRef, AttributeTemplateSchema
 from recap.schemas.process import (
     CampaignSchema,
+    ProcessRunRef,
     ProcessRunSchema,
     ProcessTemplateRef,
     ProcessTemplateSchema,
@@ -61,8 +62,12 @@ from recap.utils.dsl import (
 SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
     CampaignSchema: Campaign,
     ResourceTemplateSchema: ResourceTemplate,
+    ResourceTemplateRef: ResourceTemplate,
+    ProcessRunRef: ProcessRun,
     ProcessRunSchema: ProcessRun,
+    ProcessTemplateRef: ProcessTemplate,
     ResourceSchema: Resource,
+    ResourceRef: Resource,
     ProcessTemplateSchema: ProcessTemplate,
 }
 
@@ -890,36 +895,42 @@ class LocalBackend(Backend):
     def _relationship_loaders(self, schema: type[SchemaT], preloads: list[str]):
         model = SCHEMA_MODEL_MAPPING[schema]
         opts = []
+        if model is Resource and schema is ResourceRef:
+            opts.append(
+                selectinload(Resource.template).selectinload(ResourceTemplate.types)
+            )
+        if model is ResourceTemplate and schema is ResourceTemplateRef:
+            opts.append(selectinload(ResourceTemplate.types))
+        if model is ProcessRun and schema in {ProcessRunRef, ProcessRunSchema}:
+            opts.append(selectinload(ProcessRun.template))
         for name in preloads:
-            if model is ProcessRunSchema and name == "steps":
-                opts.append(
-                    selectinload(ProcessRun.steps)
-                    .selectinload(Step.children)
-                    .selectinload(Step.parameters)
-                )
-            elif model is ProcessRunSchema and name == "steps.parameters":
-                opts.append(
-                    selectinload(ProcessRun.steps)
-                    .selectinload(Step.parameters)
-                    .selectinload(Parameter._values)
-                )
-            elif model is ProcessRunSchema and name == "resources":
-                opts.append(
-                    selectinload(ProcessRun.assignments).selectinload(
-                        ResourceAssignment.resource
-                    )
-                )
-            elif model is CampaignSchema and name == "process_run":
-                opts.append(selectinload(Campaign.process_runs))
-            elif model is ResourceSchema and name == "properties":
-                opts.append(
-                    selectinload(Resource.properties).selectinload(Property._values)
-                )
-            elif model is ResourceSchema and name == "children":
-                opts.append(selectinload(Resource.children))
-            elif model is ResourceSchema and name == "template":
-                opts.append(selectinload(Resource.template))
+            opts.append(self.get_opts_statements(schema, name))
         return opts
+
+    def get_opts_statements(self, schema, name):
+        statements = {
+            (ProcessRunSchema, "steps"): selectinload(ProcessRun.steps)
+            .selectinload(Step.children)
+            .selectinload(Step.parameters),
+            (ProcessRunSchema, "steps.parameters"): selectinload(ProcessRun.steps)
+            .selectinload(Step.parameters)
+            .selectinload(Parameter._values),
+            (ProcessRunSchema, "resources"): selectinload(
+                ProcessRun.assignments
+            ).selectinload(ResourceAssignment.resource),
+            (CampaignSchema, "process_run"): selectinload(Campaign.process_runs),
+            (ResourceSchema, "properties"): selectinload(
+                Resource.properties
+            ).selectinload(Property._values),
+            (ResourceRef, "properties"): selectinload(Resource.properties).selectinload(
+                Property._values
+            ),
+            (ResourceSchema, "children"): selectinload(Resource.children),
+            (ResourceRef, "children"): selectinload(Resource.children),
+            (ResourceSchema, "template"): selectinload(Resource.template),
+            (ResourceRef, "template"): selectinload(Resource.template),
+        }
+        return statements[(schema, name)]
 
     def update_process_run(self, process_run: ProcessRunSchema) -> ProcessRunSchema:
         with self._session_scope() as session:

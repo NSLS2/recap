@@ -3,13 +3,20 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
-from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
+from recap.schemas.resource import (
+    ResourceRef,
+    ResourceSchema,
+    ResourceTemplateRef,
+    ResourceTemplateSchema,
+)
 
 if TYPE_CHECKING:
     from recap.adapter import Backend
 from recap.schemas.process import (
     CampaignSchema,
+    ProcessRunRef,
     ProcessRunSchema,
+    ProcessTemplateRef,
     ProcessTemplateSchema,
 )
 
@@ -39,6 +46,7 @@ class BaseQuery(Generic[SchemaT]):
         self: Self,
         backend: "Backend",
         *,
+        model: type[SchemaT] | None = None,
         filters: dict[str, Any] | None = None,
         predicates: list[Any] | None = None,
         orderings: list[Any] | None = None,
@@ -47,6 +55,7 @@ class BaseQuery(Generic[SchemaT]):
         offset: int | None = None,
     ):
         self._backend = backend
+        self.model: type[SchemaT] = model or self.__class__.model  # type: ignore[attr-defined]
         self._filters = filters or {}
         self._predicates = predicates or []
         self._orderings = orderings or []
@@ -62,6 +71,7 @@ class BaseQuery(Generic[SchemaT]):
         """
         params = dict(
             backend=self._backend,
+            model=self.model,
             filters=dict(self._filters),
             predicates=list(self._predicates),
             orderings=list(self._orderings),
@@ -71,37 +81,26 @@ class BaseQuery(Generic[SchemaT]):
         )
         params.update(overrides)
         clone = self.__class__(**params)
-        # clone._limit = self._limit
-        # clone._offset = self._offset
         return clone
 
     def filter(self, **kwargs) -> "Self":
-        # stmt = self._statement.filter_by(**kwargs)
         new_filters = dict(self._filters)
         new_filters.update(kwargs)
         return self._clone(filters=new_filters)
 
     def where(self, *predicates) -> "Self":
-        # stmt = self._statement.where(*predicates)
         return self._clone(predicates=self._predicates + list(predicates))
 
     def order_by(self, *orderings) -> "Self":
-        # stmt = self._statement.order_by(*orderings)
         return self._clone(orderings=self._orderings + list(orderings))
 
     def limit(self, value: int) -> "Self":
-        # clone = self._clone()
-        # clone._limit = value
         return self._clone(limit=value)
 
     def offset(self, value: int) -> "Self":
-        # clone = self._clone()
-        # clone._offset = value
         return self._clone(offset=value)
 
     def include(self, relation_name) -> "Self":
-        # clone = self._clone()
-        # clone._preloads.append(loader)
         return self._clone(preloads=self._preloads + [relation_name])
 
     @property
@@ -139,9 +138,34 @@ class CampaignQuery(BaseQuery[CampaignSchema]):
         return self.include("process_run")
 
 
-class ProcessRunQuery(BaseQuery[ProcessRunSchema]):
+class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
     model = ProcessRunSchema
     default_schema = None
+
+    def __init__(
+        self,
+        backend: "Backend",
+        *,
+        expand: bool = True,
+        **kwargs,
+    ):
+        self._expand = expand
+        model = ProcessRunSchema if expand else ProcessRunRef
+        super().__init__(backend, model=model, **kwargs)
+
+    def _clone(self, **overrides) -> "ProcessRunQuery":
+        params = dict(
+            backend=self._backend,
+            expand=self._expand,
+            filters=dict(self._filters),
+            predicates=list(self._predicates),
+            orderings=list(self._orderings),
+            preloads=list(self._preloads),
+            limit=self._limit,
+            offset=self._offset,
+        )
+        params.update(overrides)
+        return self.__class__(**params)
 
     def include_steps(self, *, include_parameters: bool = False) -> "ProcessRunQuery":
         if include_parameters:
@@ -152,9 +176,34 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema]):
         return self.include("resources")
 
 
-class ResourceQuery(BaseQuery[ResourceSchema]):
+class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
     model = ResourceSchema
     default_schema = None
+
+    def __init__(
+        self,
+        backend: "Backend",
+        *,
+        expand: bool = True,
+        **kwargs,
+    ):
+        self._expand = expand
+        model = ResourceSchema if expand else ResourceRef
+        super().__init__(backend, model=model, **kwargs)
+
+    def _clone(self, **overrides) -> "ResourceQuery":
+        params = dict(
+            backend=self._backend,
+            expand=self._expand,
+            filters=dict(self._filters),
+            predicates=list(self._predicates),
+            orderings=list(self._orderings),
+            preloads=list(self._preloads),
+            limit=self._limit,
+            offset=self._offset,
+        )
+        params.update(overrides)
+        return self.__class__(**params)
 
     def include_template(self) -> "ResourceQuery":
         return self.include("template")
@@ -164,6 +213,31 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema]):
     model = ResourceTemplateSchema
     default_schema = None
 
+    def __init__(
+        self,
+        backend: "Backend",
+        *,
+        expand: bool = True,
+        **kwargs,
+    ):
+        self._expand = expand
+        model = ResourceTemplateSchema if expand else ResourceTemplateRef
+        super().__init__(backend, model=model, **kwargs)
+
+    def _clone(self, **overrides) -> "ResourceTemplateQuery":
+        params = dict(
+            backend=self._backend,
+            expand=self._expand,
+            filters=dict(self._filters),
+            predicates=list(self._predicates),
+            orderings=list(self._orderings),
+            preloads=list(self._preloads),
+            limit=self._limit,
+            offset=self._offset,
+        )
+        params.update(overrides)
+        return self.__class__(**params)
+
     def filter_by_types(self, type_list: list[str]) -> "ResourceTemplateQuery":
         return self.filter(types__names_in=type_list)
 
@@ -171,6 +245,31 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema]):
 class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema]):
     model = ProcessTemplateSchema
     default_schema = None
+
+    def __init__(
+        self,
+        backend: "Backend",
+        *,
+        expand: bool = True,
+        **kwargs,
+    ):
+        self._expand = expand
+        model = ProcessTemplateSchema if expand else ProcessTemplateRef
+        super().__init__(backend, model=model, **kwargs)
+
+    def _clone(self, **overrides) -> "ProcessTemplateQuery":
+        params = dict(
+            backend=self._backend,
+            expand=self._expand,
+            filters=dict(self._filters),
+            predicates=list(self._predicates),
+            orderings=list(self._orderings),
+            preloads=list(self._preloads),
+            limit=self._limit,
+            offset=self._offset,
+        )
+        params.update(overrides)
+        return self.__class__(**params)
 
 
 class QueryDSL:
@@ -180,14 +279,14 @@ class QueryDSL:
     def campaigns(self) -> CampaignQuery:
         return CampaignQuery(self.backend)
 
-    def process_runs(self) -> ProcessRunQuery:
-        return ProcessRunQuery(self.backend)
+    def process_runs(self, *, expand: bool = True) -> ProcessRunQuery:
+        return ProcessRunQuery(self.backend, expand=expand)
 
-    def process_templates(self) -> ProcessTemplateQuery:
-        return ProcessTemplateQuery(self.backend)
+    def process_templates(self, *, expand: bool = True) -> ProcessTemplateQuery:
+        return ProcessTemplateQuery(self.backend, expand=expand)
 
-    def resources(self) -> ResourceQuery:
-        return ResourceQuery(self.backend)
+    def resources(self, *, expand: bool = True) -> ResourceQuery:
+        return ResourceQuery(self.backend, expand=expand)
 
-    def resource_templates(self) -> ResourceTemplateQuery:
-        return ResourceTemplateQuery(self.backend)
+    def resource_templates(self, *, expand: bool = True) -> ResourceTemplateQuery:
+        return ResourceTemplateQuery(self.backend, expand=expand)

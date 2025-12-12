@@ -11,6 +11,8 @@ from recap.db.process import Direction, ProcessRun, ProcessTemplate, ResourceSlo
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate
 from recap.dsl.query import QueryDSL
+from recap.schemas.process import ProcessRunRef, ProcessTemplateRef
+from recap.schemas.resource import ResourceRef, ResourceTemplateRef
 
 
 def make_query(db_session):
@@ -131,3 +133,51 @@ def test_process_run_include_resources(db_session):
     assert loaded_run is not None
     assignment = next(iter(loaded_run.assigned_resources))
     assert assignment.resource.name.startswith("Resource-resources")
+
+
+def test_process_run_query_can_return_ref(db_session):
+    _, run = seed_process_run(db_session, name="ref-run")
+
+    ref = make_query(db_session).process_runs(expand=False).filter(id=run.id).first()
+
+    assert isinstance(ref, ProcessRunRef)
+    assert isinstance(ref.template, ProcessTemplateRef)
+    # Ref objects should not expose steps
+    assert not hasattr(ref, "steps")
+
+
+def test_process_template_query_can_return_ref(db_session):
+    _, run = seed_process_run(db_session, name="pt-ref")
+
+    ref = (
+        make_query(db_session)
+        .process_templates(expand=False)
+        .filter(id=run.template.id)
+        .first()
+    )
+
+    assert isinstance(ref, ProcessTemplateRef)
+    assert not hasattr(ref, "step_templates")
+
+
+def test_resource_queries_can_return_refs(db_session):
+    resource_type = ResourceType(name="rt")
+    resource_template = ResourceTemplate(name="rtmpl", version="1.0")
+    resource_template.types.append(resource_type)
+    resource = Resource(name="res-ref", template=resource_template)
+    db_session.add_all([resource_type, resource_template, resource])
+    db_session.commit()
+
+    res_ref = (
+        make_query(db_session).resources(expand=False).filter(id=resource.id).first()
+    )
+    tmpl_ref = (
+        make_query(db_session)
+        .resource_templates(expand=False)
+        .filter(id=resource_template.id)
+        .first()
+    )
+
+    assert isinstance(res_ref, ResourceRef)
+    assert isinstance(res_ref.template, ResourceTemplateRef)
+    assert isinstance(tmpl_ref, ResourceTemplateRef)

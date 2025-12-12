@@ -21,6 +21,13 @@ class ProcessTemplateSchema(CommonFields):
     resource_slots: list["ResourceSlotSchema"]
 
 
+class ProcessRunRef(CommonFields):
+    name: str
+    description: str
+    campaign_id: UUID
+    template: ProcessTemplateRef
+
+
 class ProcessRunSchema(CommonFields):
     name: str
     description: str
