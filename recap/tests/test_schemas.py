@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 
 from recap.schemas.attribute import (
+    AttributeEnumOptionSchema,
     AttributeGroupTemplateSchema,
     AttributeTemplateSchema,
     AttributeTemplateValidator,
@@ -18,7 +19,11 @@ def _now():
 
 
 def _attribute_template_schema(
-    name: str, value_type: str, default_value, unit: str | None = None
+    name: str,
+    value_type: str,
+    default_value,
+    unit: str | None = None,
+    options: list[AttributeEnumOptionSchema] | None = None,
 ):
     stamp = _now()
     return AttributeTemplateSchema(
@@ -30,6 +35,7 @@ def _attribute_template_schema(
         value_type=value_type,
         unit=unit,
         default_value=default_value,
+        enum_options=options or [],
     )
 
 
@@ -42,6 +48,20 @@ def _attribute_group_schema(name: str, templates: list[AttributeTemplateSchema])
         name=name,
         slug=name.lower(),
         attribute_templates=templates,
+    )
+
+
+def _enum_option_schema(
+    value: str, label: str | None = None, payload: dict | None = None
+):
+    stamp = _now()
+    return AttributeEnumOptionSchema(
+        id=uuid4(),
+        create_date=stamp,
+        modified_date=stamp,
+        value=value,
+        label=label,
+        payload=payload,
     )
 
 
@@ -69,6 +89,18 @@ def test_attribute_template_validator_coerces_and_rejects_defaults():
         AttributeTemplateValidator(name="When", type="datetime", default="not-a-date")
 
 
+def test_attribute_template_validator_enforces_enum_options():
+    validator = AttributeTemplateValidator(
+        name="drop_position", type="enum", options=["c", "ul"], default="ul"
+    )
+    assert validator.default == "ul"
+
+    with pytest.raises(ValueError):
+        AttributeTemplateValidator(
+            name="drop_position", type="enum", options=["c"], default="bogus"
+        )
+
+
 def test_parameter_schema_coerces_values_and_rejects_unknown():
     voltage = _attribute_template_schema("Voltage", "int", 5)
     enabled = _attribute_template_schema("Enabled", "bool", False)
@@ -92,6 +124,34 @@ def test_parameter_schema_coerces_values_and_rejects_unknown():
             modified_date=stamp,
             template=group_schema,
             values={"Voltage": "5", "Unknown": 1},
+        )
+
+
+def test_parameter_schema_validates_enum_option_membership():
+    center = _enum_option_schema("c")
+    upper_left = _enum_option_schema("ul")
+    drop_pos = _attribute_template_schema(
+        "drop_position", "enum", "c", options=[center, upper_left]
+    )
+    group_schema = _attribute_group_schema("Positions", [drop_pos])
+    stamp = _now()
+
+    schema = ParameterSchema(
+        id=uuid4(),
+        create_date=stamp,
+        modified_date=stamp,
+        template=group_schema,
+        values={"drop_position": "ul"},
+    )
+    assert schema.values.drop_position == "ul"
+
+    with pytest.raises(ValueError):
+        ParameterSchema(
+            id=uuid4(),
+            create_date=stamp,
+            modified_date=stamp,
+            template=group_schema,
+            values={"drop_position": "bogus"},
         )
 
 

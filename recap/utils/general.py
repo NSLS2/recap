@@ -72,6 +72,12 @@ def _to_array(v):
     return MutableList(items)
 
 
+def _to_enum_value(v):
+    if v is None:
+        return None
+    return str(v)
+
+
 CONVERTERS = {
     "int": int,
     "float": float,
@@ -79,6 +85,7 @@ CONVERTERS = {
     "str": str,
     "datetime": _to_datetime,
     "array": _to_array,
+    "enum": _to_enum_value,
 }
 
 TARGET_FIELD = {
@@ -88,6 +95,7 @@ TARGET_FIELD = {
     "str": "str_value",
     "datetime": "datetime_value",
     "array": "array_value",
+    "enum": "enum_option_id",
 }
 
 

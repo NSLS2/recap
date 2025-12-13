@@ -1,7 +1,12 @@
 import pytest
 
 from recap.adapter.local import LocalBackend
-from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate, AttributeValue
+from recap.db.attribute import (
+    AttributeEnumOption,
+    AttributeGroupTemplate,
+    AttributeTemplate,
+    AttributeValue,
+)
 from recap.db.resource import Resource, ResourceTemplate
 from recap.schemas.resource import ResourceTemplateSchema
 
@@ -45,6 +50,39 @@ def test_attribute_value_requires_target_owner(db_session):
     with pytest.raises(ValueError) as excinfo:
         AttributeValue(template=attr)  # neither parameter nor property set
     assert "Parameter or Property must be set" in str(excinfo.value)
+
+
+def test_enum_attribute_value_maps_options_and_payload(db_session):
+    tmpl = ResourceTemplate(name="Dropper")
+    group = AttributeGroupTemplate(name="Positions", resource_template=tmpl)
+    attr = AttributeTemplate(
+        name="drop_position",
+        value_type="enum",
+        default_value="c",
+        attribute_group_template=group,
+        enum_options=[
+            AttributeEnumOption(value="c", payload={"coords": [0.5, 0.5]}),
+            AttributeEnumOption(value="ul", payload={"coords": [0.0, 1.0]}),
+        ],
+    )
+    db_session.add_all([tmpl, group, attr])
+    db_session.flush()
+
+    res = Resource(name="R1", template=tmpl)
+    db_session.add(res)
+    db_session.flush()
+
+    av = res.properties["Positions"]._values["drop_position"]
+    assert av.value == "c"
+    assert av.enum_payload == {"coords": [0.5, 0.5]}
+    assert av.enum_option_id is not None
+
+    av.set_value("ul")
+    assert av.value == "ul"
+    assert av.enum_payload == {"coords": [0.0, 1.0]}
+
+    with pytest.raises(ValueError):
+        av.set_value("bogus")
 
 
 def test_attribute_value_unsupported_type_prevents_resource_init(db_session):

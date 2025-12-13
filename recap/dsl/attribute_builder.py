@@ -26,10 +26,15 @@ class AttributeGroupBuilder(Generic[ParentType]):
         )
 
     def add_attribute(
-        self, attr_name: str, value_type: str, unit: str, default: Any
+        self,
+        attr_name: str,
+        value_type: str,
+        unit: str,
+        default: Any,
+        options: list[Any] | None = None,
     ) -> "AttributeGroupBuilder[ParentType]":
         self.backend.add_attribute(
-            attr_name, value_type, unit, default, self._attribute_group
+            attr_name, value_type, unit, default, self._attribute_group, options
         )
         return self
 

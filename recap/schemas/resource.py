@@ -84,6 +84,7 @@ class PropertySchema(CommonFields):
                 name=attr_tmpl.name,
                 type=attr_tmpl.value_type,
                 unit=attr_tmpl.unit,
+                options=getattr(attr_tmpl, "enum_options", []),
                 default=raw_value,
             )
             coerced[name] = validator.default

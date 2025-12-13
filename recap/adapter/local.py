@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.functions import count
 
 from recap.adapter import Backend, UnitOfWork
-from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
+from recap.db.attribute import (
+    AttributeEnumOption,
+    AttributeGroupTemplate,
+    AttributeTemplate,
+)
 from recap.db.base import Base
 from recap.db.campaign import Campaign
 from recap.db.exceptions import ValidationError
@@ -109,6 +113,32 @@ class LocalBackend(Backend):
         if self._session is session:
             session.close()
             self._session = None
+
+    def _normalize_enum_option(self, option: Any) -> AttributeEnumOption:
+        """
+        Coerce a variety of option payloads into an AttributeEnumOption instance.
+        Accepts an AttributeEnumOption, dict-like with 'value', or any object with a 'value' attr.
+        """
+        if isinstance(option, AttributeEnumOption):
+            return option
+        if isinstance(option, dict):
+            if "value" not in option:
+                raise ValidationError("Enum option dict must include a 'value'")
+            return AttributeEnumOption(
+                value=str(option["value"]),
+                label=option.get("label"),
+                payload=option.get("payload"),
+            )
+        value = getattr(option, "value", None)
+        label = getattr(option, "label", None)
+        payload = getattr(option, "payload", None)
+        if value is not None:
+            return AttributeEnumOption(
+                value=str(value),
+                label=label,
+                payload=payload,
+            )
+        return AttributeEnumOption(value=str(option))
 
     def close(self):
         """Close any active session if it is still open."""
@@ -301,7 +331,9 @@ class LocalBackend(Backend):
         unit: str,
         default: Any,
         attribute_group_ref: AttributeGroupRef,
+        options: list[Any] | None = None,
     ) -> AttributeTemplateSchema:
+        options = options or []
         filter_params: dict[str, Any] = {
             "name": name,
             "value_type": value_type,
@@ -312,9 +344,27 @@ class LocalBackend(Backend):
         attribute_template = self.session.execute(
             select(AttributeTemplate).filter_by(**filter_params)
         ).scalar_one_or_none()
+        enum_options = (
+            [self._normalize_enum_option(o) for o in options]
+            if value_type == "enum"
+            else []
+        )
         if attribute_template is None:
-            attribute_template = AttributeTemplate(**filter_params)
+            attribute_template = AttributeTemplate(
+                **filter_params, enum_options=enum_options
+            )
             self.session.add(attribute_template)
+            self.session.flush()
+        else:
+            if value_type == "enum" and enum_options:
+                existing = {opt.value: opt for opt in attribute_template.enum_options}
+                for opt in enum_options:
+                    current = existing.get(opt.value)
+                    if current:
+                        current.label = opt.label
+                        current.payload = opt.payload
+                    else:
+                        attribute_template.enum_options.append(opt)
             self.session.flush()
 
         return AttributeTemplateSchema.model_validate(attribute_template)

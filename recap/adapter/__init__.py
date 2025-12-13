@@ -99,6 +99,7 @@ class Backend(Protocol):
         unit: str,
         default: Any,
         attribute_group_ref: AttributeGroupRef,
+        options: list[Any] | None = None,
     ) -> AttributeTemplateSchema: ...
 
     def remove_attribute(self, name: str): ...

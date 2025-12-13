@@ -1,4 +1,9 @@
-from .attribute import AttributeGroupTemplate, AttributeTemplate, AttributeValue
+from .attribute import (
+    AttributeEnumOption,
+    AttributeGroupTemplate,
+    AttributeTemplate,
+    AttributeValue,
+)
 from .process import ProcessRun, ProcessTemplate
 from .resource import Property, Resource, ResourceTemplate, ResourceType
 from .step import (
@@ -13,6 +18,7 @@ __all__ = [
     "Property",
     "Parameter",
     "AttributeTemplate",
+    "AttributeEnumOption",
     "AttributeGroupTemplate",
     "AttributeValue",
     "Step",

@@ -191,7 +191,9 @@ class StepTemplateBuilder:
             agb = AttributeGroupBuilder(group_name=group_key, parent=self)
             for param in params:
                 attr = AttributeTemplateValidator.model_validate(param)
-                agb.add_attribute(attr.name, attr.type, attr.unit, attr.default)
+                agb.add_attribute(
+                    attr.name, attr.type, attr.unit, attr.default, attr.options
+                )
             agb.close_group()
         return self
 
