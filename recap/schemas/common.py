@@ -12,6 +12,7 @@ class ValueType(str, Enum):
     FLOAT = "float"
     DATETIME = "datetime"
     ARRAY = "array"
+    ENUM = "enum"
 
 
 class StepStatus(str, Enum):
@@ -28,6 +29,7 @@ TYPE_MAP = {
     ValueType.FLOAT: float,
     ValueType.DATETIME: datetime,
     ValueType.ARRAY: list,
+    ValueType.ENUM: str,
 }
 
 # DefaultValue = Union[int, float, bool, str]
