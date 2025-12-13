@@ -10,6 +10,8 @@ class ValueType(str, Enum):
     STR = "str"
     BOOL = "bool"
     FLOAT = "float"
+    DATETIME = "datetime"
+    ARRAY = "array"
 
 
 class StepStatus(str, Enum):
@@ -24,10 +26,12 @@ TYPE_MAP = {
     ValueType.STR: str,
     ValueType.BOOL: bool,
     ValueType.FLOAT: float,
+    ValueType.DATETIME: datetime,
+    ValueType.ARRAY: list,
 }
 
 # DefaultValue = Union[int, float, bool, str]
-DefaultValue = int | float | bool | str
+DefaultValue = int | float | bool | str | datetime | list | None
 
 
 class Attribute(BaseModel):
