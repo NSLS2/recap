@@ -42,6 +42,9 @@ def _to_bool(v):
 ISO_FORMATS = (
     "%Y-%m-%dT%H:%M:%S.%fZ",
     "%Y-%m-%dT%H:%M:%SZ",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S.%f%z",
+    "%Y-%m-%dT%H:%M:%S%z",
     "%Y-%m-%d %H:%M:%S",
     "%Y-%m-%d",
 )
@@ -81,14 +84,41 @@ CONVERTERS = {
     "array": _to_array,
 }
 
-TARGET_FIELD = {
-    "int": "int_value",
-    "float": "float_value",
-    "bool": "bool_value",
-    "str": "str_value",
-    "datetime": "datetime_value",
-    "array": "array_value",
-}
+
+def to_json_compatible(value_type: str, value: Any) -> Any:
+    """
+    Coerce a raw value to the declared type and then make it JSON-serializable.
+    """
+    if value is None:
+        return None
+    try:
+        converter = CONVERTERS[value_type]
+    except KeyError:
+        raise ValueError(f"Unsupported property type: {value_type}") from None
+
+    coerced = converter(value)
+    if isinstance(coerced, datetime):
+        return coerced.isoformat()
+    if isinstance(coerced, MutableList):
+        return list(coerced)
+    return coerced
+
+
+def from_json_value(value_type: str, value: Any) -> Any:
+    """
+    Convert a stored JSON value back to the declared Python type.
+    """
+    if value is None:
+        return None
+    try:
+        converter = CONVERTERS[value_type]
+    except KeyError:
+        raise ValueError(f"Unsupported property type: {value_type}") from None
+
+    coerced = converter(value)
+    if isinstance(coerced, MutableList):
+        return list(coerced)
+    return coerced
 
 
 def generate_uppercase_alphabets(n: int) -> list:

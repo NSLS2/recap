@@ -301,6 +301,7 @@ class LocalBackend(Backend):
         unit: str,
         default: Any,
         attribute_group_ref: AttributeGroupRef,
+        metadata: dict[str, Any] | None = None,
     ) -> AttributeTemplateSchema:
         filter_params: dict[str, Any] = {
             "name": name,
@@ -308,6 +309,7 @@ class LocalBackend(Backend):
             "unit": unit,
             "default_value": default,
             "attribute_group_template_id": attribute_group_ref.id,
+            "metadata_json": metadata or {},
         }
         attribute_template = self.session.execute(
             select(AttributeTemplate).filter_by(**filter_params)
@@ -662,7 +664,12 @@ class LocalBackend(Backend):
         }
         for _name, param in step.parameters.items():
             tmpl_key = tuple(
-                (vt.name, vt.slug, vt.value_type)
+                (
+                    vt.name,
+                    vt.slug,
+                    vt.value_type,
+                    vt.metadata_json,
+                )
                 for vt in param.template.attribute_templates
             )
             values_model = build_param_values_model(param.template.slug, tmpl_key)

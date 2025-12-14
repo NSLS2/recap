@@ -14,6 +14,7 @@ class AttributeTemplateSchema(CommonFields):
     value_type: TypeName
     unit: str | None
     default_value: Any
+    metadata: dict[str, Any] | None = Field(default_factory=dict, alias="metadata_json")
 
 
 class AttributeGroupRef(CommonFields):
@@ -33,6 +34,7 @@ class AttributeTemplateValidator(BaseModel):
     type: TypeName
     unit: str | None = ""
     default: Any = Field(default=None)
+    metadata: dict[str, Any] | None = Field(default_factory=dict)
 
     @field_validator("default")
     @classmethod

@@ -1,21 +1,18 @@
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
     JSON,
     CheckConstraint,
-    DateTime,
     ForeignKey,
     UniqueConstraint,
     event,
-    func,
 )
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.ext.mutable import MutableList
-from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
+from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from recap.utils.general import CONVERTERS, TARGET_FIELD, make_slug
+from recap.utils.general import from_json_value, make_slug, to_json_compatible
 
 if TYPE_CHECKING:
     from recap.db.resource import ResourceTemplate
@@ -88,6 +85,9 @@ class AttributeTemplate(TimestampMixin, Base):
     value_type: Mapped[str] = mapped_column(nullable=False)
     unit: Mapped[str | None] = mapped_column(nullable=True)
     default_value: Mapped[str | None] = mapped_column(nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON), nullable=True, default=dict
+    )
 
     attribute_group_template_id: Mapped[UUID] = mapped_column(
         ForeignKey("attribute_group_template.id")
@@ -125,62 +125,30 @@ class AttributeValue(TimestampMixin, Base):
     property_id: Mapped[UUID] = mapped_column(ForeignKey("property.id"), nullable=True)
     property = relationship("Property", back_populates="_values")
 
-    int_value: Mapped[int | None] = mapped_column(nullable=True)
-    float_value: Mapped[float | None] = mapped_column(nullable=True)
-    bool_value: Mapped[bool | None] = mapped_column(nullable=True)
-    str_value: Mapped[str | None] = mapped_column(nullable=True)
-    datetime_value: Mapped[datetime | None] = mapped_column(
-        DateTime(), nullable=True, default=func.now()
-    )
-    array_value: Mapped[list[Any] | None] = mapped_column(
-        MutableList.as_mutable(JSON), nullable=True
+    value_json: Mapped[Any | None] = mapped_column("value", JSON, nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON), nullable=True, default=dict
     )
 
     def __init__(self, *args, **kwargs):
+        raw_value = kwargs.pop("value", None)
+        raw_metadata = kwargs.pop("metadata", None)
         super().__init__(*args, **kwargs)
-        value = kwargs.pop("value", self.template.default_value)
-        self.set_value(value)
-
-    @validates(
-        "int_value",
-        "float_value",
-        "bool_value",
-        "str_value",
-        "datetime_value",
-        "array_value",
-    )
-    def _validate_exclusive_value(self, key, value):
-        if value is not None:
-            current_type = self.template.value_type if self.template else None
-            if key != f"{current_type}_value":
-                raise ValueError(
-                    f"{key} cannot be set for property type {current_type}"
-                )
-        return value
+        if self.metadata_json is None:
+            self.metadata_json = {}
+        if raw_metadata is not None:
+            self.metadata_json.update(raw_metadata)
+        if raw_value is None and self.template:
+            raw_value = self.template.default_value
+        if raw_value is not None:
+            self.set_value(raw_value)
 
     def set_value(self, value):
         if not self.parameter and not self.property:
             raise ValueError("Parameter or Property must be set before assigning value")
 
-        for f in (
-            "int_value",
-            "float_value",
-            "bool_value",
-            "str_value",
-            "datetime_value",
-            "array_value",
-        ):
-            setattr(self, f, None)
         vt = self.template.value_type
-        try:
-            converter = CONVERTERS[vt]
-        except KeyError:
-            raise ValueError(
-                f"Unsupported property type: {self.template.value_type}"
-            ) from None
-
-        converted = converter(value)
-        setattr(self, TARGET_FIELD[vt], converted)
+        self.value_json = to_json_compatible(vt, value)
 
     @hybrid_property
     def value(self):
@@ -188,7 +156,7 @@ class AttributeValue(TimestampMixin, Base):
             return None
 
         vt = self.template.value_type
-        return getattr(self, f"{vt}_value", None)
+        return from_json_value(vt, self.value_json)
 
     @value.setter
     def value(self, v):

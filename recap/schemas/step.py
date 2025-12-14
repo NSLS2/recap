@@ -13,6 +13,15 @@ from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
 from recap.utils.dsl import AliasMixin, build_param_values_model
 
 
+def _attr_metadata(vt: Any) -> dict | None:
+    meta = getattr(vt, "metadata_json", None)
+    if meta is None:
+        maybe = getattr(vt, "metadata", None)
+        if isinstance(maybe, dict):
+            meta = maybe
+    return meta
+
+
 class StepTemplateRef(CommonFields):
     name: str
 
@@ -33,7 +42,13 @@ class ParameterSchema(CommonFields):
         if isinstance(data, Parameter):
             tmpl = data.template
             tmpl_key = tuple(
-                (vt.name, vt.slug, vt.value_type) for vt in tmpl.attribute_templates
+                (
+                    vt.name,
+                    vt.slug,
+                    vt.value_type,
+                    _attr_metadata(vt),
+                )
+                for vt in tmpl.attribute_templates
             )
             values_model = build_param_values_model(tmpl.slug or tmpl.name, tmpl_key)
             raw_values = {av.template.name: av.value for av in data._values.values()}
@@ -48,7 +63,13 @@ class ParameterSchema(CommonFields):
             tmpl = data.get("template")
             if tmpl:
                 tmpl_key = tuple(
-                    (vt.name, vt.slug, vt.value_type) for vt in tmpl.attribute_templates
+                    (
+                        vt.name,
+                        vt.slug,
+                        vt.value_type,
+                        _attr_metadata(vt),
+                    )
+                    for vt in tmpl.attribute_templates
                 )
                 values_model = build_param_values_model(
                     tmpl.slug or tmpl.name, tmpl_key
@@ -71,7 +92,13 @@ class ParameterSchema(CommonFields):
                     f"{', '.join(sorted(unknown))}"
                 )
             tmpl_key = tuple(
-                (vt.name, vt.slug, vt.value_type) for vt in template.attribute_templates
+                (
+                    vt.name,
+                    vt.slug,
+                    vt.value_type,
+                    _attr_metadata(vt),
+                )
+                for vt in template.attribute_templates
             )
             values_model = build_param_values_model(
                 template.slug or template.name, tmpl_key
@@ -109,6 +136,7 @@ class ParameterSchema(CommonFields):
                 name=attr_tmpl.name,
                 type=attr_tmpl.value_type,
                 unit=attr_tmpl.unit,
+                metadata=_attr_metadata(attr_tmpl),
                 default=raw_value,
             )
             coerced[name] = validator.default  # already converted by coerce_default

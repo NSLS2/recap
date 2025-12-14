@@ -351,7 +351,13 @@ class ResourceTemplateBuilder:
             agb = AttributeGroupBuilder(group_name=group_key, parent=self)
             for prop in props:
                 attr = AttributeTemplateValidator.model_validate(prop)
-                agb.add_attribute(attr.name, attr.type, attr.unit, attr.default)
+                agb.add_attribute(
+                    attr.name,
+                    attr.type,
+                    attr.unit,
+                    attr.default,
+                    metadata=attr.metadata,
+                )
             agb.close_group()
         return self
 

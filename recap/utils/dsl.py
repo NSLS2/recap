@@ -1,5 +1,4 @@
 from datetime import datetime
-from functools import lru_cache
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from sqlalchemy.inspection import inspect
@@ -143,12 +142,17 @@ def lock_instance_fields(model: BaseModel, fields: set[str]) -> BaseModel:
     return model
 
 
-@lru_cache(maxsize=256)
 def build_param_values_model(group_slug: str, attr_templates):
     fields: dict[str, tuple] = {}
-    for name, slug, value_type in attr_templates:
+    for name, slug, value_type, metadata in attr_templates:
         pytype = map_dtype_to_pytype(value_type)
-        fields[slug] = (pytype | None, Field(default=None, alias=name))
+        meta = metadata or {}
+        ge = meta.get("min") if value_type in {"int", "float"} else None
+        le = meta.get("max") if value_type in {"int", "float"} else None
+        fields[slug] = (
+            pytype | None,
+            Field(default=None, alias=name, ge=ge, le=le),
+        )
 
     return create_model(
         f"{group_slug}_values",

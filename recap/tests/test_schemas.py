@@ -18,7 +18,11 @@ def _now():
 
 
 def _attribute_template_schema(
-    name: str, value_type: str, default_value, unit: str | None = None
+    name: str,
+    value_type: str,
+    default_value,
+    unit: str | None = None,
+    metadata: dict | None = None,
 ):
     stamp = _now()
     return AttributeTemplateSchema(
@@ -30,6 +34,7 @@ def _attribute_template_schema(
         value_type=value_type,
         unit=unit,
         default_value=default_value,
+        metadata=metadata or {},
     )
 
 
@@ -140,4 +145,21 @@ def test_parameter_schema_rejects_uncoercible_values():
             modified_date=stamp,
             template=group_schema,
             values={"Duration": "not-an-int"},
+        )
+
+
+def test_parameter_schema_respects_metadata_bounds():
+    voltage = _attribute_template_schema(
+        "Voltage", "int", 5, metadata={"min": 0, "max": 10}
+    )
+    group_schema = _attribute_group_schema("Inputs", [voltage])
+    stamp = _now()
+
+    with pytest.raises(ValueError):
+        ParameterSchema(
+            id=uuid4(),
+            create_date=stamp,
+            modified_date=stamp,
+            template=group_schema,
+            values={"Voltage": 11},
         )

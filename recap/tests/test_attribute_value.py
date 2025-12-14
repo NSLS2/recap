@@ -6,7 +6,7 @@ from recap.db.resource import Resource, ResourceTemplate
 from recap.schemas.resource import ResourceTemplateSchema
 
 
-def test_attribute_value_coercion_and_exclusive_field(db_session):
+def test_attribute_value_coercion_and_json_storage(db_session):
     tmpl = ResourceTemplate(name="Machine")
     group = AttributeGroupTemplate(name="Specs", resource_template=tmpl)
     attr = AttributeTemplate(
@@ -23,11 +23,14 @@ def test_attribute_value_coercion_and_exclusive_field(db_session):
     db_session.flush()
 
     av = res.properties["Specs"]._values["Voltage"]
-    assert av.int_value == 10
     assert av.value == 10
+    assert av.value_json == 10
+    assert av.metadata_json == {}
 
-    with pytest.raises(ValueError):
-        av.bool_value = True  # wrong field for int type
+    av.value = "12"
+    db_session.flush()
+    assert av.value == 12
+    assert av.value_json == 12
 
 
 def test_attribute_value_requires_target_owner(db_session):
@@ -61,6 +64,28 @@ def test_attribute_value_unsupported_type_prevents_resource_init(db_session):
 
     with pytest.raises(ValueError):
         Resource(name="BrokenRes", template=tmpl)
+
+
+def test_attribute_value_serializes_datetime_to_iso(db_session):
+    tmpl = ResourceTemplate(name="Timey")
+    group = AttributeGroupTemplate(name="Props", resource_template=tmpl)
+    attr = AttributeTemplate(
+        name="When",
+        value_type="datetime",
+        default_value="2024-01-01T00:00:00Z",
+        attribute_group_template=group,
+    )
+    db_session.add_all([tmpl, group, attr])
+    db_session.flush()
+
+    res = Resource(name="Timed", template=tmpl)
+    db_session.add(res)
+    db_session.flush()
+
+    av = res.properties["Props"]._values["When"]
+    assert isinstance(av.value_json, str)
+    assert av.value_json.startswith("2024-01-01T00:00:00")
+    assert av.value.year == 2024
 
 
 def test_add_attr_group_reuses_existing_group(db_session):
