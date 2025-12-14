@@ -83,7 +83,7 @@ We’ll define a simple two‑step process:
 from itertools import product
 
 from recap.client.base_client import RecapClient
-from recap.db.process import Direction
+from recap.utils.general import Direction
 
 client = RecapClient(session=db_session)
 
