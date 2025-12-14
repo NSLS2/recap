@@ -163,3 +163,32 @@ def test_parameter_schema_respects_metadata_bounds():
             template=group_schema,
             values={"Voltage": 11},
         )
+
+
+def test_enum_attribute_validates_choices():
+    drop = _attribute_template_schema(
+        "Drop Position",
+        "enum",
+        "u",
+        metadata={"choices": {"u": {"x": 0, "y": 1}, "d": {"x": 0, "y": -1}}},
+    )
+    group_schema = _attribute_group_schema("Positions", [drop])
+    stamp = _now()
+
+    schema = ParameterSchema(
+        id=uuid4(),
+        create_date=stamp,
+        modified_date=stamp,
+        template=group_schema,
+        values={"Drop Position": "d"},
+    )
+    assert schema.values.get("Drop Position") == "d"
+
+    with pytest.raises(ValueError):
+        ParameterSchema(
+            id=uuid4(),
+            create_date=stamp,
+            modified_date=stamp,
+            template=group_schema,
+            values={"Drop Position": "x"},
+        )

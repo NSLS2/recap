@@ -82,6 +82,7 @@ CONVERTERS = {
     "str": str,
     "datetime": _to_datetime,
     "array": _to_array,
+    "enum": str,
 }
 
 

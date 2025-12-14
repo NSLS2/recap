@@ -1,11 +1,18 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from recap.schemas.common import CommonFields
 from recap.utils.general import CONVERTERS
 
-TypeName = Literal["int", "float", "bool", "str", "datetime", "array"]
+TypeName = Literal["int", "float", "bool", "str", "datetime", "array", "enum"]
 
 
 class AttributeTemplateSchema(CommonFields):
@@ -46,6 +53,23 @@ class AttributeTemplateValidator(BaseModel):
         if conv is None:
             raise ValueError(f"Unsupported type: {t!r}")
         try:
-            return conv(v)
+            coerced = conv(v)
         except Exception as e:
             raise ValueError(f"`default` not coercible to {t}: {e}") from e
+        if t == "enum":
+            coerced = str(coerced)
+        return coerced
+
+    @model_validator(mode="after")
+    def enforce_enum_choices(self) -> "AttributeTemplateValidator":
+        if self.type != "enum":
+            return self
+
+        choices = (self.metadata or {}).get("choices")
+        if not choices:
+            raise ValueError("enum attributes require metadata.choices to be set")
+        if self.default is not None and str(self.default) not in choices:
+            raise ValueError(
+                f"default must be one of {', '.join(choices)} (got {self.default})"
+            )
+        return self

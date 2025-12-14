@@ -148,6 +148,15 @@ class AttributeValue(TimestampMixin, Base):
             raise ValueError("Parameter or Property must be set before assigning value")
 
         vt = self.template.value_type
+        if vt == "enum":
+            choices = (self.template.metadata_json or {}).get("choices")
+            if not choices:
+                raise ValueError("enum attributes require metadata.choices to be set")
+            if str(value) not in choices:
+                raise ValueError(
+                    f"{self.template.name} must be one of {', '.join(choices)}"
+                )
+            value = str(value)
         self.value_json = to_json_compatible(vt, value)
 
     @hybrid_property

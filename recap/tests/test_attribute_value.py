@@ -88,6 +88,29 @@ def test_attribute_value_serializes_datetime_to_iso(db_session):
     assert av.value.year == 2024
 
 
+def test_enum_attribute_value_rejects_invalid_choice(db_session):
+    tmpl = ResourceTemplate(name="Enumy")
+    group = AttributeGroupTemplate(name="Choices", resource_template=tmpl)
+    attr = AttributeTemplate(
+        name="Position",
+        value_type="enum",
+        default_value="u",
+        metadata_json={"choices": {"u": {}, "d": {}}},
+        attribute_group_template=group,
+    )
+    db_session.add_all([tmpl, group, attr])
+    db_session.flush()
+
+    res = Resource(name="R", template=tmpl)
+    db_session.add(res)
+    db_session.flush()
+
+    av = res.properties["Choices"]._values["Position"]
+    assert av.value == "u"
+    with pytest.raises(ValueError):
+        av.value = "x"
+
+
 def test_add_attr_group_reuses_existing_group(db_session):
     tmpl = ResourceTemplate(name="RT")
     db_session.add(tmpl)

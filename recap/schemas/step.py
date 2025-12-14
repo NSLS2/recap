@@ -14,12 +14,14 @@ from recap.utils.dsl import AliasMixin, build_param_values_model
 
 
 def _attr_metadata(vt: Any) -> dict | None:
-    meta = getattr(vt, "metadata_json", None)
-    if meta is None:
-        maybe = getattr(vt, "metadata", None)
-        if isinstance(maybe, dict):
-            meta = maybe
-    return meta
+    meta = getattr(vt, "metadata", None)
+    meta_json = getattr(vt, "metadata_json", None)
+    if isinstance(meta, dict):
+        return meta
+    elif isinstance(meta_json, dict):
+        return meta_json
+    else:
+        return {}
 
 
 class StepTemplateRef(CommonFields):

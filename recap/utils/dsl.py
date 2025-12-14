@@ -122,6 +122,7 @@ def map_dtype_to_pytype(dtype: str):
         "bool": bool,
         "datetime": datetime,
         "array": list,
+        "enum": str,
     }[dtype]
 
 
