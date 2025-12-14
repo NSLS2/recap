@@ -122,8 +122,22 @@ class ResourceTemplate(TimestampMixin, Base):
 @event.listens_for(ResourceTemplate, "before_insert", propagate=True)
 def _before_insert_resource_template(mapper, connection, target: ResourceTemplate):
     target.slug = make_slug(target.name)
-    # Default top-level templates to the root sentinel to avoid NULL parent collisions
+    # Ensure the root template exists and default top-level templates to it
     if target.name != "__root__" and target.parent_id is None:
+        rt_table = ResourceTemplate.__table__
+        root_exists = connection.scalar(
+            select(rt_table.c.id).where(rt_table.c.id == ROOT_RESOURCE_TEMPLATE_ID)
+        )
+        if not root_exists:
+            connection.execute(
+                rt_table.insert().values(
+                    id=ROOT_RESOURCE_TEMPLATE_ID,
+                    name="__root__",
+                    slug="__root__",
+                    version="1.0",
+                    parent_id=None,
+                )
+            )
         target.parent_id = ROOT_RESOURCE_TEMPLATE_ID
 
 

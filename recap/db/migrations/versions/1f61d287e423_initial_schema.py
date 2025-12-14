@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: bd44ea8f16a8
+Revision ID: 1f61d287e423
 Revises:
-Create Date: 2025-12-06 16:53:11.977612
+Create Date: 2025-12-13 20:09:32.759391
 
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "bd44ea8f16a8"
+revision = "1f61d287e423"
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -67,6 +67,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("name", sa.String(), nullable=False),
         sa.Column("slug", sa.String(), nullable=True),
+        sa.Column("version", sa.String(), nullable=False),
         sa.Column("parent_id", sa.Uuid(), nullable=True),
         sa.Column(
             "create_date",
@@ -86,7 +87,10 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
-            "parent_id", "name", name="uq_resource_template_parent_name"
+            "parent_id",
+            "name",
+            "version",
+            name="uq_resource_template_parent_name_version",
         ),
     )
     op.create_table(
@@ -272,8 +276,8 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.CheckConstraint(
-            "(resource_template_id IS NULL) OR (step_template_id IS NULL)",
-            name="ck_attr_group_at_most_one_owner",
+            "(resource_template_id IS NOT NULL) <> (step_template_id IS NOT NULL)",
+            name="ck_attr_group_exactly_one_owner",
         ),
         sa.ForeignKeyConstraint(
             ["resource_template_id"], ["resource_template.id"], ondelete="CASCADE"
@@ -414,6 +418,7 @@ def upgrade() -> None:
         sa.Column("value_type", sa.String(), nullable=False),
         sa.Column("unit", sa.String(), nullable=True),
         sa.Column("default_value", sa.String(), nullable=True),
+        sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("attribute_group_template_id", sa.Uuid(), nullable=False),
         sa.Column(
             "create_date",
@@ -565,12 +570,8 @@ def upgrade() -> None:
         sa.Column("attribute_template_id", sa.Uuid(), nullable=False),
         sa.Column("parameter_id", sa.Uuid(), nullable=True),
         sa.Column("property_id", sa.Uuid(), nullable=True),
-        sa.Column("int_value", sa.Integer(), nullable=True),
-        sa.Column("float_value", sa.Float(), nullable=True),
-        sa.Column("bool_value", sa.Boolean(), nullable=True),
-        sa.Column("str_value", sa.String(), nullable=True),
-        sa.Column("datetime_value", sa.DateTime(), nullable=True),
-        sa.Column("array_value", sa.JSON(), nullable=True),
+        sa.Column("value", sa.JSON(), nullable=True),
+        sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column(
             "create_date",
             sa.DateTime(timezone=True),
