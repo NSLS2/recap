@@ -86,7 +86,7 @@ with client.build_resource_template(name="Library Plate",
     template_builder.add_properties({
         "dimensions": [
             {"name": "rows", "type": "int", "default": 3},
-            {"name": "columns", "type": "int", "default": 1},
+            {"name": "columns", "type": "int", "default": 4},
         ]
     })
 
@@ -106,6 +106,13 @@ with client.build_resource_template(name="Library Plate",
              })\
              .close_child()
 ```
+
+Visualizing ResourceTemplates, PropertyGroups and Properties
+
+<p align="center">
+  <img src="docs/img/resource_template.png" alt="Resource Template Schema" />
+</p>
+
 
 ### Resources
 
@@ -151,21 +158,157 @@ If you have a pydantic model of a resource (either from querying the database or
 
 ```python
 
-with client.build_resource(resource=resource) as rb2:
+with client.build_resource(resource_id=resource.id) as rb2:
     rb2.set_model(resource)
     
 ```
 
-When creating the resource     
+Every time the context manager is initialized, the builder pulls the latest data for the model from the database. In the example above, the builder updates itself from the database.
 
-## ProcessRun
+## ProcessTemplates and ProcessRuns
 
-A `ProcessRun` captures the execution of a workflow that manipulates resources.
+A `ProcessTemplate` captures the execution of a workflow that manipulates resources.
 
-- Each run contains a series of steps.
-- Each step contains parameters.
+- Each template contains a series of steps.
+- Each step contains parameters (similar to resource properties).
 - Resources are assigned into slots defined by the process template.
-- Runs form the core provenance trail.
+- ProcessRun is an instance of a ProcessTemplate
+- ProcessRuns form the core provenance trail.
+
+The figure illustrates the struceture of a ProcessTemplate:
+
+<p align="center">
+  <img src="docs/img/process_template.png" alt="Process Template Schema" />
+</p>
+
+This template consists of 3 steps. Each step is connected to the next in the order of execution using solid arrows:
+
+- Imaging step: A container, typically plate wells are imaged under a microscope
+- Echo Transfer step: The Echo 525, acoustic liquid handler is used to transfer liquid from one container to another usually from one plate's well to another plate's well
+- Harvest step: Crystals from a plate are harvested and transferred into a pin which is placed in a puck
+
+To the left of the Process Template are the input resource slots, only resources that are of type `library_plate` and `crystal_plate` can be assigned to those slots. Similarly, the right side of the template represents the output resource slot which in this case can only be of type `puck_collection`.
+
+Resources assigned to this ProcessTemplate play different roles depending on the step. For example in step 2, `Echo Transfer`, the `library_plate` plays the role of `source` and the `crystal_plate` plays the role of `destination` respectively. Whereas in the `Harvest` step, the `crystal_plate` becomes the `source` and the `puck_collection` is the `destination`. The dotted arrows indicate the role that a `resource_slot` plays in that particular step. When a `ProcessRun` is initialized, Recap will automatically wire the assigned resources to the appropriate steps based on the template's definition.
+
+To illustrate this, we implement the ProcessTemplate shown in the figure:
+
+```python
+
+with client.build_process_template("PM Workflow", "1.0") as pt:
+    (
+        pt.add_resource_slot("library_plate", "library_plate", Direction.input)
+        .add_resource_slot("xtal_plate", "xtal_plate", Direction.input)
+        .add_resource_slot("puck_collection", "puck_collection", Direction.output)
+    )
+    (
+        pt.add_step(name="Imaging").
+        .add_parameters({
+             "drop": [
+                {"name": "position", "type": "enum", "default": "c",
+                "metadata":{"choices": {"u": {"x": 0, "y": 1}, "d": {"x": 0, "y": -1}}},
+                }]
+            })
+            .bind_slot("plate", "xtal_plate")
+            .close_step()
+    )
+    (
+        pt.add_step(name="Echo Transfer")
+        .add_parameters({
+            "echo": [
+                {"name": "batch", "type": "int", "default": 1},
+                {"name": "volume", "type": "float", "default": 25.0, "unit": "nL"},
+            ]
+        })
+        .bind_slot("source", "library_plate")
+        .bind_slot("dest", "xtal_plate")
+        .close_step()
+    )
+    (
+        pt.add_step(name="Harvesting")
+        .add_parameters({
+            "harvest": [
+                {"name": "arrival", "type": "datetime"},
+                {"name": "departure", "type": "datetime"},
+                {"name": "lsdc_name", "type": "str"},
+                {"name": "harvested", "type": "bool", "default": False},
+            ]
+        })
+        .bind_slot("source", "xtal_plate")
+        .bind_slot("dest", "puck_collection")
+        .close_step()
+    )
+
+```
+
+We've already created a template of a library plate above, now we create the template for the crystal plate, puck collection, puck and pin:
+
+```python
+
+# Crystal plate template
+with client.build_resource_template(name="Crystal Plate",
+                                    type_names=["container", "plate", "xtal_plate"]) as template_builder:
+    template_builder.add_properties({
+        "dimensions": [
+            {"name": "rows", "type": "int", "default": 3},
+            {"name": "columns", "type": "int", "default": 4},
+        ]
+    })
+
+    for row in "ABC":
+        for col in range(1, 4):
+            template_builder.add_child(f"{row}{col:02d}", ["container", "well"])\
+             .add_properties({
+                "well_map": [
+                     {"name": "well_pos_x", "type": "int", "default": 0},
+                     {"name": "well_pos_y", "type": "int", "default": 0},
+                     {"name": "echo", "type": "str", "default": ""},
+                     {"name": "shifter", "type": "str", "default": ""},
+                 ]
+             })\
+             .close_child()
+
+# Puck collecton template
+with client.build_resource_template(
+    name="Puck Collection", type_names=["container", "puck_collection"]
+) as pc:
+    pass
+
+# Puck template
+with client.build_resource_template(
+    name="Puck", type_names=["container", "puck"]
+) as pkb:
+    pkb.add_properties({
+        "details": [
+             {"name": "type", "type": "str", "default": "unipuck"},
+             {"name": "capacity", "type": "int", "default": 16},
+        ]
+    })
+    puck_template = pkb.get_model()
+
+# Pin template
+with client.build_resource_template(
+    name="Pin", type_names=["container", "pin"]
+) as pin:
+    pin.add_properties(
+        "mount": [
+            {"name": "position", "type": "int", "default": 0},
+            {"name": "sample_name", "type": "str", "default": ""},
+            {"name": "departure", "type": "datetime", "default": None},
+        ]
+    )
+```
+
+**Note**: For a given database, it is only required to define a template _once_. Templates are reusable definitions of a resource or process.
+
+Before we initialize instances of these containers or create a process run, we must associate the current session with a `Campaign`.
+
+A **Campaign** stores the scientific context:
+
+- Proposal identifiers
+- SAF/regulatory details
+- Arbitrary metadata
+- All `ProcessRun` objects belonging to the project
 
 ```
 Campaign
@@ -175,178 +318,82 @@ Campaign
          └── Step 3
 ```
 
-## Campaign
-
-A **Campaign** stores the scientific context:
-
-- Proposal identifiers
-- SAF/regulatory details
-- Arbitrary metadata
-- All `ProcessRun` objects belonging to the project
-
 Creating a campaign:
 
 ```python
 campaign = client.create_campaign(
-    name="Beamline Proposal 4321",
-    proposal_id="4321",
-    saf_id="A12-7"
+    name="Experiment visit on 12/12/25",
+    proposal_id="399999",
+    saf_id="123"
 )
-```
-
-## Templates and Types
-
-Templates must be created before instantiating resources or process runs.
-
-### Resource Templates
-
-A `ResourceTemplate` defines canonical property groups, expected child resources, and semantic `ResourceType` tags.
-
-Example:
-
-```python
-with client.build_resource_template(
-    "CLS3922-96", ["container", "plate", "vendor_cls3922"]
-) as t:
-    t.add_properties({
-        "dimensions": [
-            {"name": "rows", "type": "int", "default": 8},
-            {"name": "cols", "type": "int", "default": 12},
-        ]
-    })
-```
-
-### Process Templates
-
-A `ProcessTemplate` is a multi-step workflow with slots for resources.
-
-Example definition:
-
-```python
-from recap.db.process import Direction
-
-with client.build_process_template("Simple Heat/Shake/Transfer", "1.0") as pt:
-    pt.add_resource_slot("source", "container", Direction.input)
-    pt.add_resource_slot("dest", "container", Direction.output)
-
-    # Step 1
-    pt.add_step("Heat")\
-      .param_group("heat")\
-      .add_attribute("temperature", "float", "C", 0)\
-      .add_attribute("duration_min", "float", "min", 0)\
-      .close_group()\
-      .bind_slot("vessel", "source")\
-      .close_step()
-
-    # Step 2
-    pt.add_step("Shake")\
-      .param_group("shake")\
-      .add_attribute("rpm", "int", "", 0)\
-      .add_attribute("time_min", "float", "min", 0)\
-      .close_group()\
-      .bind_slot("vessel", "source")\
-      .close_step()
-
-    # Step 3
-    pt.add_step("Transfer")\
-      .param_group("transfer")\
-      .add_attribute("volume_ml", "float", "mL", 0)\
-      .close_group()\
-      .bind_slot("from", "source")\
-      .bind_slot("to", "dest")\
-      .close_step()
 ```
 
 ## Instantiating a ProcessRun
 
+Any ProcessRun or Resource created after setting or creating a campaign, is automatically associated with that campaign. Running the next snippet of code that creates a ProcessRun, will add it to the campaign we created. Recap will raise an exception if a campaign is not set.
+
 ```python
+
+test_xtal_plate = client.create_resource(name="Test crystal plate", template_name="Crystal Plate", version="1.0")
+
+test_library_plate = client.create_resource(name="Test library plate", template_name="Library Plate", version="1.0")
+
+test_puck_collection = client.create_resource("Test puck collection", "Puck Collection")
+
 with client.build_process_run(
-    "Run 001",
-    "Heating and shaking test run",
-    "Simple Heat/Shake/Transfer",
-    "1.0"
-) as run:
-    pass
+    name="Run 001",
+    description="Fragment screening test run",
+    template_name="PM Workflow",
+    version="1.0"
+) as prb:
+    prb.assign_resource("library_plate", test_library_plate)
+    prb.assign_resource("xtal_plate", test_xtal_plate)
+    prb.assign_resource("puck_collection", test_puck_collection)
+    process_run = prb.get_model()
 ```
 
-Assigning resources:
+The figure below shows a visual representation of the resources created. Resources are assigned to the appropriate slot which get wired to the steps they belong to
+
+<p align="center">
+  <img src="docs/img/process_run.png" alt="Process Template Schema" />
+</p>
+
+
+## Adding child resources and steps during runtime
+
+There are cases when templates cannot capture child resources and step resources ahead of time. For example, a puck collection may have an arbitrary number of pucks. To assign child resources during runtime, we can use the `add_child` method in the resource builder
 
 ```python
-run.assign_resource("source", tubeA)
-run.assign_resource("dest", tubeB)
+
+with client.build_resource(resource_id=test_puck_collection.id) as pcb:
+    pcb.add_child(name="Puck01", template_name="Puck", template_version="1.0")
+    
 ```
 
-Updating step parameters:
+Or if you have a reference to the template id:
 
 ```python
-step = run.steps[0]
-step.parameters["heat"].values["temperature"] = 80
-step.parameters["heat"].values["duration_min"] = 5
+
+with client.build_resource(resource_id=test_puck_collection.id) as pcb:
+    pcb.add_child(name="Puck01", template_id=puck_template.id)
+
 ```
 
-## Relating Resources, Campaigns, and Processes
-
-A resource enters a campaign once assigned to any process run belonging to it. You may traverse provenance in both directions:
+Child steps can be added dynamically in cases where details are unknown ahead of time. For example, to capture an Echo Transfer step from 1 well of the library plate to the crystal plate we can do the following
 
 ```python
-sample.campaigns
-campaign.resources
-run.resources
-resource.process_runs
-```
 
-## Steps and Parameters
+with client.build_process(process_id=process_run.id) as prb:
+    # Generate a pydantic model for the child step
+    echo_transfer_step = process_run.steps["Echo Transfer"].generate_child()
+    # Update its values
+    echo_transfer_step.parameters.echo.values.batch = 2
+    echo_transfer_step.parameters.echo.values.volume = 20
+    echo_transfer_step.resources["source"] = test_library_plate.children["A1"]
+    echo_transfer_step.resources["dest"] = test_xtal_plate.children["A1a"]
+    # Add it to the database
+    prb.add_child_step(echo_transfer_step)
 
-Steps are created from `StepTemplate` definitions and carry parameter groups, for example:
-
-```python
-step.parameters["heat"].values["temperature"]
-step.parameters["transfer"].values["volume_ml"]
-```
-
-## Entity Relationships In Practice
-
-1. Model inventory using `ResourceTemplate` objects.
-2. Define workflows using `ProcessTemplate` and `StepTemplate` objects.
-3. Execute experiments by creating `Campaign` -> `ProcessRun` and assigning resources.
-4. Query provenance from any direction:
-
-```
-campaign -> runs -> steps -> parameters
-resource -> assignments -> runs -> campaigns
-```
-
-## Example: End-to-End Mini Workflow
-
-```python
-# 1. Create template
-with client.build_resource_template("Tube", ["container"]) as t:
-    t.add_properties({"dims": [{"name": "volume_uL", "type": "float", "default": 1500}]})
-
-# 2. Instantiate resources
-tubeA = client.create_resource("Tube A", "Tube")
-tubeB = client.create_resource("Tube B", "Tube")
-
-# 3. Campaign
-campaign = client.create_campaign("Buffer Prep", "BP-001", "0")
-
-# 4. Process template
-with client.build_process_template("Transfer 1mL", "1.0") as pt:
-    pt.add_resource_slot("source", "container", Direction.input)
-    pt.add_resource_slot("dest", "container", Direction.output)
-    pt.add_step("transfer")\
-      .param_group("p")\
-      .add_attribute("volume_uL", "float", "uL", 0)\
-      .close_group()\
-      .bind_slot("src", "source")\
-      .bind_slot("dst", "dest")\
-      .close_step()
-
-# 5. Run
-with client.build_process_run("Run 1", "", "Transfer 1mL", "1.0") as run:
-    run.assign_resource("source", tubeA)
-    run.assign_resource("dest", tubeB)
-    run.steps[0].parameters["p"].values["volume_uL"] = 1000
 ```
 
 ## Querying Data
@@ -356,6 +403,7 @@ RECAP exposes a small Query DSL on top of the configured backend (SQLAlchemy or 
 The query builder lives on the client as `client.query_maker()` and exposes type-specific entry points:
 
 - `campaigns()` -> `CampaignQuery`
+- `process_templates()` -> `ProcessTemplateQuery`
 - `process_runs()` -> `ProcessRunQuery`
 - `resources()` -> `ResourceQuery`
 - `resource_templates()` -> `ResourceTemplateQuery`
@@ -367,16 +415,13 @@ Under the hood, these all use a common `BaseQuery` and a backend-provided `.quer
 Assuming you have a configured client:
 
 ```python
-from recap.client.base_client import RecapClient
+qm = client.query_maker()
 
-with RecapClient(url="sqlite:///recap.db") as client:
-    qm = client.query_maker()
-
-    # Query entry points
-    campaigns = qm.campaigns()
-    runs = qm.process_runs()
-    resources = qm.resources()
-    templates = qm.resource_templates()
+# Query entry points
+campaigns = qm.campaigns()
+runs = qm.process_runs()
+resources = qm.resources()
+templates = qm.resource_templates()
 ```
 
 ### Basic Filtering
@@ -389,7 +434,7 @@ List all campaigns with a given proposal id:
 campaigns = (
     client.query_maker()
     .campaigns()
-    .filter(proposal="4321")
+    .filter(proposal="399999")
     .all()
 )
 
