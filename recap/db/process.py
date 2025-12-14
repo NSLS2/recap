@@ -1,4 +1,3 @@
-import enum
 import typing
 from collections import namedtuple
 from uuid import UUID, uuid4
@@ -18,6 +17,7 @@ from sqlalchemy.orm import (
 from recap.db.campaign import Campaign
 from recap.db.step import Step, StepTemplate, StepTemplateEdge
 from recap.exceptions import DuplicateResourceError
+from recap.utils.general import Direction
 
 from .base import Base, TimestampMixin
 
@@ -25,11 +25,6 @@ if typing.TYPE_CHECKING:
     from recap.db.resource import Resource, ResourceType
 
 AssignedResource = namedtuple("AssignedResource", ["slot", "resource"])
-
-
-class Direction(str, enum.Enum):
-    input = "input"
-    output = "output"
 
 
 class ProcessTemplate(TimestampMixin, Base):

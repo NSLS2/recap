@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from recap.db.exceptions import ValidationError
-from recap.db.process import Direction
+from recap.utils.general import Direction
 
 
 def test_platemate_via_client_child_steps(client):  # noqa

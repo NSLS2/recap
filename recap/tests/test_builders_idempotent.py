@@ -1,6 +1,6 @@
-from recap.db.process import Direction
 from recap.dsl.process_builder import ProcessTemplateBuilder
 from recap.dsl.resource_builder import ResourceTemplateBuilder
+from recap.utils.general import Direction
 
 
 def test_resource_builder_reuse_same_resource(client):

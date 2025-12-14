@@ -1,5 +1,4 @@
-from recap.db.process import Direction
-from recap.utils.general import generate_uppercase_alphabets
+from recap.utils.general import Direction, generate_uppercase_alphabets
 
 
 def test_fragment_screening_api(client):

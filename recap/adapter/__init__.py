@@ -3,7 +3,6 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from recap.db.process import Direction
 from recap.dsl.query import QuerySpec, SchemaT
 from recap.schemas.attribute import AttributeGroupRef, AttributeTemplateSchema
 from recap.schemas.process import (
@@ -21,6 +20,7 @@ from recap.schemas.resource import (
     ResourceTypeSchema,
 )
 from recap.schemas.step import StepSchema, StepTemplateRef
+from recap.utils.general import Direction
 
 
 class UnitOfWork(Protocol):

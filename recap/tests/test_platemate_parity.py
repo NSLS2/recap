@@ -3,10 +3,11 @@ from uuid import uuid4
 
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.campaign import Campaign
-from recap.db.process import Direction, ProcessRun, ProcessTemplate, ResourceSlot
+from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate
 from recap.utils.database import get_or_create
+from recap.utils.general import Direction
 
 
 def _make_attr_group(name: str, attrs: list[dict]) -> AttributeGroupTemplate:

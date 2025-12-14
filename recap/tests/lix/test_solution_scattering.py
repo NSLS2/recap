@@ -4,10 +4,11 @@ from sqlalchemy import select
 
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.campaign import Campaign
-from recap.db.process import Direction, ProcessRun, ProcessTemplate, ResourceSlot
+from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate
 from recap.utils.database import get_or_create
+from recap.utils.general import Direction
 
 
 def test_solution_scattering_sample_prep(db_session):

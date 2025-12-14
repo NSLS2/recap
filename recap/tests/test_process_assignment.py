@@ -3,10 +3,11 @@ from sqlalchemy.orm import sessionmaker
 
 from recap.adapter.local import LocalBackend
 from recap.db.campaign import Campaign
-from recap.db.process import Direction, ProcessRun, ProcessTemplate, ResourceSlot
+from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.schemas.process import ProcessRunSchema
 from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
+from recap.utils.general import Direction
 
 
 @pytest.fixture

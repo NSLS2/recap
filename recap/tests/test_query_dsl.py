@@ -7,12 +7,13 @@ from sqlalchemy.orm import sessionmaker
 from recap.adapter.local import LocalBackend
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.campaign import Campaign
-from recap.db.process import Direction, ProcessRun, ProcessTemplate, ResourceSlot
+from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate
 from recap.dsl.query import QueryDSL
 from recap.schemas.process import ProcessRunRef, ProcessTemplateRef
 from recap.schemas.resource import ResourceRef, ResourceTemplateRef
+from recap.utils.general import Direction
 
 
 def make_query(db_session):

@@ -1,7 +1,8 @@
 import pytest
 
-from recap.db.process import Direction, ProcessTemplate
+from recap.db.process import ProcessTemplate
 from recap.db.resource import ResourceTemplate
+from recap.utils.general import Direction
 
 
 def test_resource_template_guard_prevents_updates_when_resources_exist(client):

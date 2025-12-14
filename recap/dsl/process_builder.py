@@ -5,7 +5,6 @@ from pydantic import BaseModel
 from sqlalchemy.exc import NoResultFound
 
 from recap.adapter import Backend
-from recap.db.process import Direction
 from recap.dsl.attribute_builder import AttributeGroupBuilder
 from recap.dsl.query import QuerySpec
 from recap.schemas.attribute import AttributeTemplateValidator
@@ -18,6 +17,7 @@ from recap.schemas.process import (
 from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
 from recap.schemas.step import StepSchema, StepTemplateRef
 from recap.utils.dsl import lock_instance_fields
+from recap.utils.general import Direction
 
 
 class ProcessTemplateBuilder:

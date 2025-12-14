@@ -1,7 +1,7 @@
 from itertools import product
 
-from recap.db.process import Direction
 from recap.dsl.process_builder import ProcessRunBuilder
+from recap.utils.general import Direction
 
 
 def test_client(client):

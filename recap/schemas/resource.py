@@ -10,7 +10,6 @@ from pydantic import (
     model_validator,
 )
 
-from recap.db.process import Direction
 from recap.db.resource import Property
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
@@ -18,6 +17,7 @@ from recap.schemas.attribute import (
 )
 from recap.schemas.common import CommonFields
 from recap.utils.dsl import AliasMixin, build_param_values_model
+from recap.utils.general import Direction
 
 
 def _attr_metadata(vt: Any) -> dict | None:
