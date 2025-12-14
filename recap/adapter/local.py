@@ -699,13 +699,7 @@ class LocalBackend(Backend):
                 )
 
     def add_child_step(
-        self,
-        process_run: ProcessRunSchema,
-        parent_step_id: UUID,
-        step_template_name: str,
-        parameter_values: dict[str, dict[str, Any]] | None = None,
-        resources: dict[str, ResourceRef | ResourceSchema] | None = None,
-        step_name: str | None = None,
+        self, process_run: ProcessRunSchema, child_step: StepSchema
     ) -> StepSchema:
         pr_model = load_single(
             self.session,
@@ -730,11 +724,11 @@ class LocalBackend(Backend):
         )
 
         parent_step = next(
-            (s for s in pr_model.steps.values() if s.id == parent_step_id), None
+            (s for s in pr_model.steps.values() if s.id == child_step.parent_id), None
         )
         if parent_step is None:
             raise ValueError(
-                f"Parent step with id {parent_step_id} not found in run {pr_model.name}"
+                f"Parent step with id {child_step.parent_id} not found in run {pr_model.name}"
             )
 
         template = load_single(
@@ -742,7 +736,7 @@ class LocalBackend(Backend):
             select(StepTemplate)
             .where(
                 StepTemplate.process_template_id == pr_model.process_template_id,
-                StepTemplate.name == step_template_name,
+                StepTemplate.id == child_step.template.id,
             )
             .options(
                 selectinload(StepTemplate.bindings).selectinload(
@@ -752,7 +746,7 @@ class LocalBackend(Backend):
             label="StepTemplate",
         )
 
-        step_name = step_name if step_name else template.name
+        step_name = child_step.name if child_step.name else template.name
         if pr_model.steps:
             idx = 1
             while step_name in pr_model.steps:
@@ -764,11 +758,11 @@ class LocalBackend(Backend):
         # Add early to session to avoid autoflush warnings when binding children/resources
         self.session.add(step)
 
-        if parameter_values:
-            for group_name, values in parameter_values.items():
+        if child_step.parameters:
+            for group_name, values in child_step.parameters.items():
                 if group_name not in step.parameters:
                     raise ValueError(
-                        f"Step {step_template_name} has no parameter group {group_name}"
+                        f"Step {step_name} has no parameter group {group_name}"
                     )
                 param = step.parameters[group_name]
                 for key, value in values.items():
@@ -778,8 +772,8 @@ class LocalBackend(Backend):
                         )
                     param.values[key] = value
 
-        if resources:
-            self._assign_step_resources(step, pr_model, resources)
+        if child_step.resources:
+            self._assign_step_resources(step, pr_model, child_step.resources)
 
         self.session.add(step)
         self.session.flush()

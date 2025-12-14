@@ -213,9 +213,5 @@ class Backend(Protocol):
     def add_child_step(
         self,
         process_run: ProcessRunSchema,
-        parent_step_id: UUID,
-        step_template_name: str,
-        parameter_values: dict[str, dict[str, Any]] | None = None,
-        resources: dict[str, ResourceRef | ResourceSchema] | None = None,
-        step_name: str | None = None,
+        child_step: StepSchema,
     ) -> StepSchema: ...

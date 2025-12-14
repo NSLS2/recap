@@ -157,6 +157,9 @@ class StepSchema(CommonFields):
     children: list["StepSchema"] = Field(default_factory=list)
     resources: dict[str, "ResourceSchema"] = Field(default_factory=dict)
 
+    def generate_child(self):
+        return self.model_copy(deep=True, update={"id": None, "parent_id": self.id})
+
     @model_validator(mode="after")
     def build_parameter_model(self) -> "StepSchema":
         if isinstance(self.parameters, BaseModel):

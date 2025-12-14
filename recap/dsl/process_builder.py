@@ -15,7 +15,7 @@ from recap.schemas.process import (
     ProcessTemplateRef,
     ProcessTemplateSchema,
 )
-from recap.schemas.resource import ResourceRef, ResourceSchema, ResourceSlotSchema
+from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
 from recap.schemas.step import StepSchema, StepTemplateRef
 from recap.utils.dsl import lock_instance_fields
 
@@ -336,15 +336,17 @@ class ProcessRunBuilder:
 
     def get_params(
         self,
-        # step_schema: StepSchema,
-        step_name: str,
+        step_name: str | None = None,
+        step_schema: StepSchema | None = None,
     ) -> type[BaseModel]:
         self._ensure_uow()
-        step_schema = None
-        for step in self.steps:
-            if step.name == step_name:
-                step_schema = step
-                break
+        if step_name is None and step_schema is None:
+            raise ValueError("Provide step_name or step_schema to get params")
+        if not step_schema and step_name:
+            for step in self.steps:
+                if step.name == step_name:
+                    step_schema = step
+                    break
 
         if step_schema is None:
             raise NoResultFound("Step not found with name: {step_name} ")
@@ -363,30 +365,18 @@ class ProcessRunBuilder:
 
     def add_child_step(
         self,
-        parent_step_name: str,
-        step_template_name: str,
-        parameters: dict[str, dict[str, Any]] | None = None,
-        resources: dict[str, ResourceRef | ResourceSchema] | None = None,
-        step_name: str | None = None,
+        child_step: StepSchema,
     ) -> StepSchema:
         self._ensure_uow()
-        parent_step = None
-        for step in self.steps:
-            if step.name == parent_step_name:
-                parent_step = step
-                break
-        if parent_step is None:
+        if child_step.parent_id is None:
             raise ValueError(
-                f"Parent step named {parent_step_name!r} not found in process run {self.process_run.name!r}"
+                f"Child step {child_step.name} has no parent_id, was the step created using generate_child()?"
             )
-        child = self.backend.add_child_step(
-            self.process_run,
-            parent_step.id,
-            step_template_name,
-            parameters,
-            resources,
-            step_name,
-        )
+        if child_step.process_run_id != self._process_run.id:
+            raise ValueError(
+                f"Child step {child_step.name} does not belong to {self._process_run.name}"
+            )
+        child = self.backend.add_child_step(self.process_run, child_step)
         # refresh cached steps so subsequent operations see the new child
         self._steps = None
         return child
