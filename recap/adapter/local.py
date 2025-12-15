@@ -759,13 +759,13 @@ class LocalBackend(Backend):
         self.session.add(step)
 
         if child_step.parameters:
-            for group_name, values in child_step.parameters.items():
+            for group_name, params in child_step.parameters.items():
                 if group_name not in step.parameters:
                     raise ValueError(
                         f"Step {step_name} has no parameter group {group_name}"
                     )
                 param = step.parameters[group_name]
-                for key, value in values.items():
+                for key, value in params.values.items():
                     if key not in param.values:
                         raise ValueError(
                             f"Parameter {key} not found in group {group_name}"

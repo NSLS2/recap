@@ -65,7 +65,7 @@ Example: creating a plate template with child wells:
 
 ```python
 with client.build_resource_template(name="Xtal Plate",
-                                    type_names=["container", "plate", "library_plate"]) as template_builder:
+                                    type_names=["container", "plate", "xtal_plate"]) as template_builder:
     for row in "ABC":
         for col in range(1, 4):
             template_builder.add_child(f"{row}{col:02d}", ["container", "well"]).close_child()
@@ -133,7 +133,7 @@ The object returned is always a pydantic object that used as a reference/local c
 with client.build_resource(name="Plate B", template_name="Library Plate") as resource_builder:
     resource = resource_builder.get_model()
     # Make changes to the resource and its default parameters
-    resource.children["A1"].properties["status"].values["used"] = True
+    resource.children["A01"].properties["status"].values["used"] = True
     # Then update the builder with the newly edited object
     resource_builder.set_model(resource) 
 
@@ -191,60 +191,9 @@ To the left of the Process Template are the input resource slots, only resources
 
 Resources assigned to this ProcessTemplate play different roles depending on the step. For example in step 2, `Echo Transfer`, the `library_plate` plays the role of `source` and the `crystal_plate` plays the role of `destination` respectively. Whereas in the `Harvest` step, the `crystal_plate` becomes the `source` and the `puck_collection` is the `destination`. The dotted arrows indicate the role that a `resource_slot` plays in that particular step. When a `ProcessRun` is initialized, Recap will automatically wire the assigned resources to the appropriate steps based on the template's definition.
 
-To illustrate this, we implement the ProcessTemplate shown in the figure:
+Before we implement the ProcessTemplate shown in the figure, we will first add the Resource templates we need for this Process. This includes the Crystal plate, a collection of pucks, a template for the puck and a template for the pin (sample holder) that is placed inside a puck:
 
 ```python
-
-with client.build_process_template("PM Workflow", "1.0") as pt:
-    (
-        pt.add_resource_slot("library_plate", "library_plate", Direction.input)
-        .add_resource_slot("xtal_plate", "xtal_plate", Direction.input)
-        .add_resource_slot("puck_collection", "puck_collection", Direction.output)
-    )
-    (
-        pt.add_step(name="Imaging").
-        .add_parameters({
-             "drop": [
-                {"name": "position", "type": "enum", "default": "c",
-                "metadata":{"choices": {"u": {"x": 0, "y": 1}, "d": {"x": 0, "y": -1}}},
-                }]
-            })
-            .bind_slot("plate", "xtal_plate")
-            .close_step()
-    )
-    (
-        pt.add_step(name="Echo Transfer")
-        .add_parameters({
-            "echo": [
-                {"name": "batch", "type": "int", "default": 1},
-                {"name": "volume", "type": "float", "default": 25.0, "unit": "nL"},
-            ]
-        })
-        .bind_slot("source", "library_plate")
-        .bind_slot("dest", "xtal_plate")
-        .close_step()
-    )
-    (
-        pt.add_step(name="Harvesting")
-        .add_parameters({
-            "harvest": [
-                {"name": "arrival", "type": "datetime"},
-                {"name": "departure", "type": "datetime"},
-                {"name": "lsdc_name", "type": "str"},
-                {"name": "harvested", "type": "bool", "default": False},
-            ]
-        })
-        .bind_slot("source", "xtal_plate")
-        .bind_slot("dest", "puck_collection")
-        .close_step()
-    )
-
-```
-
-We've already created a template of a library plate above, now we create the template for the crystal plate, puck collection, puck and pin:
-
-```python
-
 # Crystal plate template
 with client.build_resource_template(name="Crystal Plate",
                                     type_names=["container", "plate", "xtal_plate"]) as template_builder:
@@ -290,13 +239,64 @@ with client.build_resource_template(
 with client.build_resource_template(
     name="Pin", type_names=["container", "pin"]
 ) as pin:
-    pin.add_properties(
+    pin.add_properties({
         "mount": [
             {"name": "position", "type": "int", "default": 0},
             {"name": "sample_name", "type": "str", "default": ""},
             {"name": "departure", "type": "datetime", "default": None},
         ]
+    })
+```
+
+Once you have all the templates in place you can create a process template. You can create a process template before creating resource templates, but only after creating the resource types that this template needs
+
+
+```python
+from recap.utils.general import Direction
+with client.build_process_template("PM Workflow", "1.0") as pt:
+    (
+        pt.add_resource_slot("library_plate", "library_plate", Direction.input)
+        .add_resource_slot("xtal_plate", "xtal_plate", Direction.input)
+        .add_resource_slot("puck_collection", "puck_collection", Direction.output)
     )
+    (
+        pt.add_step(name="Imaging")
+        .add_parameters({
+             "drop": [
+                {"name": "position", "type": "enum", "default": "u",
+                "metadata":{"choices": {"u": {"x": 0, "y": 1}, "d": {"x": 0, "y": -1}}},
+                }]
+            })
+            .bind_slot("plate", "xtal_plate")
+            .close_step()
+    )
+    (
+        pt.add_step(name="Echo Transfer")
+        .add_parameters({
+            "echo": [
+                {"name": "batch", "type": "int", "default": 1},
+                {"name": "volume", "type": "float", "default": 25.0, "unit": "nL"},
+            ]
+        })
+        .bind_slot("source", "library_plate")
+        .bind_slot("dest", "xtal_plate")
+        .close_step()
+    )
+    (
+        pt.add_step(name="Harvesting")
+        .add_parameters({
+            "harvest": [
+                {"name": "arrival", "type": "datetime"},
+                {"name": "departure", "type": "datetime"},
+                {"name": "lsdc_name", "type": "str"},
+                {"name": "harvested", "type": "bool", "default": False},
+            ]
+        })
+        .bind_slot("source", "xtal_plate")
+        .bind_slot("dest", "puck_collection")
+        .close_step()
+    )
+
 ```
 
 **Note**: For a given database, it is only required to define a template _once_. Templates are reusable definitions of a resource or process.
@@ -323,8 +323,9 @@ Creating a campaign:
 ```python
 campaign = client.create_campaign(
     name="Experiment visit on 12/12/25",
-    proposal_id="399999",
-    saf_id="123"
+    proposal="399999",
+    saf="123",
+    metadata={"arbitrary_data": True}
 )
 ```
 
