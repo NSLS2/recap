@@ -17,16 +17,16 @@ RECAP is a Python framework that captures **experimental provenance** using a SQ
 
 ## Installation
 
-Recap is available from Pypi, install using:
+Recap is available on PyPI. Install with:
 ```
-    pip install pyrecap
+pip install pyrecap
 ```
 
 ## Getting started
 
-As of Dec 2025, Recap clients only connect directly with sqlite databases, a REST API backend is on the roadmap.
+As of Dec 2025, Recap clients connect directly to SQLite databases; a REST API backend is on the roadmap.
 
-To create and connect to a temporary sqlite database:
+To create and connect to a temporary SQLite database:
 ```python
 from recap.client import RecapClient
 
@@ -34,7 +34,7 @@ client = RecapClient.from_sqlite()
 print(client.database_path) # print path of your database
 ```
 
-if you want to generate a database at a specific location pass in the database path. You can also connect to an existing databases similarly
+If you want a database at a specific path, pass it in. You can also point at an existing database the same way:
 
 ```python
 client = RecapClient.from_sqlite("/path/to/database.db")
@@ -42,7 +42,7 @@ client = RecapClient.from_sqlite("/path/to/database.db")
 
 ## Resources
 
-In RECAP any trackable entity is called a **Resource**. A resource can be a physical item (samples, plates, robots), a digital item (raw detector files, processed datasets), or a logical item (intermediate computation results). Resources are treated as first-class objects: they have identity, metadata, lineage, and hierarchical structure.
+In RECAP any trackable entity is called a **Resource**. A resource can be a physical item (samples, plates, robots), a digital item (raw detector files, processed datasets), or a logical item (intermediate computation results). Think of resources as first-class objects: they carry identity, metadata, lineage, and can be nested inside each other.
 
 ### Resource Hierarchy
 
@@ -56,7 +56,7 @@ Plate
  └── H12
 ```
 
-Each child is also a resource with its own attributes. But before we create a resource we must create a definition or a `ResourceTemplate`. This is the canonical definition of the resource to be created
+Each child is also a resource with its own attributes. Before creating a resource you define a `ResourceTemplate`, which is the canonical blueprint for what gets instantiated.
 
 
 ### Resource Template
@@ -71,26 +71,15 @@ with client.build_resource_template(name="Xtal Plate",
             template_builder.add_child(f"{row}{col:02d}", ["container", "well"]).close_child()
 ```
 
-In the example above we create a `template_builder` that creates or modifies an existing template in the database. The `template_builder` needs a unique name and a number of tags called `type_names` which are needed to associate a `Resource` to an experiment/workflow, called `ProcessRun`. The example also shows the ability of adding child resource templates, `well` in this case.
+Here we build or update a template in the database. A template needs a unique name and one or more `type_names` (tags) so it can be matched to slots in a workflow (`ProcessRun`). The example also shows adding child templates (`well`).
 
 
 ### Properties and Property Groups
 
 Resources can carry metadata organized into groups of related properties.
 
-#### AttributeValue types and metadata
 
-| Value Type | Python Type | Metadata keys (optional)                     |
-|------------|-------------|----------------------------------------------|
-| `int`      | `int`       | `min`, `max`                                 |
-| `float`    | `float`     | `min`, `max`                                 |
-| `bool`     | `bool`      | _(none)_                                     |
-| `str`      | `str`       | _(none)_                                     |
-| `datetime` | `datetime`  | _(none)_                                     |
-| `array`    | `list`      | _(none)_                                     |
-| `enum`     | `str`       | `choices` (list of allowed string values)    |
-
-Example: We create a similar template, but this time we add properties to the plate template. The group is called `dimensions` within which we create two parameters `rows` and `columns`, we also have to specify the data `type` for the property and a `default` value. If the property has a unit, you can specify that with a `unit` key.
+Example: Here we add properties to the plate template. The group is called `dimensions` and contains two parameters, `rows` and `columns`. Each entry declares the data `type` and a `default` value; add a `unit` if it matters.
 
 ```python
 with client.build_resource_template(name="Library Plate",
@@ -113,11 +102,25 @@ with client.build_resource_template(name="Library Plate",
                      {"name": "catalog_id", "type": "str", "default": ""},
                      {"name": "smiles", "type": "str", "default": ""},
                      {"name": "sequence", "type": "int", "default": col},
-                     {"name": "volume", "type": "float", "default": 10.0, "unit": "uL"},
+                     {"name": "volume", "type": "float", "default": 10.0, "unit": "uL", "metadata": {"min": 0, "max": 20.0}},
                  ]
              })\
              .close_child()
 ```
+
+The following table shows the available data types that can be assigned to properties. Metadata is an optional dictionary that can be provided for additional data validation
+
+#### AttributeValue types and metadata
+
+| Value Type | Python Type | Metadata keys (optional)                     |
+|------------|-------------|----------------------------------------------|
+| `int`      | `int`       | `min`, `max`                                 |
+| `float`    | `float`     | `min`, `max`                                 |
+| `bool`     | `bool`      | _(none)_                                     |
+| `str`      | `str`       | _(none)_                                     |
+| `datetime` | `datetime`  | _(none)_                                     |
+| `array`    | `list`      | _(none)_                                     |
+| `enum`     | `str`       | `choices` (list of allowed string values)    |
 
 Visualizing ResourceTemplates, PropertyGroups and Properties
 
@@ -128,7 +131,7 @@ Visualizing ResourceTemplates, PropertyGroups and Properties
 
 ### Resources
 
-Once the template is defined, you can create an instance of the Resource. When a resource is created based on a template, it automatically creates instances of the child resources as well. For example,
+Once the template is defined, you can create a Resource instance. Instantiation also materializes any child resources from the template. For example,
 
 ```python
 
@@ -136,9 +139,12 @@ plate = client.create_resource(name="Plate A", template_name="Library Plate")
 
 ```
 
-will create a Resource based on the `Library Plate` template we created previously. Child resources will automatically be created mirroring the template. When these resources are created, the value of properties are set to the defaults defined in the template. 
+creates a Resource from the `Library Plate` template; children are created automatically and properties are initialized with their defaults.
 
-The object returned is always a pydantic object that used as a reference/local copy, any change to the data should be made through the client. There are 2 ways to create resources. The first as shown above, simply creates the resource and returns a pydantic model. The second is with a builder where a user can specify what values to change or even add children that are not defined in the template. For example,
+The returned object is a Pydantic model, well suited for inspection and local changes, but database changes must go through the client. You can either:
+
+1. Call `create_resource` (shown above) to get a default instance, or
+2. Use a builder to tweak values or add extra children before persisting:
 
 ```python
 
@@ -151,11 +157,11 @@ with client.build_resource(name="Plate B", template_name="Library Plate") as res
 
 ```
 
-**Note**: Values in the database can _only_ be changed via builders. Simply changing the pydantic models will only change the local copy of the data. Builders are python context managers that open and clean up database connections. So if there are any validation errors that happen while modifying the database, the context manager rolls back the database transaction to a safe checkpoint
+**Note**: Values in the database can _only_ be changed via builders. Editing the Pydantic model changes your local copy, not the database. Builders are context managers that manage the transaction; if validation fails, the context rolls back safely.
 
-**Note**: `create_resource` and `build_resource` serve different purposes, `create_resource` simply generates the resource based on default property values and returns the corresponding pydantic model. `build_resource` creates a context manager to allow a user to modify values
+**Note**: `create_resource` generates the resource with default values and returns a Pydantic model. `build_resource` opens a builder so you can modify values before commit.
 
-You can also re-open an existing builder,
+You can also re-use an existing builder,
 
 ```python
 
@@ -166,7 +172,7 @@ with resource_builder:
     
 ```
 
-If you have a pydantic model of a resource (either from querying the database or using `client.create_resource`) you can use it to create a builder from that,
+If you already have a Pydantic model (from a query or `create_resource`), you can build from it:
 
 ```python
 
@@ -179,15 +185,15 @@ Every time the context manager is initialized, the builder pulls the latest data
 
 ## ProcessTemplates and ProcessRuns
 
-A `ProcessTemplate` captures the execution of a workflow that manipulates resources.
+A `ProcessTemplate` captures a workflow that manipulates resources.
 
-- Each template contains a series of steps.
-- Each step contains parameters (similar to resource properties).
-- Resources are assigned into slots defined by the process template.
-- ProcessRun is an instance of a ProcessTemplate
+- Each template contains an ordered series of steps.
+- Each step has parameters (similar to resource properties).
+- Resources are assigned into slots defined by the template.
+- A `ProcessRun` is an instance of a `ProcessTemplate`.
 - ProcessRuns form the core provenance trail.
 
-The figure illustrates the struceture of a ProcessTemplate:
+The figure illustrates the structure of a ProcessTemplate:
 
 <p align="center">
   <img src="docs/img/process_template.png" alt="Process Template Schema" />
@@ -195,15 +201,15 @@ The figure illustrates the struceture of a ProcessTemplate:
 
 This template consists of 3 steps. Each step is connected to the next in the order of execution using solid arrows:
 
-- Imaging step: A container, typically plate wells are imaged under a microscope
-- Echo Transfer step: The Echo 525, acoustic liquid handler is used to transfer liquid from one container to another usually from one plate's well to another plate's well
-- Harvest step: Crystals from a plate are harvested and transferred into a pin which is placed in a puck
+- Imaging step: plate wells are imaged under a microscope.
+- Echo Transfer step: the Echo 525 acoustic liquid handler moves liquid, typically well-to-well across plates.
+- Harvest step: crystals are harvested from a plate and transferred into a pin that sits in a puck.
 
-To the left of the Process Template are the input resource slots, only resources that are of type `library_plate` and `crystal_plate` can be assigned to those slots. Similarly, the right side of the template represents the output resource slot which in this case can only be of type `puck_collection`.
+On the left of the Process Template are the input resource slots; only resources of type `library_plate` and `crystal_plate` can be assigned there. The right side shows the output slot, which must be a `puck_collection`.
 
-Resources assigned to this ProcessTemplate play different roles depending on the step. For example in step 2, `Echo Transfer`, the `library_plate` plays the role of `source` and the `crystal_plate` plays the role of `destination` respectively. Whereas in the `Harvest` step, the `crystal_plate` becomes the `source` and the `puck_collection` is the `destination`. The dotted arrows indicate the role that a `resource_slot` plays in that particular step. When a `ProcessRun` is initialized, Recap will automatically wire the assigned resources to the appropriate steps based on the template's definition.
+Assigned resources play different roles per step. In `Echo Transfer`, the `library_plate` is the `source` and the `crystal_plate` is the `destination`. In `Harvesting`, the `crystal_plate` becomes the `source` and the `puck_collection` is the `destination`. The dotted arrows indicate the association of a `resource_slot` to each `role`. When a `ProcessRun` starts, Recap wires the assigned resources to the appropriate steps based on the template definition.
 
-Before we implement the ProcessTemplate shown in the figure, we will first add the Resource templates we need for this Process. This includes the Crystal plate, a collection of pucks, a template for the puck and a template for the pin (sample holder) that is placed inside a puck:
+Before implementing the ProcessTemplate shown in the figure, add the Resource templates the process needs: the crystal plate, a collection of pucks, a puck template, and a pin (sample holder) that sits inside a puck:
 
 ```python
 # Crystal plate template
@@ -229,7 +235,7 @@ with client.build_resource_template(name="Crystal Plate",
              })\
              .close_child()
 
-# Puck collecton template
+# Puck collection template
 with client.build_resource_template(
     name="Puck Collection", type_names=["container", "puck_collection"]
 ) as pc:
@@ -260,7 +266,7 @@ with client.build_resource_template(
     })
 ```
 
-Once you have all the templates in place you can create a process template. You can create a process template before creating resource templates, but only after creating the resource types that this template needs
+Once the resource templates exist, you can create the process template. You can technically define it earlier, but the resource types it references must already exist.
 
 
 ```python
@@ -343,7 +349,7 @@ campaign = client.create_campaign(
 
 ## Instantiating a ProcessRun
 
-Any ProcessRun or Resource created after setting or creating a campaign, is automatically associated with that campaign. Running the next snippet of code that creates a ProcessRun, will add it to the campaign we created. Recap will raise an exception if a campaign is not set.
+After you set or create a campaign, any ProcessRun or Resource is automatically associated with it. The snippet below creates a ProcessRun tied to that campaign. Recap will raise an exception if you forget to set a campaign first.
 
 ```python
 
@@ -365,7 +371,7 @@ with client.build_process_run(
     process_run = prb.get_model()
 ```
 
-The figure below shows a visual representation of the resources created. Resources are assigned to the appropriate slot which get wired to the steps they belong to
+The figure below shows the resources we created. Resources are assigned to the appropriate slots and wired to their steps.
 
 <p align="center">
   <img src="docs/img/process_run.png" alt="Process Template Schema" />
@@ -374,7 +380,7 @@ The figure below shows a visual representation of the resources created. Resourc
 
 ## Adding child resources and steps during runtime
 
-There are cases when templates cannot capture child resources and step resources ahead of time. For example, a puck collection may have an arbitrary number of pucks. To assign child resources during runtime, we can use the `add_child` method in the resource builder
+Sometimes templates can't predict every child resource or step ahead of time. For example, a puck collection may have an arbitrary number of pucks. To add children at runtime, use the `add_child` method in the resource builder:
 
 ```python
 
