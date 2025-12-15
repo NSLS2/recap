@@ -241,6 +241,15 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema]):
     def filter_by_types(self, type_list: list[str]) -> "ResourceTemplateQuery":
         return self.filter(types__names_in=type_list)
 
+    def include_children(self) -> "ResourceTemplateQuery":
+        return self.include("children")
+
+    def include_attribute_groups(self) -> "ResourceTemplateQuery":
+        return self.include("attribute_group_templates")
+
+    def include_types(self) -> "ResourceTemplateQuery":
+        return self.include("types")
+
 
 class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema]):
     model = ProcessTemplateSchema
@@ -270,6 +279,12 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema]):
         )
         params.update(overrides)
         return self.__class__(**params)
+
+    def include_step_templates(self) -> "ProcessTemplateQuery":
+        return self.include("step_templates")
+
+    def include_resource_slots(self) -> "ProcessTemplateQuery":
+        return self.include("resource_slots")
 
 
 class QueryDSL:

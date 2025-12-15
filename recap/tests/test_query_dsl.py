@@ -161,6 +161,23 @@ def test_process_template_query_can_return_ref(db_session):
     assert not hasattr(ref, "step_templates")
 
 
+def test_process_template_includes(db_session):
+    _, run = seed_process_run(db_session, name="pt-include", with_resource=True)
+
+    tmpl = (
+        make_query(db_session)
+        .process_templates()
+        .filter(id=run.template.id)
+        .include_step_templates()
+        .include_resource_slots()
+        .first()
+    )
+
+    assert tmpl is not None
+    assert "Step-pt-include" in tmpl.step_templates
+    assert any(rs.name.startswith("slot-pt-include") for rs in tmpl.resource_slots)
+
+
 def test_resource_queries_can_return_refs(db_session):
     resource_type = ResourceType(name="rt")
     resource_template = ResourceTemplate(name="rtmpl", version="1.0")
@@ -182,3 +199,36 @@ def test_resource_queries_can_return_refs(db_session):
     assert isinstance(res_ref, ResourceRef)
     assert isinstance(res_ref.template, ResourceTemplateRef)
     assert isinstance(tmpl_ref, ResourceTemplateRef)
+
+
+def test_resource_template_includes(db_session):
+    resource_type = ResourceType(name="rt-inc")
+    parent = ResourceTemplate(name="rt-parent", version="1.0")
+    parent.types.append(resource_type)
+
+    child = ResourceTemplate(name="rt-child", version="1.0", parent=parent)
+    ag = AttributeGroupTemplate(name="Props-inc", resource_template=parent)
+    ag.attribute_templates.append(
+        AttributeTemplate(name="length", value_type="int", default_value="5")
+    )
+
+    db_session.add_all([resource_type, parent, child, ag])
+    db_session.commit()
+
+    tmpl = (
+        make_query(db_session)
+        .resource_templates()
+        .filter(id=parent.id)
+        .include_children()
+        .include_attribute_groups()
+        .include_types()
+        .first()
+    )
+
+    assert tmpl is not None
+    assert "rt-child" in tmpl.children
+    assert any(
+        at.name == "length"
+        for at in tmpl.attribute_group_templates[0].attribute_templates
+    )
+    assert any(t.name == "rt-inc" for t in tmpl.types)

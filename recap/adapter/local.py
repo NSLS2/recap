@@ -900,7 +900,10 @@ class LocalBackend(Backend):
             opts.append(
                 selectinload(Resource.template).selectinload(ResourceTemplate.types)
             )
-        if model is ResourceTemplate and schema is ResourceTemplateRef:
+        if model is ResourceTemplate and schema in {
+            ResourceTemplateRef,
+            ResourceTemplateSchema,
+        }:
             opts.append(selectinload(ResourceTemplate.types))
         if model is ProcessRun and schema in {ProcessRunRef, ProcessRunSchema}:
             opts.append(selectinload(ProcessRun.template))
@@ -920,6 +923,19 @@ class LocalBackend(Backend):
                 ProcessRun.assignments
             ).selectinload(ResourceAssignment.resource),
             (CampaignSchema, "process_run"): selectinload(Campaign.process_runs),
+            (ProcessTemplateSchema, "step_templates"): selectinload(
+                ProcessTemplate.step_templates
+            ),
+            (ProcessTemplateSchema, "resource_slots"): selectinload(
+                ProcessTemplate.resource_slots
+            ),
+            (ResourceTemplateSchema, "children"): selectinload(
+                ResourceTemplate.children
+            ),
+            (ResourceTemplateSchema, "attribute_group_templates"): selectinload(
+                ResourceTemplate.attribute_group_templates
+            ),
+            (ResourceTemplateSchema, "types"): selectinload(ResourceTemplate.types),
             (ResourceSchema, "properties"): selectinload(
                 Resource.properties
             ).selectinload(Property._values),
