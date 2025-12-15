@@ -723,22 +723,6 @@ for run in recent_runs:
     print(run.created_at, run.name)
 ```
 
-### Implementation Note
-
-Internally, each query constructs a `QuerySpec`:
-
-```python
-class QuerySpec(BaseModel):
-    filters: dict[str, Any] = {}
-    predicates: Sequence[Any] = ()
-    orderings: Sequence[Any] = ()
-    preloads: Sequence[str] = ()
-    limit: int | None = None
-    offset: int | None = None
-```
-
-Your backend adapter receives the model type and `QuerySpec` and is responsible for translating that into SQLAlchemy queries or other data sources. This separation keeps the public Query DSL stable even if the backend implementation changes.
-
 ## Roadmap
 
 - REST API backend
