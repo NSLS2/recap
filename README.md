@@ -24,6 +24,12 @@ It allows a complete audit trail of experiments and answers questions like, "Who
 
 Recap is ideal for high throughput experiments and models physical and digital artifacts and defines relationships between them
 
+## What its _not_ meant for
+
+- Recap is not an Electronic Lab Notebook (ELN) or Lab Inventory Management Software (LIMS), although you can write an application on top of Recap.
+- Recap does not deal with instrument control
+- Does not perform computations, analyses
+
 ## Installation
 
 Recap is available on PyPI. Install with:
