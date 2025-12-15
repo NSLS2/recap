@@ -1,14 +1,7 @@
-from typing import Annotated, Any, Self
+from typing import Any, Self
 from uuid import UUID
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    SkipValidation,
-    create_model,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from recap.db.resource import Property
 from recap.schemas.attribute import (
@@ -128,7 +121,7 @@ class ResourceTemplateSchema(CommonFields):
     slug: "str | None"
     version: str
     types: list[ResourceTypeSchema] = Field(default_factory=list)
-    parent: Annotated[Self | None, SkipValidation] = Field(default=None, exclude=True)
+    parent: ResourceTemplateRef | None = Field(default=None, exclude=True)
     children: dict[str, Self] = Field(default_factory=dict)
     attribute_group_templates: list[AttributeGroupTemplateSchema]
 
@@ -145,7 +138,7 @@ class ResourceSlotSchema(CommonFields):
 class ResourceSchema(CommonFields):
     name: str
     template: ResourceTemplateSchema
-    parent: Annotated[Self | None, SkipValidation] = Field(default=None, exclude=True)
+    parent: "ResourceRef | None" = Field(default=None, exclude=True)
     children: dict[str, Self]
     properties: BaseModel | dict[str, PropertySchema]
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
