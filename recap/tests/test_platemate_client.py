@@ -258,9 +258,7 @@ def test_platemate_via_client_child_steps(client):  # noqa
         echo_children_created = []
         for source, dest in zip(lib_children, xtal_wells, strict=False):
             # Generate a pydantic model for the child step
-            echo_transfer_step = prb._process_run.steps[
-                "Echo Transfer"
-            ].generate_child()
+            echo_transfer_step = prb.get_model().steps["Echo Transfer"].generate_child()
             # Update its values
             echo_transfer_step.parameters.echo.values.batch = 2
             echo_transfer_step.parameters.echo.values.volume = echo_params.echo.volume
