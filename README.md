@@ -15,6 +15,15 @@ RECAP is a Python framework that captures **experimental provenance** using a SQ
 - SQLAlchemy ORM persistence
 - A unified provenance graph
 
+## What Recap does
+
+Lifecycle of experiments can be arbitrarily long, managing high throughput experiment plans and data capture is difficult and relationships between phases of experiments can be complex.
+
+Recap provides an “experiment data management” framework which unifies different stages of an experiment under one scalable provenance rich backbone.
+It allows a complete audit trail of experiments and answers questions like, "Who ran it?", "When and with what settings?"
+
+Recap is ideal for high throughput experiments and models physical and digital artifacts and defines relationships between them
+
 ## Installation
 
 Recap is available on PyPI. Install with:
