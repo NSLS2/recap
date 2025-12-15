@@ -255,20 +255,20 @@ def test_platemate_via_client_child_steps(client):  # noqa
         )
         assert len(xtal_wells) == 3, "xtal wells not initialized"
         assert len(lib_children) == 3, "library wells not initialized"
-        echo_parent = next(step for step in prb.steps if step.name == "Echo Transfer")
         echo_children_created = []
         for source, dest in zip(lib_children, xtal_wells, strict=False):
-            echo_child = prb.add_child_step(
-                parent_step_name=echo_parent.name,
-                step_template_name="Echo Transfer",
-                parameters={
-                    "echo": {
-                        "batch": 7,
-                        "volume": echo_params.echo.volume,
-                    }
-                },
-                resources={"source_plate": source, "dest_plate": dest},
-            )
+            # Generate a pydantic model for the child step
+            echo_transfer_step = prb._process_run.steps[
+                "Echo Transfer"
+            ].generate_child()
+            # Update its values
+            echo_transfer_step.parameters.echo.values.batch = 2
+            echo_transfer_step.parameters.echo.values.volume = echo_params.echo.volume
+            echo_transfer_step.resources["source_plate"] = source
+            echo_transfer_step.resources["dest_plate"] = dest
+            # Add it to the database
+            prb.add_child_step(echo_transfer_step)
+            echo_child = prb.add_child_step(echo_transfer_step)
             echo_children_created.append(echo_child)
         assert len(echo_children_created) == 3
 
@@ -283,29 +283,20 @@ def test_platemate_via_client_child_steps(client):  # noqa
         assert puck_with_pins is not None, "FGZ003 puck not initialized"
         puck_pins = sorted(puck_with_pins.children.values(), key=lambda p: p.name)
         assert len(puck_pins) >= 2, "puck pins not initialized"
-        harvest_parent = next(step for step in prb.steps if step.name == "Harvesting")
         harvest_children_created = []
 
         for idx, dest in enumerate(xtal_wells[:2]):
             arrival = base_time + timedelta(minutes=5 + idx * 10)
             departure = arrival + timedelta(minutes=5)
-            harvest_params = {
-                "harvest": {
-                    "arrival": arrival,
-                    "departure": departure,
-                    "lsdc_name": f"mpro-{idx + 1:02d}",
-                    "harvested": True,
-                }
-            }
-            harvest_child = prb.add_child_step(
-                parent_step_name=harvest_parent.name,
-                step_template_name="Harvesting",
-                parameters=harvest_params,
-                resources={
-                    "source_plate": dest,
-                    "dest_puck": puck_pins[idx],
-                },
-            )
+            harvest_step = prb._process_run.steps["Harvesting"].generate_child()
+            harvest_step.parameters.harvest.values.arrival = arrival
+            harvest_step.parameters.harvest.values.departure = departure
+            harvest_step.parameters.harvest.values.lsdc_name = f"mpro-{idx + 1:02d}"
+            harvest_step.parameters.harvest.values.harvested = True
+            harvest_step.resources["source_plate"] = dest
+            harvest_step.resources["dest_puck"] = puck_pins[idx]
+
+            harvest_child = prb.add_child_step(harvest_step)
             lib_children[idx].properties["status"].values.used = True
             harvest_children_created.append(harvest_child)
         assert len(harvest_children_created) == 2
