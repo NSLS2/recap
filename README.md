@@ -78,6 +78,18 @@ In the example above we create a `template_builder` that creates or modifies an 
 
 Resources can carry metadata organized into groups of related properties.
 
+#### AttributeValue types and metadata
+
+| Value Type | Python Type | Metadata keys (optional)                     |
+|------------|-------------|----------------------------------------------|
+| `int`      | `int`       | `min`, `max`                                 |
+| `float`    | `float`     | `min`, `max`                                 |
+| `bool`     | `bool`      | _(none)_                                     |
+| `str`      | `str`       | _(none)_                                     |
+| `datetime` | `datetime`  | _(none)_                                     |
+| `array`    | `list`      | _(none)_                                     |
+| `enum`     | `str`       | `choices` (list of allowed string values)    |
+
 Example: We create a similar template, but this time we add properties to the plate template. The group is called `dimensions` within which we create two parameters `rows` and `columns`, we also have to specify the data `type` for the property and a `default` value. If the property has a unit, you can specify that with a `unit` key.
 
 ```python
@@ -399,7 +411,7 @@ with client.build_process(process_id=process_run.id) as prb:
 
 ## Querying Data
 
-RECAP exposes a small Query DSL on top of the configured backend (SQLAlchemy or another adapter) so that you can express provenance-oriented queries in a fluent, chainable style.
+RECAP exposes a small Query DSL on top of the configured backend (SQLAlchemy or another adapter) so that you can express provenance-oriented queries in a fluent, chainable style. Query objects are immutable; each chain returns a new query with your filters/preloads applied.
 
 The query builder lives on the client as `client.query_maker()` and exposes type-specific entry points:
 
@@ -423,6 +435,7 @@ campaigns = qm.campaigns()
 runs = qm.process_runs()
 resources = qm.resources()
 templates = qm.resource_templates()
+process_templates = qm.process_templates()
 ```
 
 ### Basic Filtering
@@ -493,7 +506,12 @@ Queries can preload related entities via the `include` helper. Each `include` tr
 - `CampaignQuery.include_process_runs()`
 - `ProcessRunQuery.include_steps(include_parameters: bool = False)`
 - `ProcessRunQuery.include_resources()`
+- `ProcessTemplateQuery.include_step_templates()`
+- `ProcessTemplateQuery.include_resource_slots()`
 - `ResourceQuery.include_template()`
+- `ResourceTemplateQuery.include_children()`
+- `ResourceTemplateQuery.include_attribute_groups()`
+- `ResourceTemplateQuery.include_types()`
 
 Example: load campaigns and their process runs in one go:
 
@@ -519,6 +537,27 @@ runs = (
     .process_runs()
     .include_steps(include_parameters=True)
     .all()
+)
+
+# Fetch process templates with their steps and resource slots
+pt = (
+    client.query_maker()
+    .process_templates()
+    .filter(name="Workflow-1")
+    .include_step_templates()
+    .include_resource_slots()
+    .first()
+)
+
+# Fetch resource templates with children, attr groups, and types
+rt = (
+    client.query_maker()
+    .resource_templates()
+    .filter(name="Plate")
+    .include_children()
+    .include_attribute_groups()
+    .include_types()
+    .first()
 )
 
 for run in runs:
