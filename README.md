@@ -22,6 +22,7 @@ RECAP is a Python framework that captures **experimental provenance** using a SQ
 - [What its _not_ meant for](#what-its-_not_-meant-for)
 - [Installation](#installation)
 - [Getting started](#getting-started)
+- [Core concepts](#core-concepts)
 - [Resources](#resources)
   - [Resource Hierarchy](#resource-hierarchy)
   - [Resource Template](#resource-template)
@@ -71,9 +72,20 @@ If you want a database at a specific path, pass it in. You can also point at an 
 client = RecapClient.from_sqlite("/path/to/database.db")
 ```
 
+## Core concepts
+
+Data provenance is captured using a combination of `Resources` and `ProcessRuns`. A `Resource` is any trackable entity such as samples, raw detector data, or processed data. A `ProcessRun` is a workflow that describe interactions with `Resources`. Typically, `Resources` are inputs and outputs to a `ProcessRun`. We can chain multiple `ProcessRuns` together either by using the output `Resource` of one process as the input to another, or re-using the same `Resource` as inputs to different `ProcessRuns`. The figure below illustrates how this chain can be created at the MX beamline for a particular set of samples
+
+<p align="center">
+  <img src="docs/img/process_chain.png" alt="Resource Template Schema" />
+</p>
+
+Circles represent `Resources` and the rounded boxes represent `ProcessRuns`. Different phases of the experiment process is represented by dashed boxes. By chaining resources together, one can query the database for information such as, given a processing result file, what were the sample preparation conditions? This kind of data provenance is particularly useful to build statistical or machine-learning models to optimize sample preparation or even data acquisition parameters. The next few sections will dive deeper into the way one can use Recap to define [Resources](#resources) and [ProcessRuns](#processtemplates-and-processruns)
+
+
 ## Resources
 
-In RECAP any trackable entity is called a **Resource**. A resource can be a physical item (samples, plates, robots), a digital item (raw detector files, processed datasets), or a logical item (intermediate computation results). Think of resources as first-class objects: they carry identity, metadata, lineage, and can be nested inside each other.
+As mentioned previously, in RECAP any trackable entity is called a **Resource**. A resource can be a physical item (samples, plates, robots), a digital item (raw detector files, processed datasets), or a logical item (intermediate computation results). Think of resources as first-class objects: they carry identity, metadata, lineage, and can be nested inside each other.
 
 ### Resource Hierarchy
 
