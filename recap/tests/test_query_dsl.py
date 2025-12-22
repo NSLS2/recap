@@ -13,6 +13,7 @@ from recap.db.step import StepTemplate
 from recap.dsl.query import QueryDSL
 from recap.schemas.process import ProcessRunRef, ProcessTemplateRef
 from recap.schemas.resource import ResourceRef, ResourceTemplateRef
+from recap.utils.database import get_or_create
 from recap.utils.general import Direction
 
 
@@ -235,7 +236,9 @@ def test_resource_template_includes(db_session):
 
 
 def test_resource_property_filtering_and_parent_scope(db_session):
-    container_type = ResourceType(name="container")
+    container_type, _ = get_or_create(
+        db_session, ResourceType, where={"name": "container"}
+    )
     parent_tmpl = ResourceTemplate(name="Parent", version="1.0")
     parent_tmpl.types.append(container_type)
     child_tmpl = ResourceTemplate(name="Child", version="1.0", parent=parent_tmpl)
