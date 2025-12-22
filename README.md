@@ -548,6 +548,44 @@ for tmpl in xtal_plate_templates:
 
 This corresponds directly to the examples in the workflow section where we create templates tagged with types like `["container", "xtal_plate", "plate"]` or `["library_plate"]`.
 
+### Filtering Resources by Properties
+
+`ResourceQuery.filter_property` lets you compare against typed property values (int/float/bool/str/datetime inferred from your input). The property group is optional; pass it when you need to disambiguate:
+
+```python
+plates = (
+    client.query_maker()
+    .resources()
+    .filter_property("rows", gt=100, group="dimensions")
+    .all()
+)
+```
+
+Scope a property filter to the descendants of a parent resource with `under_parent`:
+
+```python
+child_hits = (
+    client.query_maker()
+    .resources()
+    .filter_property("height", gt=10)
+    .under_parent(parent_resource)
+    .all()
+)
+```
+
+### Filtering Process Runs by Step Parameters
+
+`ProcessRunQuery.filter_parameter` works like `filter_property` but targets step parameters. You can optionally narrow by step name and parameter group name; otherwise the match applies to any step/group:
+
+```python
+runs = (
+    client.query_maker()
+    .process_runs()
+    .filter_parameter("dwell", gt=10, group="Exposure", step="Collect")
+    .all()
+)
+```
+
 ### Eager Loading Related Data with `include`
 
 Queries can preload related entities via the `include` helper. Each `include` translates to a string path that the backend understands (e.g., for SQLAlchemy that might become `joinedload` or `selectinload`). The type-specific queries expose more ergonomic methods:

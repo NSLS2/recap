@@ -232,3 +232,83 @@ def test_resource_template_includes(db_session):
         for at in tmpl.attribute_group_templates[0].attribute_templates
     )
     assert any(t.name == "rt-inc" for t in tmpl.types)
+
+
+def test_resource_property_filtering_and_parent_scope(db_session):
+    container_type = ResourceType(name="container")
+    parent_tmpl = ResourceTemplate(name="Parent", version="1.0")
+    parent_tmpl.types.append(container_type)
+    child_tmpl = ResourceTemplate(name="Child", version="1.0", parent=parent_tmpl)
+
+    metrics = AttributeGroupTemplate(name="metrics", resource_template=child_tmpl)
+    metrics.attribute_templates.append(
+        AttributeTemplate(name="height", value_type="int", default_value="0")
+    )
+    metrics.attribute_templates.append(
+        AttributeTemplate(name="label", value_type="str", default_value="")
+    )
+
+    db_session.add_all([container_type, parent_tmpl, child_tmpl, metrics])
+    db_session.commit()
+
+    parent_res = Resource(name="parent-res", template=parent_tmpl)
+    child_short = Resource(name="child-short", template=child_tmpl, parent=parent_res)
+    child_tall = Resource(name="child-tall", template=child_tmpl, parent=parent_res)
+
+    child_short.properties["metrics"].values["height"] = 5
+    child_tall.properties["metrics"].values["height"] = 15
+    child_tall.properties["metrics"].values["label"] = "tall"
+
+    db_session.add_all([parent_res, child_short, child_tall])
+    db_session.commit()
+
+    q = make_query(db_session).resources()
+
+    tall = q.filter_property("height", gt=10, group="metrics").all()
+    assert {r.name for r in tall} == {"child-tall"}
+
+    scoped = q.filter_property("height", gt=10).under_parent(parent_res).all()
+    assert {r.name for r in scoped} == {"child-tall"}
+    assert all(r.name != "parent-res" for r in scoped)
+
+
+def test_process_run_parameter_filtering(db_session):
+    with db_session.no_autoflush:
+        campaign = Campaign(name="C-param", proposal="P-param")
+        tmpl = ProcessTemplate(name="PT-param", version="1.0")
+        step_tmpl = StepTemplate(name="Collect", process_template=tmpl)
+        params_grp = AttributeGroupTemplate(name="Exposure", step_template=step_tmpl)
+        params_grp.attribute_templates.append(
+            AttributeTemplate(name="dwell", value_type="int", default_value="5")
+        )
+
+        db_session.add_all([campaign, tmpl, step_tmpl, params_grp])
+        db_session.commit()
+
+        run_low = ProcessRun(
+            name="run-low",
+            description="low dwell",
+            template=tmpl,
+            campaign=campaign,
+        )
+        run_high = ProcessRun(
+            name="run-high",
+            description="high dwell",
+            template=tmpl,
+            campaign=campaign,
+        )
+
+        run_low.steps["Collect"].parameters["Exposure"].values["dwell"] = 4
+        run_high.steps["Collect"].parameters["Exposure"].values["dwell"] = 12
+
+        db_session.add_all([run_low, run_high])
+        db_session.commit()
+
+    q = make_query(db_session).process_runs()
+
+    hits = q.filter_parameter("dwell", gt=10, group="Exposure", step="Collect").all()
+    assert {r.name for r in hits} == {"run-high"}
+
+    # Group and step are optional when unambiguous
+    hits2 = q.filter_parameter("dwell", gt=10).all()
+    assert {r.name for r in hits2} == {"run-high"}

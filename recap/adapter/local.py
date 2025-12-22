@@ -4,13 +4,14 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, create_model
-from sqlalchemy import Select, insert, select
+from sqlalchemy import Boolean, Float, Integer, Select, String, cast, insert, select
 from sqlalchemy.exc import NoResultFound
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, aliased, selectinload
+from sqlalchemy.sql import and_, or_
 from sqlalchemy.sql.functions import count
 
 from recap.adapter import Backend, UnitOfWork
-from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
+from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate, AttributeValue
 from recap.db.base import Base
 from recap.db.campaign import Campaign
 from recap.db.exceptions import ValidationError
@@ -58,6 +59,7 @@ from recap.utils.dsl import (
     build_param_values_model,
     resolve_path,
 )
+from recap.utils.general import make_slug, to_json_compatible
 
 SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
     CampaignSchema: Campaign,
@@ -832,6 +834,164 @@ class LocalBackend(Backend):
             label="Resource",
         )
 
+    def _coerce_value(self, pf, left_expr):
+        type_mapping = {
+            "int": Integer,
+            "float": Float,
+            "bool": Boolean,
+            "datetime": String,
+        }
+        sa_type = type_mapping.get(pf.value_type)
+        if sa_type:
+            left_expr = cast(left_expr, sa_type)
+
+        coerced_value = pf.value
+        if pf.value_type:
+            coerced_value = to_json_compatible(pf.value_type, pf.value)
+        return coerced_value
+
+    def _between_filter(self, prop_filter, conditions, left_expr):
+        if prop_filter.upper is None:
+            raise ValueError("between comparator requires upper bound")
+        conditions.append(
+            left_expr.between(
+                to_json_compatible(prop_filter.value_type, prop_filter.value),
+                to_json_compatible(prop_filter.value_type, prop_filter.upper),
+            )
+        )
+
+    def _in_filter(self, prop_filter, conditions, left_expr):
+        if prop_filter.value is None:
+            raise ValueError("in comparator requires an iterable of values")
+        values = prop_filter.value
+        if not isinstance(values, list | tuple | set):
+            raise ValueError("in comparator requires an iterable of values")
+        conditions.append(
+            left_expr.in_(
+                [to_json_compatible(prop_filter.value_type, v) for v in values]
+            )
+        )
+
+    def _add_filters(self, pf, conditions, left_expr, coerced_value):
+        match pf.op:
+            case "eq":
+                conditions.append(left_expr == coerced_value)
+            case "gt":
+                conditions.append(left_expr > coerced_value)
+            case "gte":
+                conditions.append(left_expr >= coerced_value)
+            case "lt":
+                conditions.append(left_expr < coerced_value)
+            case "lte":
+                conditions.append(left_expr <= coerced_value)
+            case "between":
+                self._between_filter(pf, conditions, left_expr)
+            case "in":
+                self._in_filter(pf, conditions, left_expr)
+            case _:
+                raise ValueError(f"Unsupported property comparator {pf.op}")
+
+        return conditions
+
+    def _build_conditions_attributes(
+        self,
+        pf,
+        tmpl_alias: type[AttributeTemplate],
+        val_alias: type[AttributeValue],
+        group_alias: type[AttributeGroupTemplate] | None,
+    ) -> list:
+        conditions = []
+        name_slug = make_slug(pf.name)
+        conditions.append(or_(tmpl_alias.name == pf.name, tmpl_alias.slug == name_slug))
+
+        if group_alias is not None and pf.group:
+            group_slug = make_slug(pf.group)
+            conditions.append(
+                or_(group_alias.name == pf.group, group_alias.slug == group_slug)
+            )
+
+        if pf.value_type:
+            conditions.append(tmpl_alias.value_type == pf.value_type)
+
+        left_expr = val_alias.value_json
+        coerced_value = self._coerce_value(pf, left_expr)
+        conditions = self._add_filters(pf, conditions, left_expr, coerced_value)
+
+        return conditions
+
+    def _build_select_resource(self, model, stmt, spec):
+        if spec.parent_resource_id:
+            res_tbl = Resource.__table__
+            root_id = spec.parent_resource_id
+            base_cte = (
+                select(res_tbl.c.id).where(res_tbl.c.id == root_id).cte(recursive=True)
+            )
+            children = select(res_tbl.c.id).where(res_tbl.c.parent_id == base_cte.c.id)
+            descendants_cte = base_cte.union_all(children)
+            stmt = stmt.join(descendants_cte, model.id == descendants_cte.c.id)
+            stmt = stmt.where(model.id != root_id)
+
+        if spec.property_filters:
+            for idx, pf in enumerate(spec.property_filters):
+                prop_alias = aliased(Property, name=f"prop_filter_{idx}")
+                val_alias = aliased(AttributeValue, name=f"prop_val_filter_{idx}")
+                tmpl_alias = aliased(AttributeTemplate, name=f"prop_tmpl_filter_{idx}")
+                group_alias = (
+                    aliased(AttributeGroupTemplate, name=f"prop_group_filter_{idx}")
+                    if pf.group
+                    else None
+                )
+
+                stmt = stmt.join(prop_alias, prop_alias.resource_id == model.id)
+                stmt = stmt.join(val_alias, val_alias.property_id == prop_alias.id)
+                stmt = stmt.join(
+                    tmpl_alias, tmpl_alias.id == val_alias.attribute_template_id
+                )
+                if group_alias is not None:
+                    stmt = stmt.join(
+                        group_alias,
+                        group_alias.id == prop_alias.attribute_group_template_id,
+                    )
+                conditions = self._build_conditions_attributes(
+                    pf, tmpl_alias, val_alias, group_alias
+                )
+                stmt = stmt.where(and_(*conditions))
+
+            stmt = stmt.distinct()
+        return stmt
+
+    def _build_select_process_run(self, model, stmt, spec):
+        if spec.parameter_filters:
+            for idx, pf in enumerate(spec.parameter_filters):
+                step_alias = aliased(Step, name=f"param_step_filter_{idx}")
+                param_alias = aliased(Parameter, name=f"param_filter_{idx}")
+                val_alias = aliased(AttributeValue, name=f"param_val_filter_{idx}")
+                tmpl_alias = aliased(AttributeTemplate, name=f"param_tmpl_filter_{idx}")
+                group_alias = (
+                    aliased(AttributeGroupTemplate, name=f"param_group_filter_{idx}")
+                    if pf.group
+                    else None
+                )
+
+                stmt = stmt.join(step_alias, step_alias.process_run_id == model.id)
+                stmt = stmt.join(param_alias, param_alias.step_id == step_alias.id)
+                stmt = stmt.join(val_alias, val_alias.parameter_id == param_alias.id)
+                stmt = stmt.join(
+                    tmpl_alias, tmpl_alias.id == val_alias.attribute_template_id
+                )
+                if group_alias is not None:
+                    stmt = stmt.join(
+                        group_alias,
+                        group_alias.id == param_alias.attribute_group_template_id,
+                    )
+
+                conditions = self._build_conditions_attributes(
+                    pf, tmpl_alias, val_alias, group_alias
+                )
+                stmt = stmt.where(and_(*conditions))
+            stmt = stmt.distinct()
+        return stmt
+
     def _build_select(self, schema: type[SchemaT], spec: QuerySpec) -> Select:
         model = SCHEMA_MODEL_MAPPING[schema]
         stmt = select(model)
@@ -858,6 +1018,12 @@ class LocalBackend(Backend):
 
         if simple_filters:
             stmt = stmt.filter_by(**simple_filters)
+
+        if model is Resource:
+            stmt = self._build_select_resource(model, stmt, spec)
+
+        if model is ProcessRun:
+            stmt = self._build_select_process_run(model, stmt, spec)
 
         for pred in spec.predicates:
             stmt = stmt.where(pred)

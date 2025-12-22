@@ -1,7 +1,9 @@
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from recap.schemas.resource import (
     ResourceRef,
@@ -30,6 +32,34 @@ SchemaT = TypeVar("SchemaT", bound=BaseModel)
 ModelT = TypeVar("ModelT")
 
 
+class PropertyFilter(BaseModel):
+    name: str
+    group: str | None = None
+    op: Literal["eq", "gt", "gte", "lt", "lte", "between", "in"] = "eq"
+    value: Any
+    upper: Any | None = None
+    value_type: str | None = None
+
+    def model_dump(self, *args, **kwargs):
+        # Ensure upper/value serialize even when None for clarity in REST payloads
+        kwargs.setdefault("exclude_none", False)
+        return super().model_dump(*args, **kwargs)
+
+
+class ParameterFilter(BaseModel):
+    name: str
+    group: str | None = None
+    step: str | None = None
+    op: Literal["eq", "gt", "gte", "lt", "lte", "between", "in"] = "eq"
+    value: Any
+    upper: Any | None = None
+    value_type: str | None = None
+
+    def model_dump(self, *args, **kwargs):
+        kwargs.setdefault("exclude_none", False)
+        return super().model_dump(*args, **kwargs)
+
+
 class QuerySpec(BaseModel):
     filters: dict[str, Any] = {}
     predicates: Sequence[Any] = ()
@@ -37,6 +67,9 @@ class QuerySpec(BaseModel):
     preloads: Sequence[str] = ()
     limit: int | None = None
     offset: int | None = None
+    property_filters: list[PropertyFilter] = Field(default_factory=list)
+    parent_resource_id: UUID | None = None
+    parameter_filters: list[ParameterFilter] = Field(default_factory=list)
 
 
 class BaseQuery(Generic[SchemaT]):
@@ -53,6 +86,9 @@ class BaseQuery(Generic[SchemaT]):
         preloads: list[str] | None = None,
         limit: int | None = None,
         offset: int | None = None,
+        property_filters: list[PropertyFilter] | None = None,
+        parent_resource_id: UUID | None = None,
+        parameter_filters: list[ParameterFilter] | None = None,
     ):
         self._backend = backend
         self.model: type[SchemaT] = model or self.__class__.model  # type: ignore[attr-defined]
@@ -62,6 +98,20 @@ class BaseQuery(Generic[SchemaT]):
         self._preloads = preloads or []
         self._limit = limit
         self._offset = offset
+        self._property_filters = property_filters or []
+        self._parent_resource_id = parent_resource_id
+        self._parameter_filters = parameter_filters or []
+
+    def _infer_value_type(self, value: Any) -> str | None:
+        if isinstance(value, bool):
+            return "bool"
+        if isinstance(value, int) and not isinstance(value, bool):
+            return "int"
+        if isinstance(value, float):
+            return "float"
+        if isinstance(value, datetime):
+            return "datetime"
+        return "str"
 
     def _clone(self: Self, **overrides) -> "Self":
         """
@@ -78,6 +128,9 @@ class BaseQuery(Generic[SchemaT]):
             preloads=list(self._preloads),
             limit=self._limit,
             offset=self._offset,
+            property_filters=list(self._property_filters),
+            parent_resource_id=self._parent_resource_id,
+            parameter_filters=list(self._parameter_filters),
         )
         params.update(overrides)
         clone = self.__class__(**params)
@@ -112,6 +165,9 @@ class BaseQuery(Generic[SchemaT]):
             preloads=self._preloads,
             limit=self._limit,
             offset=self._offset,
+            property_filters=self._property_filters,
+            parent_resource_id=self._parent_resource_id,
+            parameter_filters=self._parameter_filters,
         )
 
     def _execute(self) -> list[SchemaT]:
@@ -163,6 +219,9 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
             preloads=list(self._preloads),
             limit=self._limit,
             offset=self._offset,
+            property_filters=list(self._property_filters),
+            parent_resource_id=self._parent_resource_id,
+            parameter_filters=list(self._parameter_filters),
         )
         params.update(overrides)
         return self.__class__(**params)
@@ -171,6 +230,62 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
         if include_parameters:
             self.include("steps.parameters")
         return self.include("steps")
+
+    def filter_parameter(
+        self,
+        name: str,
+        *,
+        group: str | None = None,
+        step: str | None = None,
+        eq: Any | None = None,
+        gt: Any | None = None,
+        gte: Any | None = None,
+        lt: Any | None = None,
+        lte: Any | None = None,
+        between: tuple[Any, Any] | None = None,
+        in_: Sequence[Any] | None = None,
+        value_type: str | None = None,
+    ) -> "ProcessRunQuery":
+        comparators = {
+            "eq": eq,
+            "gt": gt,
+            "gte": gte,
+            "lt": lt,
+            "lte": lte,
+            "between": between,
+            "in": in_,
+        }
+        set_ops = {op for op, v in comparators.items() if v is not None}
+        if len(set_ops) != 1:
+            raise ValueError(
+                "filter_parameter requires exactly one comparator (eq/gt/gte/lt/lte/between/in_)"
+            )
+        op = next(iter(set_ops))
+        raw_value = comparators[op]
+
+        if op == "between":
+            if not isinstance(raw_value, Sequence) or len(raw_value) != 2:
+                raise ValueError(
+                    "between requires a 2-tuple/sequence of (lower, upper)"
+                )
+            lower, upper = raw_value
+        else:
+            lower, upper = raw_value, None
+
+        if value_type is None:
+            probe = lower if op != "between" else lower
+            value_type = self._infer_value_type(probe)
+
+        pf = ParameterFilter(
+            name=name,
+            group=group,
+            step=step,
+            op=op,  # type: ignore[arg-type]
+            value=lower,
+            upper=upper,
+            value_type=value_type,
+        )
+        return self._clone(parameter_filters=self._parameter_filters + [pf])
 
     def include_resources(self) -> "ProcessRunQuery":
         return self.include("resources")
@@ -201,12 +316,87 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
             preloads=list(self._preloads),
             limit=self._limit,
             offset=self._offset,
+            property_filters=list(self._property_filters),
+            parent_resource_id=self._parent_resource_id,
+            parameter_filters=list(self._parameter_filters),
         )
         params.update(overrides)
         return self.__class__(**params)
 
     def include_template(self) -> "ResourceQuery":
         return self.include("template")
+
+    def filter_property(
+        self,
+        name: str,
+        *,
+        group: str | None = None,
+        eq: Any | None = None,
+        gt: Any | None = None,
+        gte: Any | None = None,
+        lt: Any | None = None,
+        lte: Any | None = None,
+        between: tuple[Any, Any] | None = None,
+        in_: Sequence[Any] | None = None,
+        value_type: str | None = None,
+    ) -> "ResourceQuery":
+        comparators = {
+            "eq": eq,
+            "gt": gt,
+            "gte": gte,
+            "lt": lt,
+            "lte": lte,
+            "between": between,
+            "in": in_,
+        }
+        set_ops = {op for op, v in comparators.items() if v is not None}
+        if len(set_ops) != 1:
+            raise ValueError(
+                "filter_property requires exactly one comparator (eq/gt/gte/lt/lte/between/in_)"
+            )
+        op = next(iter(set_ops))
+        raw_value = comparators[op]
+
+        if op == "between":
+            if not isinstance(raw_value, Sequence) or len(raw_value) != 2:
+                raise ValueError(
+                    "between requires a 2-tuple/sequence of (lower, upper)"
+                )
+            lower, upper = raw_value
+        else:
+            lower, upper = raw_value, None
+
+        if value_type is None:
+            probe = lower if op != "between" else lower
+            value_type = self._infer_value_type(probe)
+
+        pf = PropertyFilter(
+            name=name,
+            group=group,
+            op=op,  # type: ignore[arg-type]
+            value=lower,
+            upper=upper,
+            value_type=value_type,
+        )
+        return self._clone(property_filters=self._property_filters + [pf])
+
+    def under_parent(
+        self, parent: ResourceRef | ResourceSchema | UUID | str | Any
+    ) -> "ResourceQuery":
+        parent_id: UUID
+        if isinstance(parent, ResourceRef | ResourceSchema):
+            parent_id = parent.id
+        elif isinstance(parent, UUID):
+            parent_id = parent
+        elif isinstance(parent, str):
+            parent_id = UUID(parent)
+        elif hasattr(parent, "id"):
+            parent_id = parent.id
+        else:
+            raise TypeError(
+                "parent must be a ResourceRef, ResourceSchema, UUID, UUID string, or have an 'id' attribute"
+            )
+        return self._clone(parent_resource_id=parent_id)
 
 
 class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema]):
@@ -234,6 +424,9 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema]):
             preloads=list(self._preloads),
             limit=self._limit,
             offset=self._offset,
+            property_filters=list(self._property_filters),
+            parent_resource_id=self._parent_resource_id,
+            parameter_filters=list(self._parameter_filters),
         )
         params.update(overrides)
         return self.__class__(**params)
@@ -276,6 +469,9 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema]):
             preloads=list(self._preloads),
             limit=self._limit,
             offset=self._offset,
+            property_filters=list(self._property_filters),
+            parent_resource_id=self._parent_resource_id,
+            parameter_filters=list(self._parameter_filters),
         )
         params.update(overrides)
         return self.__class__(**params)
