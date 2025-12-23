@@ -70,6 +70,7 @@ class QuerySpec(BaseModel):
     property_filters: list[PropertyFilter] = Field(default_factory=list)
     parent_resource_id: UUID | None = None
     parameter_filters: list[ParameterFilter] = Field(default_factory=list)
+    campaign_id: UUID | None = None
 
 
 class BaseQuery(Generic[SchemaT]):
@@ -89,6 +90,7 @@ class BaseQuery(Generic[SchemaT]):
         property_filters: list[PropertyFilter] | None = None,
         parent_resource_id: UUID | None = None,
         parameter_filters: list[ParameterFilter] | None = None,
+        campaign_id: UUID | None = None,
     ):
         self._backend = backend
         self.model: type[SchemaT] = model or self.__class__.model  # type: ignore[attr-defined]
@@ -101,6 +103,7 @@ class BaseQuery(Generic[SchemaT]):
         self._property_filters = property_filters or []
         self._parent_resource_id = parent_resource_id
         self._parameter_filters = parameter_filters or []
+        self._campaign_id = campaign_id
 
     def _infer_value_type(self, value: Any) -> str | None:
         if isinstance(value, bool):
@@ -131,6 +134,7 @@ class BaseQuery(Generic[SchemaT]):
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
+            campaign_id=self._campaign_id,
         )
         params.update(overrides)
         clone = self.__class__(**params)
@@ -168,6 +172,7 @@ class BaseQuery(Generic[SchemaT]):
             property_filters=self._property_filters,
             parent_resource_id=self._parent_resource_id,
             parameter_filters=self._parameter_filters,
+            campaign_id=self._campaign_id,
         )
 
     def _execute(self) -> list[SchemaT]:
@@ -222,6 +227,7 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
+            campaign_id=self._campaign_id,
         )
         params.update(overrides)
         return self.__class__(**params)
@@ -319,6 +325,7 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
+            campaign_id=self._campaign_id,
         )
         params.update(overrides)
         return self.__class__(**params)
@@ -427,6 +434,7 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema]):
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
+            campaign_id=self._campaign_id,
         )
         params.update(overrides)
         return self.__class__(**params)
@@ -472,6 +480,7 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema]):
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
+            campaign_id=self._campaign_id,
         )
         params.update(overrides)
         return self.__class__(**params)
@@ -484,20 +493,45 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema]):
 
 
 class QueryDSL:
-    def __init__(self, backend: "Backend"):
+    def __init__(self, backend: "Backend", *, campaign_id: UUID | None = None):
         self.backend = backend
+        self._campaign_id = campaign_id
+
+    def _resolve_campaign_id(self, campaign: UUID | str | Any | None) -> UUID | None:
+        if campaign is None:
+            return None
+        if isinstance(campaign, UUID):
+            return campaign
+        if isinstance(campaign, str):
+            return UUID(campaign)
+        if hasattr(campaign, "id"):
+            return campaign.id
+        raise TypeError("campaign must be a UUID, UUID string, or object with an id")
+
+    def _pick_campaign_id(self, campaign: UUID | str | Any | None) -> UUID | None:
+        return (
+            self._resolve_campaign_id(campaign)
+            if campaign is not None
+            else self._campaign_id
+        )
 
     def campaigns(self) -> CampaignQuery:
         return CampaignQuery(self.backend)
 
-    def process_runs(self, *, expand: bool = True) -> ProcessRunQuery:
-        return ProcessRunQuery(self.backend, expand=expand)
+    def process_runs(
+        self, *, expand: bool = True, campaign: UUID | str | Any | None = None
+    ) -> ProcessRunQuery:
+        campaign_id = self._pick_campaign_id(campaign)
+        return ProcessRunQuery(self.backend, expand=expand, campaign_id=campaign_id)
 
     def process_templates(self, *, expand: bool = True) -> ProcessTemplateQuery:
         return ProcessTemplateQuery(self.backend, expand=expand)
 
-    def resources(self, *, expand: bool = True) -> ResourceQuery:
-        return ResourceQuery(self.backend, expand=expand)
+    def resources(
+        self, *, expand: bool = True, campaign: UUID | str | Any | None = None
+    ) -> ResourceQuery:
+        campaign_id = self._pick_campaign_id(campaign)
+        return ResourceQuery(self.backend, expand=expand, campaign_id=campaign_id)
 
     def resource_templates(self, *, expand: bool = True) -> ResourceTemplateQuery:
         return ResourceTemplateQuery(self.backend, expand=expand)

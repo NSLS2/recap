@@ -44,3 +44,28 @@ def test_from_sqlite_reuses_existing_file(tmp_path):
         client.set_campaign(existing_id)
         assert client._campaign.id == existing_id
         assert client.database_path == db_file
+
+
+def test_query_maker_defaults_to_client_campaign(apply_migrations, db_url):
+    with RecapClient(url=db_url) as client:
+        client.create_campaign("name", "proposal")
+        qm = client.query_maker()
+
+        assert qm.process_runs()._spec.campaign_id == client._campaign.id
+        assert qm.resources()._spec.campaign_id == client._campaign.id
+        assert qm.process_templates()._spec.campaign_id is None
+
+
+def test_query_maker_can_override_campaign(apply_migrations, db_url):
+    with RecapClient(url=db_url) as client:
+        client.create_campaign("default", "p1")
+        default_id = client._campaign.id
+        client.create_campaign("other", "p2")
+        other_id = client._campaign.id
+
+        client.set_campaign(default_id)
+        qm = client.query_maker(campaign=other_id)
+
+        assert qm.process_runs()._spec.campaign_id == other_id
+        assert qm.resources()._spec.campaign_id == other_id
+        assert qm.process_runs()._spec.campaign_id != default_id

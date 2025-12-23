@@ -992,6 +992,24 @@ class LocalBackend(Backend):
             stmt = stmt.distinct()
         return stmt
 
+    def _apply_campaign_scope(self, model, stmt, spec):
+        if spec.campaign_id is None:
+            return stmt
+
+        campaign_id = spec.campaign_id
+        if model is ProcessRun:
+            return stmt.where(ProcessRun.campaign_id == campaign_id)
+        if model is Resource:
+            assignment_alias = aliased(
+                ResourceAssignment, name="campaign_resource_assignment"
+            )
+            pr_alias = aliased(ProcessRun, name="campaign_process_run")
+            stmt = stmt.join(assignment_alias, assignment_alias.resource_id == model.id)
+            stmt = stmt.join(pr_alias, pr_alias.id == assignment_alias.process_run_id)
+            stmt = stmt.where(pr_alias.campaign_id == campaign_id)
+            return stmt.distinct()
+        return stmt
+
     def _build_select(self, schema: type[SchemaT], spec: QuerySpec) -> Select:
         model = SCHEMA_MODEL_MAPPING[schema]
         stmt = select(model)
@@ -1024,6 +1042,8 @@ class LocalBackend(Backend):
 
         if model is ProcessRun:
             stmt = self._build_select_process_run(model, stmt, spec)
+
+        stmt = self._apply_campaign_scope(model, stmt, spec)
 
         for pred in spec.predicates:
             stmt = stmt.where(pred)

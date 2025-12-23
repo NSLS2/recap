@@ -331,5 +331,14 @@ class RecapClient:
             uow.rollback()
             raise
 
-    def query_maker(self):
-        return QueryDSL(self.backend)
+    def query_maker(self, *, campaign=None):
+        if self.backend is None:
+            raise RuntimeError("Backend not initialized")
+
+        campaign_id = None
+        if campaign is not None:
+            campaign_id = getattr(campaign, "id", campaign)
+        elif self._campaign is not None:
+            campaign_id = self._campaign.id
+
+        return QueryDSL(self.backend, campaign_id=campaign_id)

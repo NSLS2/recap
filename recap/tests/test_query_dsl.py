@@ -17,10 +17,10 @@ from recap.utils.database import get_or_create
 from recap.utils.general import Direction
 
 
-def make_query(db_session):
+def make_query(db_session, campaign_id=None):
     SessionLocal = sessionmaker(bind=db_session.get_bind())
     backend = LocalBackend(SessionLocal)
-    return QueryDSL(backend)
+    return QueryDSL(backend, campaign_id=campaign_id)
 
 
 def seed_process_run(
@@ -315,3 +315,44 @@ def test_process_run_parameter_filtering(db_session):
     # Group and step are optional when unambiguous
     hits2 = q.filter_parameter("dwell", gt=10).all()
     assert {r.name for r in hits2} == {"run-high"}
+
+
+def test_queries_are_scoped_to_campaign(db_session):
+    camp_a, run_a = seed_process_run(
+        db_session, name="scope-a", with_resource=True, with_parameters=True
+    )
+    camp_b, run_b = seed_process_run(
+        db_session, name="scope-b", with_resource=True, with_parameters=True
+    )
+
+    q_a = make_query(db_session, campaign_id=camp_a.id)
+    runs_a = q_a.process_runs().all()
+    assert {r.id for r in runs_a} == {run_a.id}
+
+    resources_a = q_a.resources().all()
+    assigned_res_ids = {res.id for res in run_a.resources.values()}
+    assert {res.id for res in resources_a} == assigned_res_ids
+
+    campaigns_a = q_a.campaigns().all()
+    assert camp_a.id in {c.id for c in campaigns_a}
+
+    q_b = make_query(db_session, campaign_id=camp_b.id)
+    runs_b = q_b.process_runs().all()
+    assert {r.id for r in runs_b} == {run_b.id}
+
+
+def test_campaign_scope_not_applied_to_templates(db_session):
+    camp_a, _ = seed_process_run(
+        db_session, name="tmpl-a", with_resource=True, with_parameters=True
+    )
+    _, run_b = seed_process_run(
+        db_session, name="tmpl-b", with_resource=True, with_parameters=True
+    )
+
+    q = make_query(db_session, campaign_id=camp_a.id)
+
+    tmpl_ids = {pt.id for pt in q.process_templates().all()}
+    res_tmpl_ids = {rt.id for rt in q.resource_templates().all()}
+
+    assert run_b.template.id in tmpl_ids
+    assert len(res_tmpl_ids) >= 2
