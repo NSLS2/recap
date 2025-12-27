@@ -122,7 +122,7 @@ Here we build or update a template in the database. A template needs a unique na
 Resources can carry metadata organized into groups of related properties.
 
 
-Example: Here we add properties to the plate template. The group is called `dimensions` and contains two parameters, `rows` and `columns`. Each entry declares the data `type` and a `default` value; add a `unit` if it matters.
+Example: Here we add properties to the plate template. The group is called `dimensions` and contains two parameters, `rows` and `columns`. Each entry declares the data `type` and a `default` value; add a `unit` if it matters. We follow up by adding wells as child resource templates, and add properties specific to wells.
 
 ```python
 with client.build_resource_template(name="Library Plate",
@@ -170,6 +170,8 @@ Visualizing ResourceTemplates, PropertyGroups and Properties
 <p align="center">
   <img src="docs/img/resource_template.png" alt="Resource Template Schema" />
 </p>
+
+96 well plates are not the only resources you can model, you can also model an NXMX HDF5 file ([example](docs/resource_examples.md#nexus-hdf5-files)), UR5 robot ([example](docs/resource_examples.md#ur5-robot)) or even a scientist ([example](docs/resource_examples.md#scientist)).
 
 
 ### Resources
@@ -458,8 +460,10 @@ with client.build_process(process_id=process_run.id) as prb:
 
 ```
 
+To query the database, checkout the [Querying Data page](./docs/querying_data.md)
 
 ## Roadmap
 
 - REST API backend
+- CLI
 - Web UI for campaign/process management
