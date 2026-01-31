@@ -87,8 +87,8 @@ def test_parameter_schema_coerces_values_and_rejects_unknown():
         values={"Voltage": "10", "Enabled": "true"},
     )
 
-    assert schema.values.voltage == 10
-    assert schema.values.enabled is True
+    assert schema.values.voltage.value == 10
+    assert schema.values.enabled.value is True
 
     with pytest.raises(ValueError):
         ParameterSchema(
@@ -114,9 +114,12 @@ def test_parameter_schema_exposes_typed_values_model():
         values={"Voltage": "10", "Enabled": "true"},
     )
 
-    assert schema.values.voltage == 10
-    assert schema.values.enabled is True
-    assert schema.values.model_dump(by_alias=True) == {"Voltage": 10, "Enabled": True}
+    assert schema.values.voltage.value == 10
+    assert schema.values.enabled.value is True
+    assert schema.values.model_dump(by_alias=True) == {
+        "Voltage": {"value": 10, "unit": None},
+        "Enabled": {"value": True, "unit": None},
+    }
 
 
 def test_property_schema_value_coercion_matches_template():
@@ -131,7 +134,7 @@ def test_property_schema_value_coercion_matches_template():
         values={"Temp": "25.5"},
     )
 
-    assert property_schema.values.temp == pytest.approx(25.5)
+    assert property_schema.values.temp.value == pytest.approx(25.5)
 
 
 def test_parameter_schema_rejects_uncoercible_values():
@@ -182,7 +185,7 @@ def test_enum_attribute_validates_choices():
         template=group_schema,
         values={"Drop Position": "d"},
     )
-    assert schema.values.get("Drop Position") == "d"
+    assert schema.values.get("Drop Position").value == "d"
 
     with pytest.raises(ValueError):
         ParameterSchema(

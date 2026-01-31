@@ -201,10 +201,11 @@ class ResourceBuilder:
                         break
                 if value_template is None:
                     raise ValueError(f"Could not find value with {val_name}")
+                raw_value = getattr(value, "value", value)
                 pytype = map_dtype_to_pytype(value_template.value_type)
                 prop_fields[value_template.slug] = (
                     pytype | None,
-                    Field(default=value, alias=value_template.name),
+                    Field(default=raw_value, alias=value_template.name),
                 )
                 prop_model = create_model(
                     f"{val_name}", **prop_fields, __base__=(AliasMixin, BaseModel)

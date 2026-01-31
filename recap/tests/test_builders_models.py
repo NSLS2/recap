@@ -9,13 +9,13 @@ def test_resource_builder_set_model_updates_persisted(client):
 
     with client.build_resource("RBM-R", "RBM-T") as rb:
         model = rb.get_model()
-        model.properties.details.values.serial = "updated"
+        model.properties.details.values.serial.value = "updated"
         rb.set_model(model)
 
     refreshed = (
         client.query_maker().resources().filter(name="RBM-R").include_template().first()
     )
-    assert refreshed.properties.details.values.serial == "updated"
+    assert refreshed.properties.details.values.serial.value == "updated"
 
 
 def test_resource_builder_set_model_rejects_mismatch(client):

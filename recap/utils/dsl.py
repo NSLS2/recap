@@ -144,15 +144,28 @@ def lock_instance_fields(model: BaseModel, fields: set[str]) -> BaseModel:
 
 
 def build_param_values_model(group_slug: str, attr_templates):
+    from recap.schemas.attribute import AttributeValueSchema
+
     fields: dict[str, tuple] = {}
-    for name, slug, value_type, metadata in attr_templates:
+    for entry in attr_templates:
+        if len(entry) == 4:
+            name, slug, value_type, metadata = entry
+            unit = None
+        else:
+            name, slug, value_type, metadata, unit = entry
         pytype = map_dtype_to_pytype(value_type)
         meta = metadata or {}
         ge = meta.get("min") if value_type in {"int", "float"} else None
         le = meta.get("max") if value_type in {"int", "float"} else None
+        value_model = create_model(
+            f"{group_slug}_{slug}_value",
+            __base__=AttributeValueSchema,
+            value=(pytype | None, Field(default=None, ge=ge, le=le)),
+            unit=(str | None, Field(default=unit)),
+        )
         fields[slug] = (
-            pytype | None,
-            Field(default=None, alias=name, ge=ge, le=le),
+            value_model,
+            Field(default_factory=value_model, alias=name),
         )
 
     return create_model(

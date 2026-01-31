@@ -154,8 +154,8 @@ def test_platemate_via_client_child_steps(client):  # noqa
     # Resources
     with client.build_resource("DSI-poised", "PM Library Plate") as lib_plate:
         for well in lib_plate.resource.children.values():
-            well.properties["content"].values.catalog_id = f"CAT-{well.name}"
-            well.properties["content"].values.smiles = f"SMILES-{well.name}"
+            well.properties["content"].values.catalog_id.value = f"CAT-{well.name}"
+            well.properties["content"].values.smiles.value = f"SMILES-{well.name}"
 
     xtal_plate = client.create_resource("pmtest", "PM Xtal Plate")
 
@@ -236,8 +236,8 @@ def test_platemate_via_client_child_steps(client):  # noqa
         prb.assign_resource("puck_collection", collection_ref)
 
         echo_params = prb.get_params("Echo Transfer")
-        echo_params.echo.batch = 7
-        echo_params.echo.volume = 25.0
+        echo_params.echo.batch.value = 7
+        echo_params.echo.volume.value = 25.0
         prb.set_params(echo_params)
 
         # Child steps for echo transfer with step-level assignments (lib well -> xtal well)
@@ -260,8 +260,10 @@ def test_platemate_via_client_child_steps(client):  # noqa
             # Generate a pydantic model for the child step
             echo_transfer_step = prb.get_model().steps["Echo Transfer"].generate_child()
             # Update its values
-            echo_transfer_step.parameters.echo.values.batch = 2
-            echo_transfer_step.parameters.echo.values.volume = echo_params.echo.volume
+            echo_transfer_step.parameters.echo.values.batch.value = 2
+            echo_transfer_step.parameters.echo.values.volume.value = (
+                echo_params.echo.volume.value
+            )
             echo_transfer_step.resources["source_plate"] = source
             echo_transfer_step.resources["dest_plate"] = dest
             # Add it to the database
@@ -287,15 +289,17 @@ def test_platemate_via_client_child_steps(client):  # noqa
             arrival = base_time + timedelta(minutes=5 + idx * 10)
             departure = arrival + timedelta(minutes=5)
             harvest_step = prb._process_run.steps["Harvesting"].generate_child()
-            harvest_step.parameters.harvest.values.arrival = arrival
-            harvest_step.parameters.harvest.values.departure = departure
-            harvest_step.parameters.harvest.values.lsdc_name = f"mpro-{idx + 1:02d}"
-            harvest_step.parameters.harvest.values.harvested = True
+            harvest_step.parameters.harvest.values.arrival.value = arrival
+            harvest_step.parameters.harvest.values.departure.value = departure
+            harvest_step.parameters.harvest.values.lsdc_name.value = (
+                f"mpro-{idx + 1:02d}"
+            )
+            harvest_step.parameters.harvest.values.harvested.value = True
             harvest_step.resources["source_plate"] = dest
             harvest_step.resources["dest_puck"] = puck_pins[idx]
 
             harvest_child = prb.add_child_step(harvest_step)
-            lib_children[idx].properties["status"].values.used = True
+            lib_children[idx].properties["status"].values.used.value = True
             harvest_children_created.append(harvest_child)
         assert len(harvest_children_created) == 2
 
@@ -307,11 +311,11 @@ def test_platemate_via_client_child_steps(client):  # noqa
         drop = dest.properties["drop"].values
         echo_rows.append(
             {
-                "dest": mapping.echo_position,
+                "dest": mapping.echo_position.value,
                 "source": source.name,
-                "volume": echo_params.echo.volume,
-                "x": mapping.well_origin_x + drop.x_offset,
-                "y": mapping.well_origin_y + drop.y_offset,
+                "volume": echo_params.echo.volume.value,
+                "x": mapping.well_origin_x.value + drop.x_offset.value,
+                "y": mapping.well_origin_y.value + drop.y_offset.value,
             }
         )
 
@@ -326,7 +330,7 @@ def test_platemate_via_client_child_steps(client):  # noqa
         arrival = base_time + timedelta(minutes=5 + idx * 10)
         departure = arrival + timedelta(minutes=5)
         catalog = f"CAT-{lib_children[idx].name}"
-        lib_children[idx].properties["content"].values.catalog_id = catalog
+        lib_children[idx].properties["content"].values.catalog_id.value = catalog
         manifest.append(
             {
                 "sample": f"mpro-{idx + 1:02d}",
@@ -340,7 +344,7 @@ def test_platemate_via_client_child_steps(client):  # noqa
             {
                 "sample": f"mpro-{idx + 1:02d}",
                 "catalog": catalog,
-                "smiles": lib_children[idx].properties["content"].values.smiles,
+                "smiles": lib_children[idx].properties["content"].values.smiles.value,
                 "soak_min": round((departure - base_time).total_seconds() / 60, 1),
                 "harvest_sec": round((departure - arrival).total_seconds(), 1),
                 "dest_resource": puck_pins[idx].name,

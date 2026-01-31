@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 1f61d287e423
+Revision ID: c3218103909a
 Revises:
-Create Date: 2025-12-13 20:09:32.759391
+Create Date: 2026-01-31 11:55:29.842479
 
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "1f61d287e423"
+revision = "c3218103909a"
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -570,6 +570,7 @@ def upgrade() -> None:
         sa.Column("attribute_template_id", sa.Uuid(), nullable=False),
         sa.Column("parameter_id", sa.Uuid(), nullable=True),
         sa.Column("property_id", sa.Uuid(), nullable=True),
+        sa.Column("unit", sa.String(), nullable=True),
         sa.Column("value", sa.JSON(), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column(

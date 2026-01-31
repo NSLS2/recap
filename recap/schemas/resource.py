@@ -43,11 +43,15 @@ class PropertySchema(CommonFields):
                     vt.slug,
                     vt.value_type,
                     _attr_metadata(vt),
+                    vt.unit,
                 )
                 for vt in tmpl.attribute_templates
             )
             values_model = build_param_values_model(tmpl.slug or tmpl.name, tmpl_key)
-            raw_values = {av.template.name: av.value for av in data._values.values()}
+            raw_values = {
+                av.template.name: {"value": av.value, "unit": av.unit}
+                for av in data._values.values()
+            }
             return {
                 "id": data.id,
                 "create_date": data.create_date,
@@ -66,7 +70,7 @@ class PropertySchema(CommonFields):
                         f"{', '.join(sorted(unknown))}"
                     )
                 tmpl_key = tuple(
-                    (vt.name, vt.slug, vt.value_type, _attr_metadata(vt))
+                    (vt.name, vt.slug, vt.value_type, _attr_metadata(vt), vt.unit)
                     for vt in tmpl.attribute_templates
                 )
                 values_model = build_param_values_model(
@@ -95,6 +99,11 @@ class PropertySchema(CommonFields):
         coerced: dict[str, Any] = {}
         for name, raw_value in values_dict.items():
             attr_tmpl = tmpl_by_name[name]
+            if isinstance(raw_value, dict):
+                raw_unit = raw_value.get("unit")
+                raw_value = raw_value.get("value")
+            else:
+                raw_unit = None
 
             validator = AttributeTemplateValidator(
                 name=attr_tmpl.name,
@@ -103,7 +112,10 @@ class PropertySchema(CommonFields):
                 metadata=_attr_metadata(attr_tmpl),
                 default=raw_value,
             )
-            coerced[name] = validator.default
+            coerced[name] = {
+                "value": validator.default,
+                "unit": attr_tmpl.unit if raw_unit is None else raw_unit,
+            }
 
         self.values = self.values.__class__.model_validate(coerced)
         return self

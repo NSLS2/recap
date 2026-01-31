@@ -671,15 +671,20 @@ class LocalBackend(Backend):
                     vt.slug,
                     vt.value_type,
                     vt.metadata_json,
+                    vt.unit,
                 )
                 for vt in param.template.attribute_templates
             )
             values_model = build_param_values_model(param.template.slug, tmpl_key)
+            raw_values = {
+                av.template.name: {"value": av.value, "unit": av.unit}
+                for av in param._values.values()
+            }
             params[param.template.slug] = (
                 values_model,
                 Field(
                     default_factory=lambda vm=values_model,
-                    values=param.values: vm.model_validate(values),
+                    values=raw_values: vm.model_validate(values),
                     alias=param.template.name,
                 ),
             )
@@ -695,12 +700,17 @@ class LocalBackend(Backend):
             raise LookupError(f"Step not found in database: {filled_params.step_name}")
         for param in step.parameters.values():
             filled_param = filled_params.get(param.template.name)
-            for value_name in step.parameters[param.template.name].values:
-                step.parameters[param.template.name].values[value_name] = (
-                    filled_param.get(value_name)
-                )
+            for value_name, av in param._values.items():
+                entry = filled_param.get(value_name)
+                if isinstance(entry, dict):
+                    av.set_value(entry.get("value"))
+                    unit = entry.get("unit")
+                else:
+                    av.set_value(getattr(entry, "value", entry))
+                    unit = getattr(entry, "unit", None)
+                av.unit = av.template.unit if unit is None else unit
 
-    def add_child_step(
+    def add_child_step(  # noqa
         self, process_run: ProcessRunSchema, child_step: StepSchema
     ) -> StepSchema:
         pr_model = load_single(
@@ -768,11 +778,18 @@ class LocalBackend(Backend):
                     )
                 param = step.parameters[group_name]
                 for key, value in params.values.items():
-                    if key not in param.values:
+                    if key not in param._values:
                         raise ValueError(
                             f"Parameter {key} not found in group {group_name}"
                         )
-                    param.values[key] = value
+                    av = param._values[key]
+                    if isinstance(value, dict):
+                        av.set_value(value.get("value"))
+                        unit = value.get("unit")
+                    else:
+                        av.set_value(getattr(value, "value", value))
+                        unit = getattr(value, "unit", None)
+                    av.unit = av.template.unit if unit is None else unit
 
         if child_step.resources:
             self._assign_step_resources(step, pr_model, child_step.resources)
@@ -1159,11 +1176,18 @@ class LocalBackend(Backend):
 
                     new_values = param_schema.values.model_dump(by_alias=True)
                     for key, value in new_values.items():
-                        if key not in param.values:
+                        if key not in param._values:
                             raise ValueError(
                                 f"Parameter {key} not found in group {group_name}"
                             )
-                        param.values[key] = value
+                        av = param._values[key]
+                        if isinstance(value, dict):
+                            av.set_value(value.get("value"))
+                            unit = value.get("unit")
+                        else:
+                            av.set_value(value)
+                            unit = None
+                        av.unit = av.template.unit if unit is None else unit
             session.flush()
             if tx:
                 tx.commit()
@@ -1192,11 +1216,18 @@ class LocalBackend(Backend):
                 prop = res.properties[tmpl_name]
                 new_values = prop_schema.values.model_dump(by_alias=True)
                 for key, value in new_values.items():
-                    if key not in prop.values:
+                    if key not in prop._values:
                         raise ValueError(
                             f"Property {key} not found in group {tmpl_name}"
                         )
-                    prop.values[key] = value
+                    av = prop._values[key]
+                    if isinstance(value, dict):
+                        av.set_value(value.get("value"))
+                        unit = value.get("unit")
+                    else:
+                        av.set_value(value)
+                        unit = None
+                    av.unit = av.template.unit if unit is None else unit
             session.flush()
             if tx:
                 tx.commit()

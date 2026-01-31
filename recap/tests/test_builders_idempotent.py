@@ -13,14 +13,14 @@ def test_resource_builder_reuse_same_resource(client):
         ).close_group()
     # build resource and mutate props, then reopen builder and mutate again
     with client.build_resource("RB-1", "RB-Template") as rb:
-        rb.resource.properties["details"].values["serial"] = "xyz"
+        rb.resource.properties["details"].values["serial"].value = "xyz"
     with client.build_resource(resource_id=rb.resource.id) as rb2:
-        rb2.resource.properties["details"].values["serial"] = "xyz2"
+        rb2.resource.properties["details"].values["serial"].value = "xyz2"
 
     refreshed = (
         client.query_maker().resources().filter(name="RB-1").include_template().first()
     )
-    assert refreshed.properties.details.values.serial == "xyz2"
+    assert refreshed.properties.details.values.serial.value == "xyz2"
 
 
 def test_resource_template_builder_reuse_same_template(client):
@@ -81,7 +81,7 @@ def test_process_builder_reuse_same_run(client):
     with client.build_process_run(process_run_id=run.id) as prb2:
         prb2.assign_resource("slot1", container_res)
         params = prb2.get_params("S1")
-        params.pg.v = 5
+        params.pg.v.value = 5
         prb2.set_params(params)
 
     refreshed = (
@@ -91,4 +91,4 @@ def test_process_builder_reuse_same_run(client):
         .include_steps(include_parameters=True)
         .first()
     )
-    assert refreshed.steps["S1"].parameters.pg.values.v == 5
+    assert refreshed.steps["S1"].parameters.pg.values.v.value == 5

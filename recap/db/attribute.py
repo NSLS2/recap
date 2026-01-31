@@ -125,6 +125,7 @@ class AttributeValue(TimestampMixin, Base):
     property_id: Mapped[UUID] = mapped_column(ForeignKey("property.id"), nullable=True)
     property = relationship("Property", back_populates="_values")
 
+    unit: Mapped[str | None] = mapped_column(nullable=True)
     value_json: Mapped[Any | None] = mapped_column("value", JSON, nullable=True)
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON), nullable=True, default=dict
@@ -133,11 +134,15 @@ class AttributeValue(TimestampMixin, Base):
     def __init__(self, *args, **kwargs):
         raw_value = kwargs.pop("value", None)
         raw_metadata = kwargs.pop("metadata", None)
+        raw_unit = kwargs.pop("unit", None)
         super().__init__(*args, **kwargs)
         if self.metadata_json is None:
             self.metadata_json = {}
         if raw_metadata is not None:
             self.metadata_json.update(raw_metadata)
+        if raw_unit is None and self.template is not None:
+            raw_unit = self.template.unit
+        self.unit = raw_unit
         if raw_value is None and self.template:
             raw_value = self.template.default_value
         if raw_value is not None:

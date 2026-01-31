@@ -35,6 +35,19 @@ class AttributeGroupTemplateSchema(CommonFields):
     attribute_templates: list[AttributeTemplateSchema]
 
 
+class AttributeValueSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: Any = None
+    unit: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_scalar_value(cls, data):
+        if isinstance(data, dict):
+            return data
+        return {"value": data}
+
+
 class AttributeTemplateValidator(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     name: str
