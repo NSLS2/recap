@@ -1,3 +1,4 @@
+import warnings
 from typing import Any, Literal, Optional
 from uuid import UUID
 
@@ -27,54 +28,89 @@ class ResourceBuilder:
         backend: Backend | None = None,
         parent: "ResourceBuilder | ResourceSchema | None" = None,
         resource_id: UUID | None = None,
+        strict_checking: bool = False,
     ):
         self.name = name
         self._children: list[Resource] = []
         self.parent = None
         self.parent_resource = None
-        if isinstance(parent, self.__class__):
-            self.parent = parent
-            self.parent_resource = parent._resource if parent else None
-        elif isinstance(parent, ResourceSchema):
-            self.parent_resource = parent
         self.template_name = template_name
         self.template_version = template_version
+        self.strict_checking = strict_checking
         self._resource: ResourceSchema | None = None
         self._uow = None
-        if backend:
-            self.backend = backend
-            self._ensure_uow()
-        elif self.parent:
-            self.backend = self.parent.backend
-            self.parent._ensure_uow()
-            self._uow = self.parent._uow
-        else:
-            raise ValueError("backend is required")
+        self._configure_parent(parent)
+        self._configure_backend(backend)
         try:
             if resource_id is not None:
-                self._resource = self._reload_resource(resource_id)
-                self.name = self._resource.name
-                self.template_name = self._resource.template.name
-                self.template_version = self._resource.template.version
+                self._load_existing_resource(resource_id)
             else:
-                if name is None or template_name is None:
-                    raise ValueError("name and template_name are required")
-                template = self.backend.get_resource_template(
-                    name=self.template_name, version=self.template_version
-                )
-                self._resource = self.backend.create_resource(
-                    self.name,
-                    resource_template=template,
-                    parent_resource=self.parent_resource,
-                    expand=True,
-                )
+                self._create_or_reuse_resource()
             if self.parent_resource:
                 print(
                     f"adding child {self._resource.name} to {self.parent_resource.name}"
                 )
                 self.backend.add_child_resources(self.parent_resource, [self._resource])
-        except Exception as e:
-            print(f"Exception occured while creating resource: {e}")
+        except Exception:
+            if self._uow:
+                self._uow.rollback()
+                self._uow = None
+            raise
+
+    def _configure_parent(self, parent: "ResourceBuilder | ResourceSchema | None"):
+        if isinstance(parent, self.__class__):
+            self.parent = parent
+            self.parent_resource = parent._resource if parent else None
+        elif isinstance(parent, ResourceSchema):
+            self.parent_resource = parent
+
+    def _configure_backend(self, backend: Backend | None):
+        if backend:
+            self.backend = backend
+            self._ensure_uow()
+            return
+        if self.parent:
+            self.backend = self.parent.backend
+            self.parent._ensure_uow()
+            self._uow = self.parent._uow
+            return
+        raise ValueError("backend is required")
+
+    def _load_existing_resource(self, resource_id: UUID):
+        self._resource = self._reload_resource(resource_id)
+        self.name = self._resource.name
+        self.template_name = self._resource.template.name
+        self.template_version = self._resource.template.version
+
+    def _create_or_reuse_resource(self):
+        if self.name is None or self.template_name is None:
+            raise ValueError("name and template_name are required")
+        template = self.backend.get_resource_template(
+            name=self.template_name, version=self.template_version
+        )
+        try:
+            self._resource = self.backend.create_resource(
+                self.name,
+                resource_template=template,
+                parent_resource=self.parent_resource,
+                expand=True,
+            )
+        except Exception:
+            self._handle_existing_resource()
+
+    def _handle_existing_resource(self):
+        self._restart_uow()
+        existing = self._find_existing_resource()
+        if self.strict_checking or existing is None:
+            raise
+        warnings.warn(
+            (
+                f"Resource {self.name!r} already exists and will be reused; "
+                "no new resource will be created."
+            ),
+            stacklevel=2,
+        )
+        self._resource = existing
 
     @classmethod
     def create(
@@ -111,6 +147,14 @@ class ResourceBuilder:
             self._uow = self.backend.begin()
         return self._uow
 
+    def _restart_uow(self):
+        if self._uow:
+            self._uow.rollback()
+        self._uow = self.backend.begin()
+        if self.parent:
+            self.parent._uow = self._uow
+        return self._uow
+
     def save(self):
         self._ensure_uow()
         self._uow.commit(clear_session=False)
@@ -138,6 +182,23 @@ class ResourceBuilder:
         if not resources:
             raise ValueError(f"Resource with id {resource_id} not found")
         return resources[0]
+
+    def _find_existing_resource(self) -> ResourceSchema | None:
+        parent_id = self.parent_resource.id if self.parent_resource else None
+        resources = self.backend.query(
+            ResourceSchema,
+            QuerySpec(
+                filters={"name": self.name, "parent_id": parent_id},
+                preloads=["children", "properties", "template"],
+            ),
+        )
+        for resource in resources:
+            if (
+                resource.template.name == self.template_name
+                and resource.template.version == self.template_version
+            ):
+                return resource
+        return None
 
     @property
     def resource(self) -> ResourceSchema:
@@ -239,57 +300,103 @@ class ResourceTemplateBuilder:
         parent: Optional["ResourceTemplateBuilder"] = None,
         backend: Backend | None = None,
         resource_template_id: UUID | None = None,
+        strict_checking: bool = False,
     ):
         self._uow = None
-        if backend:
-            self.backend = backend
-            self._ensure_uow()
-        elif parent:
-            self.backend = parent.backend
-            parent._ensure_uow()
-            self._uow = parent._uow
-        else:
-            raise ValueError("No parent builder or backend provided")
         self.name = name
         self.type_names = type_names
         self._children: list[ResourceTemplateRef] = []
         self.parent = parent
         self.resource_types: dict[str, ResourceTypeSchema] = {}
         self.version = version
+        self.strict_checking = strict_checking
         self._template: ResourceTemplateRef | ResourceTemplateSchema | None = None
+        self._configure_backend(backend)
         try:
             if resource_template_id is not None:
-                tmpl = self.backend.get_resource_template(
-                    name=None, version=None, id=resource_template_id, expand=True
-                )
-                self.name = tmpl.name
-                self.type_names = [rt.name for rt in tmpl.types]
-                self.version = tmpl.version
-                self._template = tmpl
-                for rt_schema in tmpl.types:
-                    self.resource_types[rt_schema.name] = rt_schema
+                self._load_existing_template(resource_template_id)
             else:
-                if name is None or type_names is None:
-                    raise ValueError("name and type_names are required")
-                for rt_schema in self.backend.add_resource_types(type_names):
-                    self.resource_types[rt_schema.name] = rt_schema
-                if self.parent:
-                    self._template = self.backend.add_child_resource_template(
-                        self.name,
-                        [rt for rt in self.resource_types.values()],
-                        version=self.version,
-                        parent_resource_template=self.parent._template,
-                    )
-                else:
-                    self._template: ResourceTemplateRef = (
-                        self.backend.add_resource_template(
-                            name,
-                            list(self.resource_types.values()),
-                            version=self.version,
-                        )
-                    )
-        except Exception as e:
-            print(f"Exception occured when creating a ResourceTemplate: {e}")
+                self._create_or_reuse_template()
+        except Exception:
+            if self._uow:
+                self._uow.rollback()
+                self._uow = None
+            raise
+
+    def _configure_backend(self, backend: Backend | None):
+        if backend:
+            self.backend = backend
+            self._ensure_uow()
+            return
+        if self.parent:
+            self.backend = self.parent.backend
+            self.parent._ensure_uow()
+            self._uow = self.parent._uow
+            return
+        raise ValueError("No parent builder or backend provided")
+
+    def _load_existing_template(self, resource_template_id: UUID):
+        tmpl = self.backend.get_resource_template(
+            name=None, version=None, id=resource_template_id, expand=True
+        )
+        self.name = tmpl.name
+        self.type_names = [rt.name for rt in tmpl.types]
+        self.version = tmpl.version
+        self._template = tmpl
+        for rt_schema in tmpl.types:
+            self.resource_types[rt_schema.name] = rt_schema
+
+    def _create_or_reuse_template(self):
+        if self.name is None or self.type_names is None:
+            raise ValueError("name and type_names are required")
+        for rt_schema in self.backend.add_resource_types(self.type_names):
+            self.resource_types[rt_schema.name] = rt_schema
+        try:
+            self._template = self._create_template()
+        except Exception:
+            self._handle_existing_template()
+
+    def _create_template(self) -> ResourceTemplateRef:
+        if self.parent:
+            return self.backend.add_child_resource_template(
+                self.name,
+                [rt for rt in self.resource_types.values()],
+                version=self.version,
+                parent_resource_template=self.parent._template,
+            )
+        return self.backend.add_resource_template(
+            self.name,
+            list(self.resource_types.values()),
+            version=self.version,
+        )
+
+    def _handle_existing_template(self):
+        self._restart_uow()
+        if self.strict_checking:
+            raise
+        self._template = self._fetch_existing_template()
+        warnings.warn(
+            (
+                f"Resource template {self.name!r} version {self.version!r} "
+                "already exists and will be reused; no new template "
+                "will be created. If you want a new template, bump the version."
+            ),
+            stacklevel=2,
+        )
+
+    def _fetch_existing_template(self):
+        if self.parent:
+            return self.backend.get_resource_template(
+                self.name,
+                version=self.version,
+                parent=self.parent._template,
+                expand=True,
+            )
+        return self.backend.get_resource_template(
+            self.name,
+            version=self.version,
+            expand=True,
+        )
 
     def __enter__(self):
         self._ensure_uow()
@@ -411,6 +518,14 @@ class ResourceTemplateBuilder:
     def _ensure_uow(self):
         if self._uow is None:
             self._uow = self.backend.begin()
+        return self._uow
+
+    def _restart_uow(self):
+        if self._uow:
+            self._uow.rollback()
+        self._uow = self.backend.begin()
+        if self.parent:
+            self.parent._uow = self._uow
         return self._uow
 
     def close_child(self):

@@ -3,7 +3,7 @@ from typing import Any
 try:
     from typing import Self
 except ImportError:  # Python <3.11
-    from typing import Self
+    from typing_extensions import Self  # noqa
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator

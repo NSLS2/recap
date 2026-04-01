@@ -1,3 +1,4 @@
+import warnings
 from typing import Any
 from uuid import UUID
 
@@ -27,15 +28,26 @@ class ProcessTemplateBuilder:
         name: str | None,
         version: str | None,
         process_template_id: UUID | None = None,
+        strict_checking: bool = False,
     ):
         self.backend = backend
         self._uow = None
-        self._ensure_uow()
-        self.name = name
-        self.version = version
-        self._template: ProcessTemplateRef | None = None
-        self._resource_slots: dict[str, ResourceSlotSchema] = {}
-        self._current_step_builder: StepTemplateBuilder | None = None
+        self.strict_checking = strict_checking
+        try:
+            self._ensure_uow()
+            self.name = name
+            self.version = version
+            self._template: ProcessTemplateRef | None = None
+            self._resource_slots: dict[str, ResourceSlotSchema] = {}
+            self._current_step_builder: StepTemplateBuilder | None = None
+            self._initialize_template(process_template_id)
+        except Exception:
+            if self._uow:
+                self._uow.rollback()
+                self._uow = None
+            raise
+
+    def _initialize_template(self, process_template_id: UUID | None):
         if process_template_id is not None:
             tmpl = self.backend.get_process_template(
                 name=None, version=None, id=process_template_id, expand=False
@@ -43,7 +55,8 @@ class ProcessTemplateBuilder:
             self.name = tmpl.name
             self.version = tmpl.version
             self._template = tmpl
-        elif self.name is None or self.version is None:
+            return
+        if self.name is None or self.version is None:
             raise ValueError(
                 "name and version are required to create a process template"
             )
@@ -86,7 +99,26 @@ class ProcessTemplateBuilder:
             raise ValueError(
                 "name and version are required to create a process template"
             )
-        self._template = self.backend.create_process_template(self.name, self.version)
+        try:
+            created = self.backend.create_process_template(self.name, self.version)
+            if created is None:
+                raise ValueError("Process template already exists")
+            self._template = created
+        except Exception:
+            if self.strict_checking:
+                raise
+            self._restart_uow()
+            self._template = self.backend.get_process_template(
+                self.name, self.version, expand=False
+            )
+            warnings.warn(
+                (
+                    f"Process template {self.name!r} version {self.version!r} already "
+                    "exists and will be reused; no new template will be created. "
+                    "If you want a new template, bump the version."
+                ),
+                stacklevel=2,
+            )
 
     def _reload_template(self):
         self._ensure_uow()
@@ -147,6 +179,12 @@ class ProcessTemplateBuilder:
     def _ensure_uow(self):
         if self._uow is None:
             self._uow = self.backend.begin()
+        return self._uow
+
+    def _restart_uow(self):
+        if self._uow:
+            self._uow.rollback()
+        self._uow = self.backend.begin()
         return self._uow
 
 
@@ -212,6 +250,7 @@ class ProcessRunBuilder:
         backend: Backend,
         version: str | None = None,
         process_run_id: UUID | None = None,
+        strict_checking: bool = False,
     ):
         self.backend = backend
         self._uow = None
@@ -219,43 +258,81 @@ class ProcessRunBuilder:
         self.description = description
         self.template_name = template_name
         self.version = version
+        self.strict_checking = strict_checking
         self._process_template: ProcessTemplateSchema | ProcessTemplateRef | None = None
         try:
-            if process_run_id is not None:
-                self._ensure_uow()
-                self._process_run = self._reload_process_run(process_run_id)
-                template = self._process_run.template
-                self._process_template = self.backend.get_process_template(
-                    template.name, template.version, expand=True
-                )
-                self.name = self._process_run.name
-                self.description = self._process_run.description
-                self.template_name = template.name
-                self.version = template.version
-            else:
-                if (
-                    name is None
-                    or description is None
-                    or template_name is None
-                    or version is None
-                ):
-                    raise ValueError(
-                        "name, description, template_name, and version are required to create a process run"
-                    )
-                if campaign is None:
-                    raise ValueError("Campaign is required to create a process run")
-                self._ensure_uow()
-                self._process_template = self.backend.get_process_template(
-                    self.template_name, self.version, expand=True
-                )
-                self._process_run = self.backend.create_process_run(
-                    name, description, self._process_template, campaign
-                )
+            self._initialize_process_run(process_run_id, campaign)
             self._steps = list(self._process_run.steps.values())
             self._resources = {}
-        except Exception as e:
-            print(f"Exception occured while creating a procces run: {e}")
-            raise e
+        except Exception:
+            if self._uow:
+                self._uow.rollback()
+                self._uow = None
+            raise
+
+    def _initialize_process_run(
+        self,
+        process_run_id: UUID | None,
+        campaign: CampaignSchema | None,
+    ):
+        self._ensure_uow()
+        if process_run_id is not None:
+            self._load_existing_process_run(process_run_id)
+            return
+        self._validate_new_process_run_inputs(campaign)
+        self._process_template = self.backend.get_process_template(
+            self.template_name, self.version, expand=True
+        )
+        try:
+            self._process_run = self.backend.create_process_run(
+                self.name, self.description, self._process_template, campaign
+            )
+        except Exception:
+            self._handle_existing_process_run()
+
+    def _load_existing_process_run(self, process_run_id: UUID):
+        self._process_run = self._reload_process_run(process_run_id)
+        template = self._process_run.template
+        self._process_template = self.backend.get_process_template(
+            template.name, template.version, expand=True
+        )
+        self.name = self._process_run.name
+        self.description = self._process_run.description
+        self.template_name = template.name
+        self.version = template.version
+
+    def _validate_new_process_run_inputs(self, campaign: CampaignSchema | None):
+        if (
+            self.name is None
+            or self.description is None
+            or self.template_name is None
+            or self.version is None
+        ):
+            raise ValueError(
+                "name, description, template_name, and version are required to create a process run"
+            )
+        if campaign is None:
+            raise ValueError("Campaign is required to create a process run")
+
+    def _handle_existing_process_run(self):
+        self._restart_uow()
+        existing = self.backend.query(
+            ProcessRunSchema,
+            QuerySpec(
+                filters={"name": self.name},
+                preloads=["steps", "steps.parameters", "resources"],
+            ),
+        )
+        if self.strict_checking or not existing:
+            raise
+        warnings.warn(
+            (
+                f"Process run {self.name!r} already exists and will be reused; "
+                "no new run will be created."
+            ),
+            stacklevel=2,
+        )
+        self._process_run = existing[0]
 
     def __enter__(self):
         self._ensure_uow()
@@ -396,6 +473,12 @@ class ProcessRunBuilder:
     def _ensure_uow(self):
         if self._uow is None:
             self._uow = self.backend.begin()
+        return self._uow
+
+    def _restart_uow(self):
+        if self._uow:
+            self._uow.rollback()
+        self._uow = self.backend.begin()
         return self._uow
 
     def _reload_process_run(self, process_run_id: UUID) -> ProcessRunSchema:

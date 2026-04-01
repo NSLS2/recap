@@ -1,3 +1,7 @@
+import pytest
+from sqlalchemy.exc import IntegrityError
+
+from recap.db.exceptions import ValidationError
 from recap.dsl.process_builder import ProcessTemplateBuilder
 from recap.dsl.resource_builder import ResourceTemplateBuilder
 from recap.utils.general import Direction
@@ -13,9 +17,9 @@ def test_resource_builder_reuse_same_resource(client):
         ).close_group()
     # build resource and mutate props, then reopen builder and mutate again
     with client.build_resource("RB-1", "RB-Template") as rb:
-        rb.resource.properties["details"].values["serial"].value = "xyz"
+        rb.resource.properties["details"].values["serial"] = "xyz"
     with client.build_resource(resource_id=rb.resource.id) as rb2:
-        rb2.resource.properties["details"].values["serial"].value = "xyz2"
+        rb2.resource.properties["details"].values["serial"] = "xyz2"
 
     refreshed = (
         client.query_maker().resources().filter(name="RB-1").include_template().first()
@@ -81,7 +85,7 @@ def test_process_builder_reuse_same_run(client):
     with client.build_process_run(process_run_id=run.id) as prb2:
         prb2.assign_resource("slot1", container_res)
         params = prb2.get_params("S1")
-        params.pg.v.value = 5
+        params.pg.v = 5
         prb2.set_params(params)
 
     refreshed = (
@@ -92,3 +96,134 @@ def test_process_builder_reuse_same_run(client):
         .first()
     )
     assert refreshed.steps["S1"].parameters.pg.values.v.value == 5
+
+
+def test_resource_template_builder_reuses_existing_with_warning(client):
+    with client.build_resource_template(name="ReuseRT", type_names=["container"]) as _:
+        pass
+
+    with (
+        pytest.warns(UserWarning, match="bump the version"),
+        client.build_resource_template(
+            name="ReuseRT", type_names=["container"]
+        ) as builder,
+    ):
+        assert builder.template.name == "ReuseRT"
+
+
+def test_resource_template_builder_strict_checking_raises(client):
+    with client.build_resource_template(name="StrictRT", type_names=["container"]) as _:
+        pass
+
+    with (
+        pytest.raises(IntegrityError),
+        client.build_resource_template(
+            name="StrictRT",
+            type_names=["container"],
+            strict_checking=True,
+        ),
+    ):
+        pass
+
+
+def test_process_template_builder_reuses_existing_with_warning(client):
+    with client.build_process_template("ReusePT", "1.0") as ptb:
+        ptb.add_step("step-1")
+
+    with (
+        pytest.warns(UserWarning, match="bump the version"),
+        client.build_process_template("ReusePT", "1.0") as ptb,
+    ):
+        ptb.add_step("step-2")
+
+    refreshed = client.query_maker().process_templates().filter(name="ReusePT").first()
+    assert refreshed is not None
+
+
+def test_process_template_builder_strict_checking_raises(client):
+    with client.build_process_template("StrictPT", "1.0") as ptb:
+        ptb.add_step("step-1")
+
+    with (
+        pytest.raises(ValueError, match="already exists"),
+        client.build_process_template(
+            "StrictPT",
+            "1.0",
+            strict_checking=True,
+        ) as ptb,
+    ):
+        ptb.add_step("step-2")
+
+
+def test_resource_builder_reuses_existing_with_warning(client):
+    with client.build_resource_template(
+        name="ReuseResTemplate", type_names=["container"]
+    ) as _:
+        pass
+
+    first = client.create_resource("ReuseRes", "ReuseResTemplate")
+    with (
+        pytest.warns(UserWarning, match="will be reused"),
+        client.build_resource("ReuseRes", "ReuseResTemplate") as rb,
+    ):
+        assert rb.resource.id == first.id
+
+
+def test_resource_builder_strict_checking_raises(client):
+    with client.build_resource_template(
+        name="StrictResTemplate", type_names=["container"]
+    ) as _:
+        pass
+
+    client.create_resource("StrictRes", "StrictResTemplate")
+    with (
+        pytest.raises(ValidationError),
+        client.build_resource(
+            "StrictRes",
+            "StrictResTemplate",
+            strict_checking=True,
+        ),
+    ):
+        pass
+
+
+def test_process_run_builder_reuses_existing_with_warning(client):
+    with client.build_resource_template(
+        name="ReuseRunRT", type_names=["container"]
+    ) as _:
+        pass
+    with client.build_process_template("ReuseRunPT", "1.0") as ptb:
+        ptb.add_resource_slot(
+            "slot1", "container", Direction.input, create_resource_type=True
+        ).add_step("S1")
+
+    client.create_campaign("ReuseCamp", "ReuseProposal")
+    with client.build_process_run("ReuseRun", "desc", "ReuseRunPT", "1.0") as _:
+        pass
+
+    with (
+        pytest.warns(UserWarning, match="will be reused"),
+        client.build_process_run("ReuseRun", "desc", "ReuseRunPT", "1.0") as prb,
+    ):
+        assert prb.process_run.name == "ReuseRun"
+
+
+def test_process_run_builder_strict_checking_raises(client):
+    with client.build_process_template("StrictRunPT", "1.0") as ptb:
+        ptb.add_step("S1")
+
+    client.create_campaign("StrictCamp", "StrictProposal")
+    with client.build_process_run("StrictRun", "desc", "StrictRunPT", "1.0") as _:
+        pass
+
+    with (
+        pytest.raises(IntegrityError),
+        client.build_process_run(
+            "StrictRun",
+            "desc",
+            "StrictRunPT",
+            "1.0",
+            strict_checking=True,
+        ),
+    ):
+        pass

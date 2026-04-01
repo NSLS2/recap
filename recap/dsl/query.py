@@ -25,7 +25,7 @@ from recap.schemas.process import (
 try:
     from typing import Self
 except ModuleNotFoundError:
-    from typing import Self
+    from typing_extensions import Self  # noqa
 
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)

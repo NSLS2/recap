@@ -98,6 +98,7 @@ class RecapClient:
         self,
         *args,
         process_template_id: UUID | None = None,
+        strict_checking: bool = False,
         **kwargs,
     ) -> ProcessTemplateBuilder:
         if self.backend is None:
@@ -113,6 +114,7 @@ class RecapClient:
                 version=None,
                 backend=self.backend,
                 process_template_id=process_template_id,
+                strict_checking=strict_checking,
             )
 
         if args:
@@ -128,7 +130,12 @@ class RecapClient:
             if kwargs:
                 raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
 
-        return ProcessTemplateBuilder(name=name, version=version, backend=self.backend)
+        return ProcessTemplateBuilder(
+            name=name,
+            version=version,
+            backend=self.backend,
+            strict_checking=strict_checking,
+        )
 
     @overload
     def build_process_run(
@@ -142,6 +149,7 @@ class RecapClient:
         self,
         *args,
         process_run_id: UUID | None = None,
+        strict_checking: bool = False,
         **kwargs,
     ) -> ProcessRunBuilder:
         if self.backend is None:
@@ -160,6 +168,7 @@ class RecapClient:
                 backend=self.backend,
                 version=None,
                 process_run_id=process_run_id,
+                strict_checking=strict_checking,
             )
 
         if args:
@@ -193,6 +202,7 @@ class RecapClient:
             campaign=self._campaign,
             backend=self.backend,
             version=version,
+            strict_checking=strict_checking,
         )
 
     @overload
@@ -212,6 +222,7 @@ class RecapClient:
         type_names: list[str] | None = None,
         version: str = "1.0",
         resource_template_id: UUID | None = None,
+        strict_checking: bool = False,
     ):
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
@@ -227,6 +238,7 @@ class RecapClient:
                 version=version,
                 backend=self.backend,
                 resource_template_id=resource_template_id,
+                strict_checking=strict_checking,
             )
 
         if name is None or type_names is None:
@@ -237,7 +249,11 @@ class RecapClient:
         if not all(isinstance(item, str) for item in type_names):
             raise TypeError("type_names must only contain strings")
         return ResourceTemplateBuilder(
-            name=name, type_names=type_names, version=version, backend=self.backend
+            name=name,
+            type_names=type_names,
+            version=version,
+            backend=self.backend,
+            strict_checking=strict_checking,
         )
 
     @overload
@@ -252,6 +268,7 @@ class RecapClient:
         self,
         *args,
         resource_id: UUID | None = None,
+        strict_checking: bool = False,
         **kwargs,
     ):
         if self.backend is None:
@@ -268,6 +285,7 @@ class RecapClient:
                 template_version="1.0",
                 backend=self.backend,
                 resource_id=resource_id,
+                strict_checking=strict_checking,
             )
 
         if args:
@@ -290,6 +308,7 @@ class RecapClient:
             template_name=template_name,
             template_version=template_version,
             backend=self.backend,
+            strict_checking=strict_checking,
         )
 
     def create_resource(
