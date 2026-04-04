@@ -4,6 +4,7 @@ try:
     from typing import Self
 except ImportError:  # Python <3.11
     from typing_extensions import Self  # noqa
+
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
@@ -12,6 +13,7 @@ from recap.db.resource import Property
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
     AttributeTemplateValidator,
+    AttributeValueSchema,
 )
 from recap.schemas.common import CommonFields
 from recap.utils.dsl import AliasMixin, build_param_values_model
@@ -119,6 +121,39 @@ class PropertySchema(CommonFields):
 
         self.values = self.values.__class__.model_validate(coerced)
         return self
+
+    def __getattr__(self, name: str) -> Any:
+        # Only called when normal attribute resolution fails (i.e. `name` is not
+        # a real field on PropertySchema such as `template`, `values`, `id`, etc.)
+        # This allows `prop.smiles` as a shortcut for `prop.values.smiles`.
+        # Note: if an attribute group defines a field that clashes with a
+        # PropertySchema field name, the shortcut won't reach it.
+        values = self.__dict__.get("values")
+        if values is not None:
+            try:
+                return getattr(values, name)
+            except AttributeError:
+                pass
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute '{name}'"
+        )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # Pydantic internals and real model fields are handled normally.
+        # Unknown names are forwarded to values, mutating .value in-place
+        # on the AttributeValueSchema so that the unit is preserved.
+        if name.startswith("__") or name in type(self).model_fields:
+            super().__setattr__(name, value)
+            return
+        values = self.__dict__.get("values")
+        if values is not None and name in type(values).model_fields:
+            attr_schema = getattr(values, name)
+            if isinstance(attr_schema, AttributeValueSchema):
+                attr_schema.value = value
+                return
+            setattr(values, name, value)
+            return
+        super().__setattr__(name, value)
 
 
 class ResourceTypeSchema(CommonFields):

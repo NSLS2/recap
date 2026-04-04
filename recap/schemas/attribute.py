@@ -36,9 +36,14 @@ class AttributeGroupTemplateSchema(CommonFields):
 
 
 class AttributeValueSchema(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     value: Any = None
     unit: str | None = None
+
+    def __str__(self) -> str:
+        if self.unit:
+            return f"{self.value}{self.unit}"
+        return str(self.value)
 
     @model_validator(mode="before")
     @classmethod

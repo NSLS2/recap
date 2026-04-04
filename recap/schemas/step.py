@@ -7,6 +7,7 @@ from recap.db.step import Parameter
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
     AttributeTemplateValidator,
+    AttributeValueSchema,
 )
 from recap.schemas.common import CommonFields, StepStatus
 from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
@@ -159,6 +160,36 @@ class ParameterSchema(CommonFields):
 
         self.values = self.values.__class__.model_validate(coerced)
         return self
+
+    def __getattr__(self, name: str) -> Any:
+        # Only called when normal attribute resolution fails.
+        # Allows `param.batch` as a shortcut for `param.values.batch`.
+        values = self.__dict__.get("values")
+        if values is not None:
+            try:
+                return getattr(values, name)
+            except AttributeError:
+                pass
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute '{name}'"
+        )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # Pydantic internals and real model fields are handled normally.
+        # Unknown names are forwarded to values, mutating .value in-place
+        # on the AttributeValueSchema so that the unit is preserved.
+        if name.startswith("__") or name in type(self).model_fields:
+            super().__setattr__(name, value)
+            return
+        values = self.__dict__.get("values")
+        if values is not None and name in type(values).model_fields:
+            attr_schema = getattr(values, name)
+            if isinstance(attr_schema, AttributeValueSchema):
+                attr_schema.value = value
+                return
+            setattr(values, name, value)
+            return
+        super().__setattr__(name, value)
 
 
 class StepSchema(CommonFields):

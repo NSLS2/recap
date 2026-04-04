@@ -5,6 +5,10 @@ from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import InstrumentedAttribute
 from sqlalchemy.sql import Select
 
+# Imported lazily-ish at module level to avoid circular imports — AttributeValueSchema
+# has no dependency on dsl.py so this is safe.
+from recap.schemas.attribute import AttributeValueSchema
+
 
 def resolve_path(
     base_model,
@@ -92,6 +96,10 @@ class AliasMixin:
     def set(self, alias: str, value):
         for name, field in self.__class__.model_fields.items():
             if alias in (field.alias, name):
+                current = getattr(self, name)
+                if isinstance(current, AttributeValueSchema):
+                    current.value = value
+                    return
                 setattr(self, name, value)
                 return
         raise KeyError(f"No field with alias '{alias}'")

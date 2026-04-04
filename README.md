@@ -186,6 +186,41 @@ plate = client.create_resource(name="Plate A", template_name="Library Plate")
 
 creates a Resource from the `Library Plate` template; children are created automatically and properties are initialized with their defaults.
 
+#### Accessing and updating property values
+
+Properties are accessed directly by group slug, then attribute slug. Each attribute is an `AttributeValueSchema` with a `.value` and a `.unit`. Its `str()` renders `"<value><unit>"`:
+
+```python
+well = plate.children["A01"]
+
+# Read value and unit
+well.properties.content.volume.value   # 10.0
+well.properties.content.volume.unit    # "uL"
+str(well.properties.content.volume)    # "10.0uL"
+
+# Set value (unit stays unchanged — mutates in-place)
+well.properties.content.volume = 8.5
+
+# Set unit
+well.properties.content.volume.unit = "uL"
+
+# Set a unit-free attribute
+well.properties.content.smiles = "CCO"
+```
+
+For attribute names that contain spaces or special characters and can't be expressed as a Python identifier, use bracket access on `.values`. This accepts both the original attribute name and its slug, coerces the value through Pydantic, and preserves the unit — identical behaviour to the shortcut setter:
+
+```python
+# Both the original name and the slug are accepted
+well.properties.content.values["catalog id"].value       # slug: "catalog_id"
+well.properties.content.values["Catalog ID"].value       # original name also works
+
+# Assign by original name — value is coerced and unit is preserved
+well.properties.content.volume.unit = "mL"
+well.properties.content.values["volume"] = 8.5
+well.properties.content.volume.unit                      # still "mL"
+```
+
 The returned object is a Pydantic model, well suited for inspection and local changes, but database changes must go through the client. You can either:
 
 1. Call `create_resource` (shown above) to get a default instance, or
@@ -196,7 +231,7 @@ The returned object is a Pydantic model, well suited for inspection and local ch
 with client.build_resource(name="Plate B", template_name="Library Plate") as resource_builder:
     resource = resource_builder.get_model()
     # Make changes to the resource and its default parameters
-    resource.children["A01"].properties["status"].values["used"] = True
+    resource.children["A01"].properties.status.used = True
     # Then update the builder with the newly edited object
     resource_builder.set_model(resource) 
 
@@ -451,8 +486,9 @@ with client.build_process(process_id=process_run.id) as prb:
     # Generate a pydantic model for the child step
     echo_transfer_step = process_run.steps["Echo Transfer"].generate_child()
     # Update its values
-    echo_transfer_step.parameters.echo.values.batch = 2
-    echo_transfer_step.parameters.echo.values.volume = 20
+    echo_transfer_step.parameters.echo.batch = 2
+    echo_transfer_step.parameters.echo.volume = 20
+    echo_transfer_step.parameters.echo.volume.unit = "nL"
     echo_transfer_step.resources["source"] = test_library_plate.children["A1"]
     echo_transfer_step.resources["dest"] = test_xtal_plate.children["A1a"]
     # Add it to the database
