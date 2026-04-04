@@ -11,7 +11,7 @@ from recap.schemas.attribute import (
 )
 from recap.schemas.common import CommonFields, StepStatus
 from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
-from recap.utils.dsl import AliasMixin, build_param_values_model
+from recap.utils.dsl import AliasMixinBase, build_param_values_model
 
 
 def _attr_metadata(vt: Any) -> dict | None:
@@ -210,7 +210,7 @@ class StepSchema(CommonFields):
         if isinstance(self.parameters, BaseModel):
             return self
 
-        param_fields: dict[str, tuple] = {}
+        param_fields: dict[str, Any] = {}
         param_values: dict[str, ParameterSchema] = {}
         for param in self.parameters.values():
             tmpl = param.template
@@ -221,7 +221,7 @@ class StepSchema(CommonFields):
         if param_fields:
             model = create_model(
                 f"StepParameters_{self.template.name}",
-                __base__=(AliasMixin, BaseModel),
+                __base__=AliasMixinBase,
                 __config__=ConfigDict(
                     validate_assignment=True,
                     populate_by_name=True,

@@ -122,6 +122,18 @@ class AliasMixin:
             yield getattr(self, name)
 
 
+class AliasMixinBase(AliasMixin, BaseModel):
+    """Concrete Pydantic base class that combines :class:`AliasMixin` with
+    :class:`~pydantic.BaseModel`.
+
+    Use this as the ``__base__`` for dynamically-created models (via
+    ``create_model``) that need both Pydantic validation and the alias
+    get/set helpers provided by :class:`AliasMixin`.  Using a single
+    concrete class avoids the type-checker error that arises when a bare
+    ``(AliasMixin, BaseModel)`` tuple is passed as ``__base__``.
+    """
+
+
 def map_dtype_to_pytype(dtype: str):
     return {
         "float": float,
@@ -179,6 +191,6 @@ def build_param_values_model(group_slug: str, attr_templates):
     return create_model(
         f"{group_slug}_values",
         **fields,
-        __base__=(AliasMixin, BaseModel),
+        __base__=AliasMixinBase,
         __config__=ConfigDict(validate_assignment=True, populate_by_name=True),
     )

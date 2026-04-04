@@ -16,7 +16,7 @@ from recap.schemas.attribute import (
     AttributeValueSchema,
 )
 from recap.schemas.common import CommonFields
-from recap.utils.dsl import AliasMixin, build_param_values_model
+from recap.utils.dsl import AliasMixinBase, build_param_values_model
 from recap.utils.general import Direction
 
 
@@ -200,7 +200,7 @@ class ResourceSchema(CommonFields):
         if isinstance(self.properties, BaseModel):
             return self
 
-        prop_fields: dict[str, tuple] = {}
+        prop_fields: dict[str, Any] = {}
         prop_values: dict[str, PropertySchema] = {}
         for prop in self.properties.values():
             tmpl = prop.template
@@ -211,7 +211,7 @@ class ResourceSchema(CommonFields):
         if prop_fields:
             model = create_model(
                 f"ResourceProperties_{self.template.slug or self.template.name}",
-                __base__=(AliasMixin, BaseModel),
+                __base__=AliasMixinBase,
                 __config__=ConfigDict(
                     validate_assignment=True,
                     populate_by_name=True,
