@@ -618,7 +618,7 @@ class LocalBackend(Backend):
         )
         _resource_slots = self.session.scalars(statement).all()
         expected_ids = {slot.id for slot in _resource_slots}
-        assigned_ids = {ar.slot.id for ar in process_run.assigned_resources}
+        assigned_ids = {ar.slot.id for ar in process_run.assigned_resources.values()}
 
         missing_ids = expected_ids - assigned_ids
         if not missing_ids:

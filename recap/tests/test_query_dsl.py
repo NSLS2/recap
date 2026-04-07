@@ -133,7 +133,7 @@ def test_process_run_include_resources(db_session):
     )
 
     assert loaded_run is not None
-    assignment = next(iter(loaded_run.assigned_resources))
+    assignment = next(iter(loaded_run.assigned_resources.values()))
     assert assignment.resource.name.startswith("Resource-resources")
 
 

@@ -45,7 +45,7 @@ def resolve_path(
         if rel is None:
             raise ValueError(
                 f"{current_entity.__name__} has no relationship '{rel_name}' "
-                f"(path: {'__'.join(path)})"
+                f"(path: {'__'.join(path)}). Valid relationships include: {mapper.relationships.keys()}"
             )
 
         rel_attr: InstrumentedAttribute = getattr(current_entity, rel.key)

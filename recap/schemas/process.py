@@ -16,7 +16,7 @@ This module defines the top-level provenance objects:
 from typing import Any
 from uuid import UUID
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, field_validator
 
 from recap.schemas.common import CommonFields
 from recap.schemas.resource import ResourceAssignmentSchema, ResourceSlotSchema
@@ -112,9 +112,12 @@ class ProcessRunSchema(CommonFields):
         template: The :class:`ProcessTemplateSchema` this run instantiates.
         steps: Mapping of step name → :class:`~recap.schemas.step.StepSchema`
             with live parameter values.
-        assigned_resources: List of
+        assigned_resources: Mapping of slot name →
             :class:`~recap.schemas.resource.ResourceAssignmentSchema`
-            binding resources to their slots.
+            binding resources to their slots.  Keyed by
+            :attr:`~recap.schemas.resource.ResourceSlotSchema.name` so that
+            a specific assignment can be retrieved directly, e.g.
+            ``run.assigned_resources["crystal_plate"]``.
     """
 
     name: str
@@ -122,8 +125,16 @@ class ProcessRunSchema(CommonFields):
     campaign_id: UUID
     template: ProcessTemplateSchema
     steps: dict[str, StepSchema]
-    assigned_resources: list[ResourceAssignmentSchema]
+    assigned_resources: dict[str, ResourceAssignmentSchema]
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
+
+    @field_validator("assigned_resources", mode="before")
+    @classmethod
+    def _coerce_assigned_resources(cls, v):
+        """Convert a list of assignments (from the ORM) into a slot-name-keyed dict."""
+        if isinstance(v, list):
+            return {item.slot.name: item for item in v}
+        return v
 
 
 class CampaignSchema(CommonFields):
