@@ -441,17 +441,24 @@ class ResourceTemplateBuilder:
     def add_properties(
         self, prop_def: dict[str, list[dict[str, Any]]]
     ) -> "ResourceTemplateBuilder":
-        """
-        Add properties in the form of a dictionary, first level of keys
-        represents groups which have a list of dictionaries representing properties
-        {
-            "content": [
-                {"name": "catalog_id",
-                "type": "str",
-                "unit": "",
-                "default": ""}
-            ]
-        }
+        """Add property groups and their attributes to this resource template.
+
+        Args:
+            prop_def: A mapping of group name → list of attribute dicts.  Each
+                attribute dict accepts the keys ``name``, ``type``,
+                ``default``, ``unit`` (optional), and ``metadata`` (optional).
+
+        Example::
+
+            template_builder.add_properties({
+                "content": [
+                    {"name": "catalog_id", "type": "str", "default": ""},
+                    {"name": "volume", "type": "float", "default": 10.0, "unit": "uL"},
+                ]
+            })
+
+        Returns:
+            ``self``, to allow method chaining.
         """
         self._ensure_uow()
 

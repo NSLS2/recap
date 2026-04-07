@@ -26,15 +26,16 @@ class ValueType(str, Enum):
             ]
         })
 
-    Members:
-        INT: 64-bit integer (Python :class:`int`).
-        STR: Unicode string (Python :class:`str`).
-        BOOL: Boolean flag (Python :class:`bool`).
-        FLOAT: Double-precision float (Python :class:`float`).
-        DATETIME: Timezone-naive datetime (Python :class:`~datetime.datetime`).
-        ARRAY: Ordered list of arbitrary values (Python :class:`list`).
-        ENUM: String constrained to a fixed set of choices defined in
-            ``metadata.choices``.  Stored as a :class:`str`.
+    **Members**
+
+    - ``INT`` — 64-bit integer (Python :class:`int`).
+    - ``STR`` — Unicode string (Python :class:`str`).
+    - ``BOOL`` — Boolean flag (Python :class:`bool`).
+    - ``FLOAT`` — Double-precision float (Python :class:`float`).
+    - ``DATETIME`` — Timezone-naive datetime (Python :class:`~datetime.datetime`).
+    - ``ARRAY`` — Ordered list of arbitrary values (Python :class:`list`).
+    - ``ENUM`` — String constrained to a fixed set of choices defined in
+      ``metadata.choices``.  Stored as a :class:`str`.
     """
 
     INT = "int"
@@ -49,10 +50,11 @@ class ValueType(str, Enum):
 class StepStatus(str, Enum):
     """Lifecycle state of a :class:`~recap.schemas.step.StepSchema`.
 
-    Members:
-        PENDING: The step has been created but work has not yet started.
-        IN_PROGRESS: The step is actively being executed.
-        COMPLETE: The step has finished successfully.
+    **Members**
+
+    - ``PENDING`` — The step has been created but work has not yet started.
+    - ``IN_PROGRESS`` — The step is actively being executed.
+    - ``COMPLETE`` — The step has finished successfully.
     """
 
     PENDING = "PENDING"

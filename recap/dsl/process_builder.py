@@ -217,13 +217,23 @@ class StepTemplateBuilder:
         return self
 
     def add_parameters(self, param_def: dict[str, list[dict[str, Any]]]):
-        """
-        Add parameters in the form of a dictionary, first level of keys represents groupts which have a list of dictionaries representing parameters
-        {
-            "harvest": [
-                {"name":"arrival", "type": "datetime", "unit": "", default: ""},
-            ]
-        }
+        """Add parameter groups and their attributes to this step template.
+
+        Args:
+            param_def: A mapping of group name → list of attribute dicts.  Each
+                attribute dict accepts the keys ``name``, ``type``,
+                ``default``, ``unit`` (optional), and ``metadata`` (optional).
+
+        Example::
+
+            step_builder.add_parameters({
+                "harvest": [
+                    {"name": "arrival", "type": "datetime", "default": None},
+                ]
+            })
+
+        Returns:
+            ``self``, to allow method chaining.
         """
         for group_key, params in param_def.items():
             agb = AttributeGroupBuilder(group_name=group_key, parent=self)
