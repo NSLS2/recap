@@ -120,7 +120,7 @@ class ProcessRun(TimestampMixin, Base):
             self.steps[step.name] = step
 
     @validates("assignments")
-    def _check_assignment(self, key, assignment: "ResourceAssignment"):
+    def _check_assignment(self, key, assignment: "ResourceAssignment"):  # noqa
         if assignment.process_run is None:
             assignment.process_run = self
         sess = object_session(self)
@@ -144,6 +144,40 @@ class ProcessRun(TimestampMixin, Base):
                 raise ValueError(
                     f"Slot {slot.name} is already occupied in run {self.id}"
                 )
+
+        # Auto-populate step-level assignments for steps bound to this slot.
+        # Explicit step assignments remain untouched and take precedence.
+        for step in self.steps.values():
+            bound_slot_ids = {
+                binding.resource_slot_id for binding in step.template.bindings.values()
+            }
+            if slot.id not in bound_slot_ids:
+                continue
+            if slot.id in step.assignments:
+                continue
+
+            if sess is not None:
+                with sess.no_autoflush:
+                    step_assignment = ResourceAssignment(
+                        process_run=self,
+                        resource_slot=slot,
+                        resource_slot_id=slot.id,
+                        step=step,
+                        step_id=step.id,
+                        resource=resource,
+                    )
+            else:
+                step_assignment = ResourceAssignment(
+                    process_run=self,
+                    resource_slot=slot,
+                    resource_slot_id=slot.id,
+                    step=step,
+                    step_id=step.id,
+                    resource=resource,
+                )
+            if sess is not None and step_assignment not in sess:
+                sess.add(step_assignment)
+            step.assignments[slot.id] = step_assignment
 
         return assignment
 
@@ -203,14 +237,20 @@ class ResourceAssignment(TimestampMixin, Base):
     def _check_resource_campaign_uniqueness(self, key, resource: "Resource"):
         if self.process_run and self.process_run.campaign:
             campaign_id = self.process_run.campaign.id
+            this_step_id = self.step_id or (
+                self.step.id if self.step is not None else None
+            )
             for assignment in resource.assignments:
                 if assignment is self:
                     continue
+                other_step_id = assignment.step_id or (
+                    assignment.step.id if assignment.step is not None else None
+                )
                 if (
                     assignment.process_run
                     and assignment.process_run.campaign_id == campaign_id
                     and assignment.resource.parent_id == resource.parent_id
-                    and assignment.step_id == self.step_id
+                    and other_step_id == this_step_id
                 ):
                     raise DuplicateResourceError(
                         resource.name,

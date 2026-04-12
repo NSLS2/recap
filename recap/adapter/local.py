@@ -29,12 +29,7 @@ from recap.db.resource import (
     ResourceType,
     resource_template_type_association,
 )
-from recap.db.step import (
-    Parameter,
-    Step,
-    StepTemplate,
-    StepTemplateResourceSlotBinding,
-)
+from recap.db.step import Parameter, Step, StepTemplate, StepTemplateResourceSlotBinding
 from recap.dsl.query import QuerySpec, SchemaT
 from recap.schemas.attribute import AttributeGroupRef, AttributeTemplateSchema
 from recap.schemas.process import (
@@ -54,11 +49,7 @@ from recap.schemas.resource import (
 )
 from recap.schemas.step import StepSchema, StepTemplateRef, StepTemplateSchema
 from recap.utils.database import get_or_create, load_single
-from recap.utils.dsl import (
-    AliasMixin,
-    build_param_values_model,
-    resolve_path,
-)
+from recap.utils.dsl import AliasMixin, build_param_values_model, resolve_path
 from recap.utils.general import make_slug, to_json_compatible
 
 SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
@@ -765,10 +756,12 @@ class LocalBackend(Backend):
                 idx += 1
                 step_name = f"{step_name} ({idx})"
 
-        step = Step(template=template, parent=parent_step, name=step_name)
-        pr_model.steps[step.name] = step
-        # Add early to session to avoid autoflush warnings when binding children/resources
-        self.session.add(step)
+        with self.session.no_autoflush:
+            step = Step(template=template, name=step_name)
+            # Add before setting parent/backrefs to avoid transient-child warnings.
+            self.session.add(step)
+            step.parent = parent_step
+            pr_model.steps[step.name] = step
 
         if child_step.parameters:
             for group_name, params in child_step.parameters.items():
@@ -794,9 +787,16 @@ class LocalBackend(Backend):
         if child_step.resources:
             self._assign_step_resources(step, pr_model, child_step.resources)
 
-        self.session.add(step)
         self.session.flush()
         return StepSchema.model_validate(step)
+
+    def _resource_is_descendant_or_same(self, candidate: Resource, root: Resource):
+        current = candidate
+        while current is not None:
+            if current.id == root.id:
+                return True
+            current = current.parent
+        return False
 
     def _assign_step_resources(
         self,
@@ -824,25 +824,17 @@ class LocalBackend(Backend):
                     f"Resource {resource_model.name} is not allowed for role {role}; "
                     f"must be the assigned resource {root_resource.name} or its child"
                 )
-            assignment = ResourceAssignment(
-                process_run=process_run_model,
-                resource_slot=slot,
-                resource_slot_id=slot.id,  # ensure collection key is populated
-                resource=resource_model,
-                step=step,
-            )
-            # Explicitly add to the session before attaching to the mapped collection
-            # to avoid KeyFuncDict errors when SQLAlchemy derives the dict key.
-            self.session.add(assignment)
+            with self.session.no_autoflush:
+                assignment = ResourceAssignment(
+                    process_run=process_run_model,
+                    resource_slot=slot,
+                    resource_slot_id=slot.id,
+                    step=step,
+                    step_id=step.id,
+                )
+                self.session.add(assignment)
+                assignment.resource = resource_model
             step.assignments[slot.id] = assignment
-
-    def _resource_is_descendant_or_same(self, candidate: Resource, root: Resource):
-        current = candidate
-        while current is not None:
-            if current.id == root.id:
-                return True
-            current = current.parent
-        return False
 
     def _load_resource_model(self, ref: ResourceRef | ResourceSchema) -> Resource:
         return load_single(

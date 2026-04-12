@@ -244,7 +244,23 @@ class Step(TimestampMixin, Base):
         slot_to_role = {
             b.resource_slot_id: b.role for b in self.template.bindings.values()
         }
-        return {
-            slot_to_role.get(slot_id, str(slot_id)): assignment.resource
-            for slot_id, assignment in self.assignments.items()
+        resources_by_role = {}
+        if self.process_run is None:
+            return resources_by_role
+
+        run_resources_by_slot_id = {
+            slot.id: assignment.resource
+            for slot, assignment in self.process_run.assignments.items()
         }
+        for slot_id, role in slot_to_role.items():
+            resource = run_resources_by_slot_id.get(slot_id)
+            if resource is not None:
+                resources_by_role[role] = resource
+
+        # Child-step explicit assignments override run-level defaults per role.
+        for slot_id, assignment in self.assignments.items():
+            resources_by_role[slot_to_role.get(slot_id, str(slot_id))] = (
+                assignment.resource
+            )
+
+        return resources_by_role

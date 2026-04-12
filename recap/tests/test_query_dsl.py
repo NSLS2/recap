@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import pytest
 from sqlalchemy.orm import sessionmaker
 
 from recap.adapter.local import LocalBackend
@@ -9,7 +10,7 @@ from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.campaign import Campaign
 from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
-from recap.db.step import StepTemplate
+from recap.db.step import StepTemplate, StepTemplateResourceSlotBinding
 from recap.dsl.query import QueryDSL
 from recap.schemas.process import ProcessRunRef, ProcessTemplateRef
 from recap.schemas.resource import ResourceRef, ResourceTemplateRef
@@ -29,6 +30,7 @@ def seed_process_run(
     name: str,
     with_parameters: bool = False,
     with_resource: bool = False,
+    bind_step_slot: bool = False,
 ) -> tuple[Campaign, ProcessRun]:
     with db_session.no_autoflush:
         campaign = Campaign(name=f"Campaign-{name}", proposal=f"PROP-{name}")
@@ -69,6 +71,11 @@ def seed_process_run(
         resource = Resource(name=f"Resource-{name}", template=resource_template)
         db_session.add_all([resource_type, resource_template, slot, resource])
         db_session.flush()
+        if bind_step_slot:
+            step_template.bindings["input_resource"] = StepTemplateResourceSlotBinding(
+                role="input_resource",
+                resource_slot=slot,
+            )
         run.resources[slot] = resource
 
     db_session.commit()
@@ -135,6 +142,136 @@ def test_process_run_include_resources(db_session):
     assert loaded_run is not None
     assignment = next(iter(loaded_run.assigned_resources.values()))
     assert assignment.resource.name.startswith("Resource-resources")
+
+
+def test_process_run_include_resources_populates_step_resources(db_session):
+    _, run = seed_process_run(
+        db_session,
+        name="step-resources",
+        with_resource=True,
+        bind_step_slot=True,
+    )
+
+    loaded_run = (
+        make_query(db_session)
+        .process_runs()
+        .filter(id=run.id)
+        .include_resources()
+        .first()
+    )
+
+    assert loaded_run is not None
+    step = loaded_run.steps["Step-step-resources"]
+    assert "input_resource" in step.resources
+    assert step.resources["input_resource"].name.startswith("Resource-step-resources")
+
+
+def test_run_assignment_auto_populates_bound_step_assignments(db_session):
+    _, run = seed_process_run(
+        db_session,
+        name="auto-step-assignment",
+        with_resource=True,
+        bind_step_slot=True,
+    )
+
+    loaded_run = (
+        make_query(db_session)
+        .process_runs()
+        .filter(id=run.id)
+        .include_steps(include_parameters=False)
+        .include_resources()
+        .first()
+    )
+
+    assert loaded_run is not None
+    step = loaded_run.steps["Step-auto-step-assignment"]
+    assert step.resources["input_resource"].name.startswith(
+        "Resource-auto-step-assignment"
+    )
+
+
+def test_add_child_step_allows_descendant_of_slot_resource(db_session):
+    _, run = seed_process_run(
+        db_session,
+        name="child-descendant-allowed",
+        with_resource=True,
+        bind_step_slot=True,
+    )
+
+    run_assignment = next(iter(run.assignments.values()))
+    child_resource = Resource(
+        name="child-well-A1", template=run_assignment.resource.template
+    )
+    child_resource.parent = run_assignment.resource
+    db_session.add(child_resource)
+    db_session.commit()
+
+    SessionLocal = sessionmaker(bind=db_session.get_bind())
+    backend = LocalBackend(SessionLocal)
+
+    loaded_run = (
+        QueryDSL(backend)
+        .process_runs()
+        .filter(id=run.id)
+        .include_steps(include_parameters=False)
+        .include_resources()
+        .first()
+    )
+
+    assert loaded_run is not None
+    parent = loaded_run.steps["Step-child-descendant-allowed"]
+    child = parent.generate_child()
+    child.resources["input_resource"] = ResourceRef.model_validate(child_resource)
+
+    uow = backend.begin()
+    try:
+        created_child = backend.add_child_step(loaded_run, child)
+    finally:
+        uow.rollback()
+
+    assert created_child.resources["input_resource"].id == child_resource.id
+
+
+def test_add_child_step_rejects_unrelated_resource(db_session):
+    _, run = seed_process_run(
+        db_session,
+        name="child-unrelated-rejected",
+        with_resource=True,
+        bind_step_slot=True,
+    )
+
+    unrelated_type = ResourceType(name=f"unrelated-type-{uuid4().hex}")
+    unrelated_template = ResourceTemplate(name=f"unrelated-template-{uuid4().hex}")
+    unrelated_template.types.append(unrelated_type)
+    unrelated_resource = Resource(
+        name="unrelated-resource", template=unrelated_template
+    )
+    db_session.add_all([unrelated_type, unrelated_template, unrelated_resource])
+    db_session.commit()
+
+    SessionLocal = sessionmaker(bind=db_session.get_bind())
+    backend = LocalBackend(SessionLocal)
+
+    loaded_run = (
+        QueryDSL(backend)
+        .process_runs()
+        .filter(id=run.id)
+        .include_steps(include_parameters=False)
+        .include_resources()
+        .first()
+    )
+
+    assert loaded_run is not None
+    parent = loaded_run.steps["Step-child-unrelated-rejected"]
+    child = parent.generate_child()
+    child.resources["input_resource"] = ResourceRef.model_validate(unrelated_resource)
+
+    uow = backend.begin()
+    try:
+        with pytest.raises(ValueError, match="must be the assigned resource"):
+            backend.add_child_step(loaded_run, child)
+    finally:
+        uow.rollback()
 
 
 def test_process_run_query_can_return_ref(db_session):
