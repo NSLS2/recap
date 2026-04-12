@@ -107,8 +107,7 @@ class ParameterSchema(CommonFields):
     """
 
     template: AttributeGroupTemplateSchema
-    # values: dict[str, AttributeTemplateSchema]
-    values: BaseModel  # dict[str, Any]
+    values: BaseModel = Field(repr=False)
 
     @model_validator(mode="before")
     def coerce_from_orm(cls, data):
@@ -296,6 +295,44 @@ class ParameterSchema(CommonFields):
             setattr(values, name, value)
             return
         super().__setattr__(name, value)
+
+    def __getitem__(self, name: str) -> Any:
+        """Bracket read: ``param["attr_name"]`` — accepts slug or original name."""
+        values = self.__dict__.get("values")
+        if values is not None:
+            try:
+                return values[name]
+            except KeyError:
+                pass
+        raise KeyError(name)
+
+    def __setitem__(self, name: str, value: Any) -> None:
+        """Bracket write: ``param["attr_name"] = v`` — unit-preserving, accepts slug or original name."""
+        values = self.__dict__.get("values")
+        if values is not None:
+            values[name] = value
+            return
+        raise KeyError(name)
+
+    def get(self, name: str, default: Any = None) -> Any:
+        """Dict-style get: ``param.get("attr_name")`` — accepts slug or original name."""
+        try:
+            return self[name]
+        except KeyError:
+            return default
+
+    def items(self):
+        """Yield ``(original_name, AttributeValueSchema)`` pairs for all attributes."""
+        values = self.__dict__.get("values")
+        if values is None:
+            return
+        for field_name, field_info in type(values).model_fields.items():
+            original_name = field_info.alias or field_name
+            yield original_name, getattr(values, field_name)
+
+    def __repr__(self) -> str:
+        attrs = ", ".join(f"{name}={str(av)}" for name, av in self.items())
+        return f"ParameterSchema(template={self.template.name!r}, {attrs})"
 
 
 class StepSchema(CommonFields):

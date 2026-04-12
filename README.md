@@ -188,37 +188,32 @@ creates a Resource from the `Library Plate` template; children are created autom
 
 #### Accessing and updating property values
 
-Properties are accessed directly by group slug, then attribute slug. Each attribute is an `AttributeValueSchema` with a `.value` and a `.unit`. Its `str()` renders `"<value><unit>"`:
+Each attribute group on a resource is a `PropertySchema`. Attributes are accessed by dot (slug) or bracket (slug or original name). Each attribute is an `AttributeValueSchema` with a `.value` and a `.unit`. Its `str()` renders `"<value><unit>"`:
 
 ```python
 well = plate.children["A01"]
 
-# Read value and unit
-well.properties.content.volume.value   # 10.0
-well.properties.content.volume.unit    # "uL"
-str(well.properties.content.volume)    # "10.0uL"
+# Read value and unit — dot (slug) or bracket (slug or original name)
+well.properties.content.volume.value        # 10.0
+well.properties.content.volume.unit         # "uL"
+str(well.properties.content.volume)         # "10.0uL"
+
+well.properties.content["volume"].value     # 10.0  (bracket by slug)
+well.properties.content["Volume"].value     # 10.0  (bracket by original name)
+
+# .get() — accepts slug or original name, returns None when missing
+well.properties.content.get("volume").value  # 10.0
 
 # Set value (unit stays unchanged — mutates in-place)
-well.properties.content.volume = 8.5
+well.properties.content.volume = 8.5        # dot setter
+well.properties.content["volume"] = 8.5     # bracket setter — same behaviour
 
 # Set unit
 well.properties.content.volume.unit = "uL"
 
 # Set a unit-free attribute
 well.properties.content.smiles = "CCO"
-```
-
-For attribute names that contain spaces or special characters and can't be expressed as a Python identifier, use bracket access on `.values`. This accepts both the original attribute name and its slug, coerces the value through Pydantic, and preserves the unit — identical behaviour to the shortcut setter:
-
-```python
-# Both the original name and the slug are accepted
-well.properties.content.values["catalog id"].value       # slug: "catalog_id"
-well.properties.content.values["Catalog ID"].value       # original name also works
-
-# Assign by original name — value is coerced and unit is preserved
-well.properties.content.volume.unit = "mL"
-well.properties.content.values["volume"] = 8.5
-well.properties.content.volume.unit                      # still "mL"
+well.properties.content["smiles"] = "CCO"   # equivalent
 ```
 
 The returned object is a Pydantic model, well suited for inspection and local changes, but database changes must go through the client. You can either:

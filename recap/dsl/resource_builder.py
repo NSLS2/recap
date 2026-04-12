@@ -254,7 +254,7 @@ class ResourceBuilder:
         }
         for _, prop in self._resource.properties.items():
             prop_fields: dict[str, tuple] = {}
-            for val_name, value in prop.values.items():
+            for val_name, value in prop.items():
                 value_template = None
                 for vt in prop.template.attribute_templates:
                     if vt.name == val_name:

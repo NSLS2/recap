@@ -114,12 +114,11 @@ def test_parameter_schema_exposes_typed_values_model():
         values={"Voltage": "10", "Enabled": "true"},
     )
 
-    assert schema.values.voltage.value == 10
-    assert schema.values.enabled.value is True
-    assert schema.values.model_dump(by_alias=True) == {
-        "Voltage": {"value": 10, "unit": None},
-        "Enabled": {"value": True, "unit": None},
-    }
+    assert schema.voltage.value == 10
+    assert schema.enabled.value is True
+    assert schema["Voltage"].value == 10
+    assert schema["voltage"].value == 10
+    assert schema["Enabled"].value is True
 
 
 def test_property_schema_value_coercion_matches_template():
@@ -134,7 +133,7 @@ def test_property_schema_value_coercion_matches_template():
         values={"Temp": "25.5"},
     )
 
-    assert property_schema.values.temp.value == pytest.approx(25.5)
+    assert property_schema.temp.value == pytest.approx(25.5)
 
 
 def test_property_schema_shortcut_attribute_access():
@@ -149,13 +148,11 @@ def test_property_schema_shortcut_attribute_access():
         values={"Temp": "25.5"},
     )
 
-    # Shortcut: .temp instead of .values.temp
-    assert property_schema.temp is property_schema.values.temp
+    # Dot access returns AttributeValueSchema
     assert property_schema.temp.value == pytest.approx(25.5)
 
     # Shortcut setter: scalar assignment mutates .value in-place (unit preserved)
     property_schema.temp = 99.0
-    assert property_schema.values.temp.value == pytest.approx(99.0)
     assert property_schema.temp.value == pytest.approx(99.0)
 
     # Unit is set directly on the AttributeValueSchema
@@ -175,7 +172,6 @@ def test_property_schema_shortcut_attribute_access():
         _ = property_schema.nonexistent_field
 
     # Real PropertySchema fields are unaffected
-    assert property_schema.values is not None
     assert property_schema.template is group_schema
 
 
@@ -194,14 +190,12 @@ def test_parameter_schema_shortcut_attribute_access():
         values={"Voltage": "10", "Enabled": "true"},
     )
 
-    # Shortcut getter
-    assert schema.voltage is schema.values.voltage
+    # Dot access returns AttributeValueSchema
     assert schema.voltage.value == 10
     assert schema.enabled.value is True
 
     # Shortcut setter: scalar mutates .value in-place
     schema.voltage = 42
-    assert schema.values.voltage.value == 42
     assert schema.voltage.value == 42
 
     # Unit is set directly on the AttributeValueSchema
@@ -221,7 +215,6 @@ def test_parameter_schema_shortcut_attribute_access():
         _ = schema.nonexistent_field
 
     # Real ParameterSchema fields are unaffected
-    assert schema.values is not None
     assert schema.template is group_schema
 
 
@@ -241,12 +234,12 @@ def test_property_schema_bracket_assignment_preserves_unit():
     prop.volume.unit = "mL"
 
     # Bracket assignment by slug — unit must be preserved
-    prop.values["volume"] = 50.0
+    prop["volume"] = 50.0
     assert prop.volume.value == pytest.approx(50.0)
     assert prop.volume.unit == "mL"
 
     # Bracket assignment by original name — same behaviour
-    prop.values["Volume"] = 99.0
+    prop["Volume"] = 99.0
     assert prop.volume.value == pytest.approx(99.0)
     assert prop.volume.unit == "mL"
 
@@ -269,12 +262,12 @@ def test_parameter_schema_bracket_assignment_preserves_unit():
     param.volume.unit = "uL"
 
     # Bracket assignment by slug — unit must be preserved
-    param.values["volume"] = 50.0
+    param["volume"] = 50.0
     assert param.volume.value == pytest.approx(50.0)
     assert param.volume.unit == "uL"
 
     # Bracket assignment by original name — same behaviour
-    param.values["Volume"] = 99.0
+    param["Volume"] = 99.0
     assert param.volume.value == pytest.approx(99.0)
     assert param.volume.unit == "uL"
 
@@ -352,7 +345,7 @@ def test_enum_attribute_validates_choices():
         template=group_schema,
         values={"Drop Position": "d"},
     )
-    assert schema.values.get("Drop Position").value == "d"
+    assert schema.get("Drop Position").value == "d"
 
     with pytest.raises(ValueError):
         ParameterSchema(

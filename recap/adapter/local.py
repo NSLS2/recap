@@ -777,7 +777,7 @@ class LocalBackend(Backend):
                         f"Step {step_name} has no parameter group {group_name}"
                     )
                 param = step.parameters[group_name]
-                for key, value in params.values.items():
+                for key, value in params.items():
                     if key not in param._values:
                         raise ValueError(
                             f"Parameter {key} not found in group {group_name}"

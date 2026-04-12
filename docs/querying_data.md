@@ -198,7 +198,7 @@ for run in runs:
         print(f"\tStep {step_num}: {step.name}")
         for pg_num, (param_group_name, param_group) in enumerate(step.parameters.items()):
             print(f"\t\tGroup {pg_num}: {param_group_name}")
-            for param_name, param_value in param_group.values.items():
+            for param_name, param_value in param_group.items():
                 print(f"\t\t\t{param_name} : {param_value}")
 ```
 
