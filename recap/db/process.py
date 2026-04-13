@@ -177,7 +177,6 @@ class ProcessRun(TimestampMixin, Base):
                 )
             if sess is not None and step_assignment not in sess:
                 sess.add(step_assignment)
-            step.assignments[slot.id] = step_assignment
 
         return assignment
 
@@ -236,16 +235,46 @@ class ResourceAssignment(TimestampMixin, Base):
     @validates("resource")
     def _check_resource_campaign_uniqueness(self, key, resource: "Resource"):
         if self.process_run and self.process_run.campaign:
+            if self.process_run_id is None or self.resource_slot_id is None:
+                return resource
             campaign_id = self.process_run.campaign.id
             this_step_id = self.step_id or (
                 self.step.id if self.step is not None else None
             )
+            this_run_id = self.process_run_id or (
+                self.process_run.id if self.process_run is not None else None
+            )
+            this_slot_id = self.resource_slot_id or (
+                self.resource_slot.id if self.resource_slot is not None else None
+            )
             for assignment in resource.assignments:
                 if assignment is self:
+                    continue
+                other_run_id = assignment.process_run_id or (
+                    assignment.process_run.id
+                    if assignment.process_run is not None
+                    else None
+                )
+                other_slot_id = assignment.resource_slot_id or (
+                    assignment.resource_slot.id
+                    if assignment.resource_slot is not None
+                    else None
+                )
+                if other_run_id is None or other_slot_id is None:
                     continue
                 other_step_id = assignment.step_id or (
                     assignment.step.id if assignment.step is not None else None
                 )
+                # Run-level and step-level assignment pair for the same run/slot
+                # represent one logical assignment; allow this combination.
+                if (
+                    this_run_id is not None
+                    and this_slot_id is not None
+                    and other_run_id == this_run_id
+                    and other_slot_id == this_slot_id
+                    and ((this_step_id is None) != (other_step_id is None))
+                ):
+                    continue
                 if (
                     assignment.process_run
                     and assignment.process_run.campaign_id == campaign_id
