@@ -54,6 +54,7 @@ def test_query_maker_defaults_to_client_campaign(apply_migrations, db_url):
         assert qm.process_runs()._spec.campaign_id == client._campaign.id
         assert qm.resources()._spec.campaign_id == client._campaign.id
         assert qm.process_templates()._spec.campaign_id is None
+        assert qm.process_runs()._spec.on_unloaded == "warn"
 
 
 def test_query_maker_can_override_campaign(apply_migrations, db_url):
@@ -69,3 +70,10 @@ def test_query_maker_can_override_campaign(apply_migrations, db_url):
         assert qm.process_runs()._spec.campaign_id == other_id
         assert qm.resources()._spec.campaign_id == other_id
         assert qm.process_runs()._spec.campaign_id != default_id
+
+
+def test_query_maker_can_set_on_unloaded_policy(apply_migrations, db_url):
+    with RecapClient(url=db_url) as client:
+        client.create_campaign("name-policy", "proposal-policy")
+        qm = client.query_maker(on_unloaded="raise")
+        assert qm.process_runs()._spec.on_unloaded == "raise"

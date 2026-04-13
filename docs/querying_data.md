@@ -2,13 +2,13 @@
 
 RECAP exposes a small Query DSL on top of the configured backend (SQLAlchemy or another adapter) so that you can express provenance-oriented queries in a fluent, chainable style. Query objects are immutable; each chain returns a new query with your filters/preloads applied.
 
-The query builder lives on the client as `client.query_maker()` and exposes type-specific entry points:
+The query builder lives on the client as `client.query_maker(on_unloaded=...)` and exposes type-specific entry points:
 
 - `campaigns()` -> `CampaignQuery`
-- `process_templates()` -> `ProcessTemplateQuery`
-- `process_runs()` -> `ProcessRunQuery`
-- `resources()` -> `ResourceQuery`
-- `resource_templates()` -> `ResourceTemplateQuery`
+- `process_templates(shape="schema"|"ref", load="none"|"full")` -> `ProcessTemplateQuery`
+- `process_runs(shape="schema"|"ref", load="none"|"full")` -> `ProcessRunQuery`
+- `resources(shape="schema"|"ref", load="none"|"full")` -> `ResourceQuery`
+- `resource_templates(shape="schema"|"ref", load="none"|"full")` -> `ResourceTemplateQuery`
 
 Under the hood, these all use a common `BaseQuery` and a backend-provided `.query(model, spec)` implementation. The `QuerySpec` object carries filters, predicates, ordering, preloads, and pagination options down to the backend. Query objects are immutable: every operation like `filter` or `include` returns a new query instance.
 
@@ -17,11 +17,11 @@ Under the hood, these all use a common `BaseQuery` and a backend-provided `.quer
 Assuming you have a configured client:
 
 ```python
-qm = client.query_maker()
+qm = client.query_maker(on_unloaded="warn")
 
 # Query entry points
 campaigns = qm.campaigns()
-runs = qm.process_runs()
+runs = qm.process_runs()  # schema + load="none"
 resources = qm.resources()
 templates = qm.resource_templates()
 process_templates = qm.process_templates()
@@ -31,6 +31,36 @@ process_templates = qm.process_templates()
 > `set_campaign()`, resource and process run queries are scoped to that campaign
 > by default. You can override per-call by passing `campaign=` to `resources()` /
 > `process_runs()`, or leave it unset to query across campaigns.
+
+`on_unloaded` controls what happens when you access relationship fields that were
+not loaded by `include(...)` (or `load="full"`):
+
+- `"warn"` (default): emit a warning with include hint.
+- `"raise"`: raise an exception immediately.
+- `"silent"`: keep old behavior (empty/default container).
+
+These use custom types:
+- warning: `recap.exceptions.UnloadedFieldWarning`
+- exception: `recap.exceptions.UnloadedFieldError`
+
+You can set a default at `query_maker(...)`, and optionally override per query:
+
+```python
+qm = client.query_maker(on_unloaded="raise")
+run = qm.process_runs(on_unloaded="warn").filter(name="Run-1").first()
+```
+
+For process runs, choose the payload shape/load strategy directly:
+
+```python
+qm.process_runs(shape="ref")             # lightweight refs
+qm.process_runs(shape="schema", load="none")  # schema without implicit relationship expansion
+qm.process_runs(shape="schema", load="full")  # schema with full relationship expansion
+```
+
+`include(...)` is only valid with `shape="schema", load="none"`.
+
+The same rule applies to `resources`, `process_templates`, and `resource_templates`.
 
 ### Basic Filtering
 
@@ -133,7 +163,20 @@ runs = (
 
 ### Eager Loading Related Data with `include`
 
-Queries can preload related entities via the `include` helper. Each `include` translates to a string path that the backend understands (e.g., for SQLAlchemy that might become `joinedload` or `selectinload`). The type-specific queries expose more ergonomic methods:
+Queries can preload related entities via the `include` helper. Each include path maps to a backend loader path (for SQLAlchemy this is typically `selectinload`).
+
+`include` accepts either a single string or a list of dot-path strings:
+
+```python
+runs = (
+    client.query_maker()
+    .process_runs()
+    .include(["steps", "steps.parameters", "resources"])
+    .all()
+)
+```
+
+The type-specific queries also expose convenience methods:
 
 - `CampaignQuery.include_process_runs()`
 - `ProcessRunQuery.include_steps(include_parameters: bool = False)`

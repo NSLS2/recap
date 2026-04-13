@@ -1,7 +1,7 @@
 from collections.abc import Iterable
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Any, overload
+from typing import Any, Literal, overload
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -166,7 +166,7 @@ class RecapClient:
         self,
         *args,
         process_template_id: UUID | None = None,
-        strict_checking: bool = False,
+        on_existing: Literal["silent", "warn", "raise"] = "warn",
         **kwargs,
     ) -> ProcessTemplateBuilder:
         """Open a builder for a :class:`~recap.dsl.process_builder.ProcessTemplateBuilder`.
@@ -192,9 +192,8 @@ class RecapClient:
             version: Version string, e.g. ``"1.0"`` (positional).
             process_template_id: UUID of an existing template to load.  When
                 supplied, *name* and *version* must not be provided.
-            strict_checking: When ``True``, the builder raises on any
-                inconsistency between the submitted model and the database
-                record.  Defaults to ``False``.
+            on_existing: Controls behavior when template already exists:
+                ``"warn"`` (default), ``"raise"``, or ``"silent"``.
 
         Returns:
             A :class:`~recap.dsl.process_builder.ProcessTemplateBuilder`
@@ -218,7 +217,7 @@ class RecapClient:
                 version=None,
                 backend=self.backend,
                 process_template_id=process_template_id,
-                strict_checking=strict_checking,
+                on_existing=on_existing,
             )
 
         if args:
@@ -238,7 +237,7 @@ class RecapClient:
             name=name,
             version=version,
             backend=self.backend,
-            strict_checking=strict_checking,
+            on_existing=on_existing,
         )
 
     @overload
@@ -253,7 +252,7 @@ class RecapClient:
         self,
         *args,
         process_run_id: UUID | None = None,
-        strict_checking: bool = False,
+        on_existing: Literal["silent", "warn", "raise"] = "warn",
         **kwargs,
     ) -> ProcessRunBuilder:
         """Open a builder for a :class:`~recap.dsl.process_builder.ProcessRunBuilder`.
@@ -284,8 +283,8 @@ class RecapClient:
             version: Version of the template (positional).
             process_run_id: UUID of an existing run to load.  When supplied,
                 positional arguments must not be provided.
-            strict_checking: Raise on model/database inconsistencies.
-                Defaults to ``False``.
+            on_existing: Controls behavior when run already exists:
+                ``"warn"`` (default), ``"raise"``, or ``"silent"``.
 
         Returns:
             A :class:`~recap.dsl.process_builder.ProcessRunBuilder` context
@@ -312,7 +311,7 @@ class RecapClient:
                 backend=self.backend,
                 version=None,
                 process_run_id=process_run_id,
-                strict_checking=strict_checking,
+                on_existing=on_existing,
             )
 
         if args:
@@ -346,7 +345,7 @@ class RecapClient:
             campaign=self._campaign,
             backend=self.backend,
             version=version,
-            strict_checking=strict_checking,
+            on_existing=on_existing,
         )
 
     @overload
@@ -366,7 +365,7 @@ class RecapClient:
         type_names: list[str] | None = None,
         version: str = "1.0",
         resource_template_id: UUID | None = None,
-        strict_checking: bool = False,
+        on_existing: Literal["silent", "warn", "raise"] = "warn",
     ):
         """Open a builder for a :class:`~recap.dsl.resource_builder.ResourceTemplateBuilder`.
 
@@ -396,8 +395,8 @@ class RecapClient:
             version: Schema version string.  Defaults to ``"1.0"``.
             resource_template_id: UUID of an existing template to load.
                 When supplied, *name* and *type_names* must not be provided.
-            strict_checking: Raise on model/database inconsistencies.
-                Defaults to ``False``.
+            on_existing: Controls behavior when template already exists:
+                ``"warn"`` (default), ``"raise"``, or ``"silent"``.
 
         Returns:
             A :class:`~recap.dsl.resource_builder.ResourceTemplateBuilder`
@@ -422,7 +421,7 @@ class RecapClient:
                 version=version,
                 backend=self.backend,
                 resource_template_id=resource_template_id,
-                strict_checking=strict_checking,
+                on_existing=on_existing,
             )
 
         if name is None or type_names is None:
@@ -437,7 +436,7 @@ class RecapClient:
             type_names=type_names,
             version=version,
             backend=self.backend,
-            strict_checking=strict_checking,
+            on_existing=on_existing,
         )
 
     @overload
@@ -452,7 +451,7 @@ class RecapClient:
         self,
         *args,
         resource_id: UUID | None = None,
-        strict_checking: bool = False,
+        on_existing: Literal["silent", "warn", "raise"] = "warn",
         **kwargs,
     ):
         """Open a builder for a :class:`~recap.dsl.resource_builder.ResourceBuilder`.
@@ -484,8 +483,8 @@ class RecapClient:
                 to ``"1.0"`` (keyword only).
             resource_id: UUID of an existing resource to load.  When
                 supplied, positional arguments must not be provided.
-            strict_checking: Raise on model/database inconsistencies.
-                Defaults to ``False``.
+            on_existing: Controls behavior when resource already exists:
+                ``"warn"`` (default), ``"raise"``, or ``"silent"``.
 
         Returns:
             A :class:`~recap.dsl.resource_builder.ResourceBuilder` context
@@ -509,7 +508,7 @@ class RecapClient:
                 template_version="1.0",
                 backend=self.backend,
                 resource_id=resource_id,
-                strict_checking=strict_checking,
+                on_existing=on_existing,
             )
 
         if args:
@@ -532,7 +531,7 @@ class RecapClient:
             template_name=template_name,
             template_version=template_version,
             backend=self.backend,
-            strict_checking=strict_checking,
+            on_existing=on_existing,
         )
 
     def create_resource(
@@ -652,15 +651,23 @@ class RecapClient:
             uow.rollback()
             raise
 
-    def query_maker(self, *, campaign=None):
+    def query_maker(
+        self,
+        *,
+        campaign=None,
+        on_unloaded: str = "warn",
+    ):
         """Return a :class:`~recap.dsl.query.QueryDSL` scoped to a campaign.
 
         The returned object exposes a fluent query API for retrieving
         resources, process runs, and their relationships from the database.
 
         If *campaign* is omitted the client's currently active campaign is
-        used.  Pass an explicit campaign (or its UUID) to query a different
+        used. Pass an explicit campaign (or its UUID) to query a different
         one without changing the client's active campaign.
+
+        ``on_unloaded`` controls behavior when accessing relationship fields
+        that were not included in the originating query.
 
         Example::
 
@@ -671,6 +678,8 @@ class RecapClient:
             campaign: A :class:`~recap.schemas.process.CampaignSchema` instance
                 or its UUID to scope the query.  When ``None`` the active
                 campaign is used (if one is set).
+            on_unloaded: One of ``"silent"``, ``"warn"``, or ``"raise"``.
+                Defaults to ``"warn"``.
 
         Returns:
             A :class:`~recap.dsl.query.QueryDSL` instance.
@@ -687,4 +696,8 @@ class RecapClient:
         elif self._campaign is not None:
             campaign_id = self._campaign.id
 
-        return QueryDSL(self.backend, campaign_id=campaign_id)
+        return QueryDSL(
+            self.backend,
+            campaign_id=campaign_id,
+            on_unloaded=on_unloaded,
+        )

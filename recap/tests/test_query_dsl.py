@@ -12,6 +12,7 @@ from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate, StepTemplateResourceSlotBinding
 from recap.dsl.query import QueryDSL
+from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
 from recap.schemas.process import ProcessRunRef, ProcessTemplateRef
 from recap.schemas.resource import ResourceRef, ResourceTemplateRef
 from recap.utils.database import get_or_create
@@ -144,6 +145,39 @@ def test_process_run_include_resources(db_session):
     assert assignment.resource.name.startswith("Resource-resources")
 
 
+def test_unloaded_process_run_field_warns_by_default(db_session):
+    _, run = seed_process_run(db_session, name="warn-resources", with_resource=True)
+    loaded_run = make_query(db_session).process_runs().filter(id=run.id).first()
+
+    assert loaded_run is not None
+    with pytest.warns(UnloadedFieldWarning, match="include\\('resources'\\)"):
+        assert loaded_run.assigned_resources == {}
+
+
+def test_unloaded_process_run_field_raises_when_configured(db_session):
+    _, run = seed_process_run(db_session, name="raise-resources", with_resource=True)
+    loaded_run = (
+        make_query(db_session)
+        .process_runs(on_unloaded="raise")
+        .filter(id=run.id)
+        .first()
+    )
+
+    assert loaded_run is not None
+    with pytest.raises(UnloadedFieldError, match="include\\('resources'\\)"):
+        _ = loaded_run.assigned_resources
+
+
+def test_unloaded_resource_field_warns_by_default(db_session):
+    _, run = seed_process_run(db_session, name="warn-properties", with_resource=True)
+    resource = next(iter(run.resources.values()))
+    loaded_resource = make_query(db_session).resources().filter(id=resource.id).first()
+
+    assert loaded_resource is not None
+    with pytest.warns(UnloadedFieldWarning, match="include\\('properties'\\)"):
+        assert loaded_resource.properties == {}
+
+
 def test_process_run_include_resources_populates_step_resources(db_session):
     _, run = seed_process_run(
         db_session,
@@ -164,6 +198,37 @@ def test_process_run_include_resources_populates_step_resources(db_session):
     step = loaded_run.steps["Step-step-resources"]
     assert "input_resource" in step.resources
     assert step.resources["input_resource"].name.startswith("Resource-step-resources")
+
+
+def test_include_accepts_list_of_paths(db_session):
+    query = (
+        make_query(db_session)
+        .process_runs()
+        .include(["steps", "steps.parameters", "resources"])
+    )
+    assert query._spec.preloads == ["steps", "steps.parameters", "resources"]
+
+
+def test_include_steps_with_parameters_adds_nested_preload(db_session):
+    query = make_query(db_session).process_runs().include_steps(include_parameters=True)
+    assert "steps" in query._spec.preloads
+    assert "steps.parameters" in query._spec.preloads
+    assert query._spec.load_mode == "none"
+
+
+def test_process_run_include_rejects_ref_shape(db_session):
+    with pytest.raises(ValueError, match="shape='schema'"):
+        make_query(db_session).process_runs(shape="ref").include("steps")
+
+
+def test_process_run_include_rejects_full_load(db_session):
+    with pytest.raises(ValueError, match="load='full'"):
+        make_query(db_session).process_runs(load="full").include("steps")
+
+
+def test_process_runs_ref_shape_and_load_mode(db_session):
+    query = make_query(db_session).process_runs(shape="ref")
+    assert query._spec.load_mode == "none"
 
 
 def test_run_assignment_auto_populates_bound_step_assignments(db_session):
@@ -277,7 +342,7 @@ def test_add_child_step_rejects_unrelated_resource(db_session):
 def test_process_run_query_can_return_ref(db_session):
     _, run = seed_process_run(db_session, name="ref-run")
 
-    ref = make_query(db_session).process_runs(expand=False).filter(id=run.id).first()
+    ref = make_query(db_session).process_runs(shape="ref").filter(id=run.id).first()
 
     assert isinstance(ref, ProcessRunRef)
     assert isinstance(ref.template, ProcessTemplateRef)
@@ -290,7 +355,7 @@ def test_process_template_query_can_return_ref(db_session):
 
     ref = (
         make_query(db_session)
-        .process_templates(expand=False)
+        .process_templates(shape="ref")
         .filter(id=run.template.id)
         .first()
     )
@@ -325,11 +390,11 @@ def test_resource_queries_can_return_refs(db_session):
     db_session.commit()
 
     res_ref = (
-        make_query(db_session).resources(expand=False).filter(id=resource.id).first()
+        make_query(db_session).resources(shape="ref").filter(id=resource.id).first()
     )
     tmpl_ref = (
         make_query(db_session)
-        .resource_templates(expand=False)
+        .resource_templates(shape="ref")
         .filter(id=resource_template.id)
         .first()
     )

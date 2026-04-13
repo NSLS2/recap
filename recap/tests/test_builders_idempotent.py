@@ -1,9 +1,19 @@
-import pytest
-from sqlalchemy.exc import IntegrityError
+import warnings
 
-from recap.db.exceptions import ValidationError
+import pytest
+
 from recap.dsl.process_builder import ProcessTemplateBuilder
 from recap.dsl.resource_builder import ResourceTemplateBuilder
+from recap.exceptions import (
+    ExistingProcessRunError,
+    ExistingProcessRunWarning,
+    ExistingProcessTemplateError,
+    ExistingProcessTemplateWarning,
+    ExistingResourceError,
+    ExistingResourceTemplateError,
+    ExistingResourceTemplateWarning,
+    ExistingResourceWarning,
+)
 from recap.utils.general import Direction
 
 
@@ -22,7 +32,11 @@ def test_resource_builder_reuse_same_resource(client):
         rb2.resource.properties["details"].values["serial"] = "xyz2"
 
     refreshed = (
-        client.query_maker().resources().filter(name="RB-1").include_template().first()
+        client.query_maker()
+        .resources()
+        .filter(name="RB-1")
+        .include(["template", "properties"])
+        .first()
     )
     assert refreshed.properties.details.values.serial.value == "xyz2"
 
@@ -103,7 +117,7 @@ def test_resource_template_builder_reuses_existing_with_warning(client):
         pass
 
     with (
-        pytest.warns(UserWarning, match="bump the version"),
+        pytest.warns(ExistingResourceTemplateWarning, match="bump the version"),
         client.build_resource_template(
             name="ReuseRT", type_names=["container"]
         ) as builder,
@@ -111,16 +125,16 @@ def test_resource_template_builder_reuses_existing_with_warning(client):
         assert builder.template.name == "ReuseRT"
 
 
-def test_resource_template_builder_strict_checking_raises(client):
+def test_resource_template_builder_on_existing_raise_raises(client):
     with client.build_resource_template(name="StrictRT", type_names=["container"]) as _:
         pass
 
     with (
-        pytest.raises(IntegrityError),
+        pytest.raises(ExistingResourceTemplateError),
         client.build_resource_template(
             name="StrictRT",
             type_names=["container"],
-            strict_checking=True,
+            on_existing="raise",
         ),
     ):
         pass
@@ -131,7 +145,7 @@ def test_process_template_builder_reuses_existing_with_warning(client):
         ptb.add_step("step-1")
 
     with (
-        pytest.warns(UserWarning, match="bump the version"),
+        pytest.warns(ExistingProcessTemplateWarning, match="bump the version"),
         client.build_process_template("ReusePT", "1.0") as ptb,
     ):
         ptb.add_step("step-2")
@@ -140,16 +154,16 @@ def test_process_template_builder_reuses_existing_with_warning(client):
     assert refreshed is not None
 
 
-def test_process_template_builder_strict_checking_raises(client):
+def test_process_template_builder_on_existing_raise_raises(client):
     with client.build_process_template("StrictPT", "1.0") as ptb:
         ptb.add_step("step-1")
 
     with (
-        pytest.raises(ValueError, match="already exists"),
+        pytest.raises(ExistingProcessTemplateError, match="already exists"),
         client.build_process_template(
             "StrictPT",
             "1.0",
-            strict_checking=True,
+            on_existing="raise",
         ) as ptb,
     ):
         ptb.add_step("step-2")
@@ -163,13 +177,13 @@ def test_resource_builder_reuses_existing_with_warning(client):
 
     first = client.create_resource("ReuseRes", "ReuseResTemplate")
     with (
-        pytest.warns(UserWarning, match="will be reused"),
+        pytest.warns(ExistingResourceWarning, match="will be reused"),
         client.build_resource("ReuseRes", "ReuseResTemplate") as rb,
     ):
         assert rb.resource.id == first.id
 
 
-def test_resource_builder_strict_checking_raises(client):
+def test_resource_builder_on_existing_raise_raises(client):
     with client.build_resource_template(
         name="StrictResTemplate", type_names=["container"]
     ) as _:
@@ -177,11 +191,11 @@ def test_resource_builder_strict_checking_raises(client):
 
     client.create_resource("StrictRes", "StrictResTemplate")
     with (
-        pytest.raises(ValidationError),
+        pytest.raises(ExistingResourceError),
         client.build_resource(
             "StrictRes",
             "StrictResTemplate",
-            strict_checking=True,
+            on_existing="raise",
         ),
     ):
         pass
@@ -202,13 +216,13 @@ def test_process_run_builder_reuses_existing_with_warning(client):
         pass
 
     with (
-        pytest.warns(UserWarning, match="will be reused"),
+        pytest.warns(ExistingProcessRunWarning, match="will be reused"),
         client.build_process_run("ReuseRun", "desc", "ReuseRunPT", "1.0") as prb,
     ):
         assert prb.process_run.name == "ReuseRun"
 
 
-def test_process_run_builder_strict_checking_raises(client):
+def test_process_run_builder_on_existing_raise_raises(client):
     with client.build_process_template("StrictRunPT", "1.0") as ptb:
         ptb.add_step("S1")
 
@@ -217,13 +231,28 @@ def test_process_run_builder_strict_checking_raises(client):
         pass
 
     with (
-        pytest.raises(IntegrityError),
+        pytest.raises(ExistingProcessRunError),
         client.build_process_run(
             "StrictRun",
             "desc",
             "StrictRunPT",
             "1.0",
-            strict_checking=True,
+            on_existing="raise",
         ),
     ):
         pass
+
+
+def test_resource_template_builder_on_existing_silent_suppresses_warning(client):
+    with client.build_resource_template(name="SilentRT", type_names=["container"]) as _:
+        pass
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        with client.build_resource_template(
+            name="SilentRT", type_names=["container"], on_existing="silent"
+        ) as builder:
+            assert builder.template.name == "SilentRT"
+    assert not [
+        w for w in record if issubclass(w.category, ExistingResourceTemplateWarning)
+    ]

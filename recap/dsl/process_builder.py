@@ -1,5 +1,5 @@
 import warnings
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -8,6 +8,12 @@ from sqlalchemy.exc import NoResultFound
 from recap.adapter import Backend
 from recap.dsl.attribute_builder import AttributeGroupBuilder
 from recap.dsl.query import QuerySpec
+from recap.exceptions import (
+    ExistingProcessRunError,
+    ExistingProcessRunWarning,
+    ExistingProcessTemplateError,
+    ExistingProcessTemplateWarning,
+)
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.process import (
     CampaignSchema,
@@ -28,11 +34,13 @@ class ProcessTemplateBuilder:
         name: str | None,
         version: str | None,
         process_template_id: UUID | None = None,
-        strict_checking: bool = False,
+        on_existing: Literal["silent", "warn", "raise"] = "warn",
     ):
         self.backend = backend
         self._uow = None
-        self.strict_checking = strict_checking
+        if on_existing not in {"silent", "warn", "raise"}:
+            raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
+        self.on_existing = on_existing
         try:
             self._ensure_uow()
             self.name = name
@@ -104,21 +112,25 @@ class ProcessTemplateBuilder:
             if created is None:
                 raise ValueError("Process template already exists")
             self._template = created
-        except Exception:
-            if self.strict_checking:
-                raise
+        except Exception as exc:
+            if self.on_existing == "raise":
+                raise ExistingProcessTemplateError(
+                    f"Process template {self.name!r} version {self.version!r} already exists"
+                ) from exc
             self._restart_uow()
             self._template = self.backend.get_process_template(
                 self.name, self.version, expand=False
             )
-            warnings.warn(
-                (
-                    f"Process template {self.name!r} version {self.version!r} already "
-                    "exists and will be reused; no new template will be created. "
-                    "If you want a new template, bump the version."
-                ),
-                stacklevel=2,
-            )
+            if self.on_existing == "warn":
+                warnings.warn(
+                    (
+                        f"Process template {self.name!r} version {self.version!r} already "
+                        "exists and will be reused; no new template will be created. "
+                        "If you want a new template, bump the version."
+                    ),
+                    ExistingProcessTemplateWarning,
+                    stacklevel=2,
+                )
 
     def _reload_template(self):
         self._ensure_uow()
@@ -260,7 +272,7 @@ class ProcessRunBuilder:
         backend: Backend,
         version: str | None = None,
         process_run_id: UUID | None = None,
-        strict_checking: bool = False,
+        on_existing: Literal["silent", "warn", "raise"] = "warn",
     ):
         self.backend = backend
         self._uow = None
@@ -268,7 +280,9 @@ class ProcessRunBuilder:
         self.description = description
         self.template_name = template_name
         self.version = version
-        self.strict_checking = strict_checking
+        if on_existing not in {"silent", "warn", "raise"}:
+            raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
+        self.on_existing = on_existing
         self._process_template: ProcessTemplateSchema | ProcessTemplateRef | None = None
         try:
             self._initialize_process_run(process_run_id, campaign)
@@ -297,8 +311,8 @@ class ProcessRunBuilder:
             self._process_run = self.backend.create_process_run(
                 self.name, self.description, self._process_template, campaign
             )
-        except Exception:
-            self._handle_existing_process_run()
+        except Exception as exc:
+            self._handle_existing_process_run(exc)
 
     def _load_existing_process_run(self, process_run_id: UUID):
         self._process_run = self._reload_process_run(process_run_id)
@@ -324,7 +338,7 @@ class ProcessRunBuilder:
         if campaign is None:
             raise ValueError("Campaign is required to create a process run")
 
-    def _handle_existing_process_run(self):
+    def _handle_existing_process_run(self, create_error: Exception):
         self._restart_uow()
         existing = self.backend.query(
             ProcessRunSchema,
@@ -333,15 +347,21 @@ class ProcessRunBuilder:
                 preloads=["steps", "steps.parameters", "resources"],
             ),
         )
-        if self.strict_checking or not existing:
-            raise
-        warnings.warn(
-            (
-                f"Process run {self.name!r} already exists and will be reused; "
-                "no new run will be created."
-            ),
-            stacklevel=2,
-        )
+        if self.on_existing == "raise":
+            raise ExistingProcessRunError(
+                f"Process run {self.name!r} already exists"
+            ) from create_error
+        if not existing:
+            raise create_error
+        if self.on_existing == "warn":
+            warnings.warn(
+                (
+                    f"Process run {self.name!r} already exists and will be reused; "
+                    "no new run will be created."
+                ),
+                ExistingProcessRunWarning,
+                stacklevel=2,
+            )
         self._process_run = existing[0]
 
     def __enter__(self):

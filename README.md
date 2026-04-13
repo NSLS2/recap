@@ -236,6 +236,8 @@ with client.build_resource(name="Plate B", template_name="Library Plate") as res
 
 **Note**: `create_resource` generates the resource with default values and returns a Pydantic model. `build_resource` opens a builder so you can modify values before commit.
 
+**Note**: Builders support `on_existing="warn" | "raise" | "silent"` (default `"warn"`). Use `"silent"` to reuse existing objects without warning noise in idempotent pipelines.
+
 You can also re-use an existing builder,
 
 ```python

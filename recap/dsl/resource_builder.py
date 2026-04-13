@@ -8,6 +8,12 @@ from recap.adapter import Backend
 from recap.db.resource import Resource
 from recap.dsl.attribute_builder import AttributeGroupBuilder
 from recap.dsl.query import QuerySpec
+from recap.exceptions import (
+    ExistingResourceError,
+    ExistingResourceTemplateError,
+    ExistingResourceTemplateWarning,
+    ExistingResourceWarning,
+)
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.resource import (
     ResourceSchema,
@@ -28,7 +34,7 @@ class ResourceBuilder:
         backend: Backend | None = None,
         parent: "ResourceBuilder | ResourceSchema | None" = None,
         resource_id: UUID | None = None,
-        strict_checking: bool = False,
+        on_existing: Literal["silent", "warn", "raise"] = "warn",
     ):
         self.name = name
         self._children: list[Resource] = []
@@ -36,7 +42,9 @@ class ResourceBuilder:
         self.parent_resource = None
         self.template_name = template_name
         self.template_version = template_version
-        self.strict_checking = strict_checking
+        if on_existing not in {"silent", "warn", "raise"}:
+            raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
+        self.on_existing = on_existing
         self._resource: ResourceSchema | None = None
         self._uow = None
         self._configure_parent(parent)
@@ -95,21 +103,27 @@ class ResourceBuilder:
                 parent_resource=self.parent_resource,
                 expand=True,
             )
-        except Exception:
-            self._handle_existing_resource()
+        except Exception as exc:
+            self._handle_existing_resource(exc)
 
-    def _handle_existing_resource(self):
+    def _handle_existing_resource(self, create_error: Exception):
         self._restart_uow()
         existing = self._find_existing_resource()
-        if self.strict_checking or existing is None:
-            raise
-        warnings.warn(
-            (
-                f"Resource {self.name!r} already exists and will be reused; "
-                "no new resource will be created."
-            ),
-            stacklevel=2,
-        )
+        if self.on_existing == "raise":
+            raise ExistingResourceError(f"Resource {self.name!r} already exists") from (
+                create_error
+            )
+        if existing is None:
+            raise create_error
+        if self.on_existing == "warn":
+            warnings.warn(
+                (
+                    f"Resource {self.name!r} already exists and will be reused; "
+                    "no new resource will be created."
+                ),
+                ExistingResourceWarning,
+                stacklevel=2,
+            )
         self._resource = existing
 
     @classmethod
@@ -300,7 +314,7 @@ class ResourceTemplateBuilder:
         parent: Optional["ResourceTemplateBuilder"] = None,
         backend: Backend | None = None,
         resource_template_id: UUID | None = None,
-        strict_checking: bool = False,
+        on_existing: Literal["silent", "warn", "raise"] = "warn",
     ):
         self._uow = None
         self.name = name
@@ -309,7 +323,9 @@ class ResourceTemplateBuilder:
         self.parent = parent
         self.resource_types: dict[str, ResourceTypeSchema] = {}
         self.version = version
-        self.strict_checking = strict_checking
+        if on_existing not in {"silent", "warn", "raise"}:
+            raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
+        self.on_existing = on_existing
         self._template: ResourceTemplateRef | ResourceTemplateSchema | None = None
         self._configure_backend(backend)
         try:
@@ -353,8 +369,8 @@ class ResourceTemplateBuilder:
             self.resource_types[rt_schema.name] = rt_schema
         try:
             self._template = self._create_template()
-        except Exception:
-            self._handle_existing_template()
+        except Exception as exc:
+            self._handle_existing_template(exc)
 
     def _create_template(self) -> ResourceTemplateRef:
         if self.parent:
@@ -370,19 +386,23 @@ class ResourceTemplateBuilder:
             version=self.version,
         )
 
-    def _handle_existing_template(self):
+    def _handle_existing_template(self, create_error: Exception):
         self._restart_uow()
-        if self.strict_checking:
-            raise
+        if self.on_existing == "raise":
+            raise ExistingResourceTemplateError(
+                f"Resource template {self.name!r} version {self.version!r} already exists"
+            ) from create_error
         self._template = self._fetch_existing_template()
-        warnings.warn(
-            (
-                f"Resource template {self.name!r} version {self.version!r} "
-                "already exists and will be reused; no new template "
-                "will be created. If you want a new template, bump the version."
-            ),
-            stacklevel=2,
-        )
+        if self.on_existing == "warn":
+            warnings.warn(
+                (
+                    f"Resource template {self.name!r} version {self.version!r} "
+                    "already exists and will be reused; no new template "
+                    "will be created. If you want a new template, bump the version."
+                ),
+                ExistingResourceTemplateWarning,
+                stacklevel=2,
+            )
 
     def _fetch_existing_template(self):
         if self.parent:
