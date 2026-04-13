@@ -13,7 +13,11 @@ def test_resource_builder_set_model_updates_persisted(client):
         rb.set_model(model)
 
     refreshed = (
-        client.query_maker().resources().filter(name="RBM-R").include_template().first()
+        client.query_maker()
+        .resources()
+        .filter(name="RBM-R")
+        .include(["template", "properties"])
+        .first()
     )
     assert refreshed.properties.details.values.serial.value == "updated"
 

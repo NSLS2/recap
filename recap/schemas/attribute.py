@@ -14,7 +14,7 @@ data fields ("attributes") on resources and process steps:
   supplied by the user before it is written to the database.
 """
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -25,7 +25,7 @@ from pydantic import (
     model_validator,
 )
 
-from recap.schemas.common import CommonFields
+from recap.schemas.common import SIMPLE_FIELD, CommonFields
 from recap.utils.general import CONVERTERS
 
 TypeName = Literal["int", "float", "bool", "str", "datetime", "array", "enum"]
@@ -55,12 +55,14 @@ class AttributeTemplateSchema(CommonFields):
             - ``choices`` — list of allowed strings for ``enum``.
     """
 
-    name: str
-    slug: str
-    value_type: TypeName
-    unit: str | None
-    default_value: Any
-    metadata: dict[str, Any] | None = Field(default_factory=dict, alias="metadata_json")
+    name: Annotated[str, SIMPLE_FIELD]
+    slug: Annotated[str, SIMPLE_FIELD]
+    value_type: Annotated[TypeName, SIMPLE_FIELD]
+    unit: Annotated[str | None, SIMPLE_FIELD]
+    default_value: Annotated[Any, SIMPLE_FIELD]
+    metadata: Annotated[dict[str, Any] | None, SIMPLE_FIELD] = Field(
+        default_factory=dict, alias="metadata_json"
+    )
 
 
 class AttributeGroupRef(CommonFields):
@@ -75,8 +77,8 @@ class AttributeGroupRef(CommonFields):
         slug: Snake_case identifier of the group.
     """
 
-    name: str
-    slug: str
+    name: Annotated[str, SIMPLE_FIELD]
+    slug: Annotated[str, SIMPLE_FIELD]
 
 
 class AttributeGroupTemplateSchema(CommonFields):
@@ -94,8 +96,8 @@ class AttributeGroupTemplateSchema(CommonFields):
             to this group.
     """
 
-    name: str
-    slug: str
+    name: Annotated[str, SIMPLE_FIELD]
+    slug: Annotated[str, SIMPLE_FIELD]
     attribute_templates: list[AttributeTemplateSchema]
 
 

@@ -42,6 +42,8 @@ def test_resource_builder_persists_property_changes(client):
     with client.build_resource("R1", "Robot") as rb:
         rb.resource.properties.details.values.serial.value = "xyz"
 
-    refreshed = client.query_maker().resources().filter(name="R1").first()
+    refreshed = (
+        client.query_maker().resources().include("properties").filter(name="R1").first()
+    )
     assert refreshed is not None
     assert refreshed.properties.details.values.serial.value == "xyz"

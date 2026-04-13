@@ -6,11 +6,17 @@ from uuid import UUID
 from pydantic import BaseModel, Field, create_model
 from sqlalchemy import Boolean, Float, Integer, Select, String, cast, insert, select
 from sqlalchemy.exc import NoResultFound
-from sqlalchemy.orm import Session, aliased, selectinload
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import and_, or_
 from sqlalchemy.sql.functions import count
 
 from recap.adapter import Backend, UnitOfWork
+from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
+from recap.adapter.query_loaders import (
+    preload_options,
+    resolve_loader_options,
+)
+from recap.adapter.resource_construct import ResourceSchemaHydrator
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate, AttributeValue
 from recap.db.base import Base
 from recap.db.campaign import Campaign
@@ -31,7 +37,10 @@ from recap.db.resource import (
 )
 from recap.db.step import Parameter, Step, StepTemplate, StepTemplateResourceSlotBinding
 from recap.dsl.query import QuerySpec, SchemaT
-from recap.schemas.attribute import AttributeGroupRef, AttributeTemplateSchema
+from recap.schemas.attribute import (
+    AttributeGroupRef,
+    AttributeTemplateSchema,
+)
 from recap.schemas.process import (
     CampaignSchema,
     ProcessRunRef,
@@ -47,10 +56,15 @@ from recap.schemas.resource import (
     ResourceTemplateSchema,
     ResourceTypeSchema,
 )
-from recap.schemas.step import StepSchema, StepTemplateRef, StepTemplateSchema
+from recap.schemas.step import (
+    StepSchema,
+    StepTemplateRef,
+    StepTemplateSchema,
+)
 from recap.utils.database import get_or_create, load_single
 from recap.utils.dsl import AliasMixin, build_param_values_model, resolve_path
 from recap.utils.general import make_slug, to_json_compatible
+from recap.utils.loaders import chain_load
 
 SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
     CampaignSchema: Campaign,
@@ -184,8 +198,8 @@ class LocalBackend(Backend):
             raise ValueError("name or id required to fetch ProcessTemplate")
         if expand:
             statement = statement.options(
-                selectinload(ProcessTemplate.step_templates),
-                selectinload(ProcessTemplate.resource_slots),
+                chain_load(ProcessTemplate.step_templates),
+                chain_load(ProcessTemplate.resource_slots),
             )
         process_template = load_single(self.session, statement, label="ProcessTemplate")
         if expand:
@@ -428,10 +442,10 @@ class LocalBackend(Backend):
             statement = statement.where(ResourceTemplate.parent_id == parent.id)
         if expand:
             statement = statement.options(
-                selectinload(ResourceTemplate.types),
-                selectinload(ResourceTemplate.parent),
-                selectinload(ResourceTemplate.children),
-                selectinload(ResourceTemplate.attribute_group_templates),
+                chain_load(ResourceTemplate.types),
+                chain_load(ResourceTemplate.parent),
+                chain_load(ResourceTemplate.children),
+                chain_load(ResourceTemplate.attribute_group_templates),
             )
         template = load_single(self.session, statement, label="ResourceTemplate")
 
@@ -491,10 +505,10 @@ class LocalBackend(Backend):
         )
         if expand:
             stmt = stmt.options(
-                selectinload(Resource.children).selectinload(Resource.children),
-                selectinload(Resource.template),
-                selectinload(Resource.children).selectinload(Resource.properties),
-                selectinload(Resource.properties),
+                chain_load(Resource.children, Resource.children),
+                chain_load(Resource.template),
+                chain_load(Resource.children, Resource.properties),
+                chain_load(Resource.properties),
             )
         with self._session_scope() as session:
             resource = load_single(session, stmt, label="Resource")
@@ -541,10 +555,8 @@ class LocalBackend(Backend):
         resource_model = load_single(
             self.session,
             select(Resource)
-            .where(Resource.name == resource.name)
-            .options(
-                selectinload(Resource.template).selectinload(ResourceTemplate.types)
-            ),
+            .where(Resource.id == resource.id)
+            .options(chain_load(Resource.template, ResourceTemplate.types)),
             label="Resource",
         )
         process_run_model = load_single(
@@ -552,8 +564,8 @@ class LocalBackend(Backend):
             select(ProcessRun)
             .where(ProcessRun.id == process_run.id)
             .options(
-                selectinload(ProcessRun.assignments),
-                selectinload(ProcessRun.template),
+                chain_load(ProcessRun.assignments),
+                chain_load(ProcessRun.template),
             ),
             label="ProcessRun",
         )
@@ -628,14 +640,12 @@ class LocalBackend(Backend):
             select(Step)
             .where(Step.process_run_id == process_run.id)
             .options(
-                selectinload(Step.children),
-                selectinload(Step.parameters).selectinload(Parameter._values),
-                selectinload(Step.assignments)
-                .selectinload(ResourceAssignment.resource)
-                .selectinload(Resource.template),
-                selectinload(Step.assignments).selectinload(
-                    ResourceAssignment.resource_slot
+                chain_load(Step.children),
+                chain_load(Step.parameters, Parameter._values),
+                chain_load(
+                    Step.assignments, ResourceAssignment.resource, Resource.template
                 ),
+                chain_load(Step.assignments, ResourceAssignment.resource_slot),
             )
         )
         steps = self.session.scalars(statement).all()
@@ -709,19 +719,21 @@ class LocalBackend(Backend):
             select(ProcessRun)
             .where(ProcessRun.id == process_run.id)
             .options(
-                selectinload(ProcessRun.steps)
-                .selectinload(Step.parameters)
-                .selectinload(Parameter._values),
-                selectinload(ProcessRun.steps)
-                .selectinload(Step.assignments)
-                .selectinload(ResourceAssignment.resource)
-                .selectinload(Resource.template),
-                selectinload(ProcessRun.steps)
-                .selectinload(Step.assignments)
-                .selectinload(ResourceAssignment.resource_slot),
-                selectinload(ProcessRun.assignments)
-                .selectinload(ResourceAssignment.resource)
-                .selectinload(Resource.children),
+                chain_load(ProcessRun.steps, Step.parameters, Parameter._values),
+                chain_load(
+                    ProcessRun.steps,
+                    Step.assignments,
+                    ResourceAssignment.resource,
+                    Resource.template,
+                ),
+                chain_load(
+                    ProcessRun.steps, Step.assignments, ResourceAssignment.resource_slot
+                ),
+                chain_load(
+                    ProcessRun.assignments,
+                    ResourceAssignment.resource,
+                    Resource.children,
+                ),
             ),
             label="ProcessRun",
         )
@@ -742,8 +754,8 @@ class LocalBackend(Backend):
                 StepTemplate.id == child_step.template.id,
             )
             .options(
-                selectinload(StepTemplate.bindings).selectinload(
-                    StepTemplateResourceSlotBinding.resource_slot
+                chain_load(
+                    StepTemplate.bindings, StepTemplateResourceSlotBinding.resource_slot
                 )
             ),
             label="StepTemplate",
@@ -1065,7 +1077,7 @@ class LocalBackend(Backend):
     def query(self, schema: type[SchemaT], spec: QuerySpec) -> list[SchemaT]:
         stmt = self._build_select(schema, spec)
 
-        loader_options = self._relationship_loaders(schema, list(spec.preloads))
+        loader_options = self._relationship_loaders(schema, list(spec.preloads), spec)
         if loader_options:
             stmt = stmt.options(*loader_options)
 
@@ -1075,6 +1087,47 @@ class LocalBackend(Backend):
             stmt = stmt.offset(spec.offset)
 
         with self._session_scope() as session:
+            if schema is ProcessRunSchema:
+                process_run_hydrator = ProcessRunSchemaHydrator()
+                include_step_parameters = (
+                    spec.load_mode == "full" or "steps.parameters" in spec.preloads
+                )
+                include_resources = (
+                    spec.load_mode == "full" or "resources" in spec.preloads
+                )
+                include_steps = (
+                    spec.load_mode == "full"
+                    or "steps" in spec.preloads
+                    or include_step_parameters
+                    or include_resources
+                )
+                return process_run_hydrator.construct_many(
+                    list(session.scalars(stmt).unique()),
+                    include_steps=include_steps,
+                    include_step_parameters=include_step_parameters,
+                    include_resources=include_resources,
+                    full=spec.load_mode == "full",
+                    on_unloaded=spec.on_unloaded or "warn",
+                )
+            if schema is ResourceSchema:
+                resource_hydrator = ResourceSchemaHydrator()
+                include_template = (
+                    spec.load_mode == "full" or "template" in spec.preloads
+                )
+                include_properties = (
+                    spec.load_mode == "full" or "properties" in spec.preloads
+                )
+                include_children = (
+                    spec.load_mode == "full" or "children" in spec.preloads
+                )
+                return resource_hydrator.construct_many(
+                    list(session.scalars(stmt).unique()),
+                    include_template=include_template,
+                    include_properties=include_properties,
+                    include_children=include_children,
+                    full=spec.load_mode == "full",
+                    on_unloaded=spec.on_unloaded or "warn",
+                )
             return [
                 schema.model_validate(obj)
                 for obj in list(session.scalars(stmt).unique())
@@ -1088,61 +1141,13 @@ class LocalBackend(Backend):
             select_stmt = select(count()).select_from(stmt.subquery())
             return session.execute(select_stmt).scalar_one()
 
-    def _relationship_loaders(self, schema: type[SchemaT], preloads: list[str]):
-        model = SCHEMA_MODEL_MAPPING[schema]
-        opts = []
-        if model is Resource and schema is ResourceRef:
-            opts.append(
-                selectinload(Resource.template).selectinload(ResourceTemplate.types)
-            )
-        if model is ResourceTemplate and schema in {
-            ResourceTemplateRef,
-            ResourceTemplateSchema,
-        }:
-            opts.append(selectinload(ResourceTemplate.types))
-        if model is ProcessRun and schema in {ProcessRunRef, ProcessRunSchema}:
-            opts.append(selectinload(ProcessRun.template))
-        for name in preloads:
-            opts.append(self.get_opts_statements(schema, name))
-        return opts
+    def _relationship_loaders(
+        self, schema: type[SchemaT], preloads: list[str], spec: QuerySpec
+    ):
+        return resolve_loader_options(schema, preloads, spec.load_mode)
 
     def get_opts_statements(self, schema, name):
-        statements = {
-            (ProcessRunSchema, "steps"): selectinload(ProcessRun.steps)
-            .selectinload(Step.children)
-            .selectinload(Step.parameters),
-            (ProcessRunSchema, "steps.parameters"): selectinload(ProcessRun.steps)
-            .selectinload(Step.parameters)
-            .selectinload(Parameter._values),
-            (ProcessRunSchema, "resources"): selectinload(
-                ProcessRun.assignments
-            ).selectinload(ResourceAssignment.resource),
-            (CampaignSchema, "process_run"): selectinload(Campaign.process_runs),
-            (ProcessTemplateSchema, "step_templates"): selectinload(
-                ProcessTemplate.step_templates
-            ),
-            (ProcessTemplateSchema, "resource_slots"): selectinload(
-                ProcessTemplate.resource_slots
-            ),
-            (ResourceTemplateSchema, "children"): selectinload(
-                ResourceTemplate.children
-            ),
-            (ResourceTemplateSchema, "attribute_group_templates"): selectinload(
-                ResourceTemplate.attribute_group_templates
-            ),
-            (ResourceTemplateSchema, "types"): selectinload(ResourceTemplate.types),
-            (ResourceSchema, "properties"): selectinload(
-                Resource.properties
-            ).selectinload(Property._values),
-            (ResourceRef, "properties"): selectinload(Resource.properties).selectinload(
-                Property._values
-            ),
-            (ResourceSchema, "children"): selectinload(Resource.children),
-            (ResourceRef, "children"): selectinload(Resource.children),
-            (ResourceSchema, "template"): selectinload(Resource.template),
-            (ResourceRef, "template"): selectinload(Resource.template),
-        }
-        return statements[(schema, name)]
+        return preload_options(schema, name)
 
     def update_process_run(self, process_run: ProcessRunSchema) -> ProcessRunSchema:
         with self._session_scope() as session:
@@ -1153,9 +1158,7 @@ class LocalBackend(Backend):
                     session,
                     select(Step)
                     .where(Step.id == step_schema.id)
-                    .options(
-                        selectinload(Step.parameters).selectinload(Parameter._values)
-                    ),
+                    .options(chain_load(Step.parameters, Parameter._values)),
                     label="Step",
                 )
                 for _, param_schema in step_schema.parameters.items():
@@ -1194,8 +1197,8 @@ class LocalBackend(Backend):
                 select(Resource)
                 .where(Resource.id == resource.id)
                 .options(
-                    selectinload(Resource.properties).selectinload(Property._values),
-                    selectinload(Resource.children),
+                    chain_load(Resource.properties, Property._values),
+                    chain_load(Resource.children),
                 ),
                 label="Resource",
             )

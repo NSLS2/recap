@@ -1,4 +1,6 @@
 from datetime import datetime
+from functools import lru_cache
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from sqlalchemy.inspection import inspect
@@ -163,18 +165,51 @@ def lock_instance_fields(model: BaseModel, fields: set[str]) -> BaseModel:
     return model
 
 
-def build_param_values_model(group_slug: str, attr_templates):
-    from recap.schemas.attribute import AttributeValueSchema
+def _freeze_for_cache(value: Any):
+    if isinstance(value, dict):
+        return tuple(sorted((k, _freeze_for_cache(v)) for k, v in value.items()))
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_for_cache(v) for v in value)
+    return value
 
-    fields: dict[str, tuple] = {}
+
+def _thaw_from_cache(value: Any):
+    if isinstance(value, tuple):
+        if all(
+            isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str)
+            for item in value
+        ):
+            return {k: _thaw_from_cache(v) for k, v in value}
+        return [_thaw_from_cache(v) for v in value]
+    return value
+
+
+def _normalize_attr_templates(attr_templates):
+    normalized = []
     for entry in attr_templates:
         if len(entry) == 4:
             name, slug, value_type, metadata = entry
             unit = None
         else:
             name, slug, value_type, metadata, unit = entry
+        normalized.append(
+            (
+                name,
+                slug,
+                value_type,
+                _freeze_for_cache(metadata or {}),
+                unit,
+            )
+        )
+    return tuple(normalized)
+
+
+@lru_cache(maxsize=4096)
+def _build_param_values_model_cached(group_slug: str, normalized_attr_templates):
+    fields: dict[str, tuple] = {}
+    for name, slug, value_type, metadata, unit in normalized_attr_templates:
         pytype = map_dtype_to_pytype(value_type)
-        meta = metadata or {}
+        meta = _thaw_from_cache(metadata) or {}
         ge = meta.get("min") if value_type in {"int", "float"} else None
         le = meta.get("max") if value_type in {"int", "float"} else None
         value_model = create_model(
@@ -193,4 +228,69 @@ def build_param_values_model(group_slug: str, attr_templates):
         **fields,
         __base__=AliasMixinBase,
         __config__=ConfigDict(validate_assignment=True, populate_by_name=True),
+    )
+
+
+def build_param_values_model(group_slug: str, attr_templates):
+    normalized_attr_templates = _normalize_attr_templates(attr_templates)
+    return _build_param_values_model_cached(group_slug, normalized_attr_templates)
+
+
+def _normalize_property_fields(property_fields):
+    return tuple(sorted((field_name, alias) for field_name, alias in property_fields))
+
+
+@lru_cache(maxsize=2048)
+def _build_property_groups_model_cached(template_name: str, normalized_property_fields):
+    from recap.schemas.resource import PropertySchema
+
+    fields = {
+        field_name: (PropertySchema, Field(alias=alias))
+        for field_name, alias in normalized_property_fields
+    }
+    return create_model(
+        f"ResourceProperties_{template_name}",
+        __base__=AliasMixinBase,
+        __config__=ConfigDict(
+            validate_assignment=True,
+            populate_by_name=True,
+            arbitrary_types_allowed=True,
+        ),
+        **fields,
+    )
+
+
+def build_property_groups_model(template_name: str, property_fields):
+    normalized_property_fields = _normalize_property_fields(property_fields)
+    return _build_property_groups_model_cached(
+        template_name, normalized_property_fields
+    )
+
+
+@lru_cache(maxsize=2048)
+def _build_step_parameters_model_cached(
+    template_name: str, normalized_parameter_fields
+):
+    from recap.schemas.step import ParameterSchema
+
+    fields = {
+        field_name: (ParameterSchema, Field(alias=alias))
+        for field_name, alias in normalized_parameter_fields
+    }
+    return create_model(
+        f"StepParameters_{template_name}",
+        __base__=AliasMixinBase,
+        __config__=ConfigDict(
+            validate_assignment=True,
+            populate_by_name=True,
+            arbitrary_types_allowed=True,
+        ),
+        **fields,
+    )
+
+
+def build_step_parameters_model(template_name: str, parameter_fields):
+    normalized_parameter_fields = _normalize_property_fields(parameter_fields)
+    return _build_step_parameters_model_cached(
+        template_name, normalized_parameter_fields
     )

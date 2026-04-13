@@ -12,7 +12,8 @@ This module defines the data models for the core RECAP resource hierarchy:
   :class:`ResourceSlotSchema`, :class:`ResourceRef`, :class:`ResourceAssignmentSchema`.
 """
 
-from typing import Any
+import warnings
+from typing import Annotated, Any, Literal
 
 try:
     from typing import Self
@@ -21,16 +22,17 @@ except ImportError:  # Python <3.11
 
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from recap.db.resource import Property
+from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
     AttributeTemplateValidator,
     AttributeValueSchema,
 )
-from recap.schemas.common import CommonFields
-from recap.utils.dsl import AliasMixinBase, build_param_values_model
+from recap.schemas.common import SIMPLE_FIELD, CommonFields
+from recap.utils.dsl import build_param_values_model, build_property_groups_model
 from recap.utils.general import Direction
 
 
@@ -280,7 +282,7 @@ class ResourceTypeSchema(CommonFields):
         name: The type tag string (e.g. ``"library_plate"``).
     """
 
-    name: str
+    name: Annotated[str, SIMPLE_FIELD]
 
 
 class ResourceTemplateRef(CommonFields):
@@ -299,9 +301,9 @@ class ResourceTemplateRef(CommonFields):
         types: List of type tags associated with this template.
     """
 
-    name: str
-    slug: str | None
-    version: str
+    name: Annotated[str, SIMPLE_FIELD]
+    slug: Annotated[str | None, SIMPLE_FIELD]
+    version: Annotated[str, SIMPLE_FIELD]
     parent: Self | None = Field(default=None, exclude=True)
     types: list[ResourceTypeSchema] = Field(default_factory=list)
 
@@ -326,9 +328,9 @@ class ResourceTemplateSchema(CommonFields):
             instantiated on each :class:`ResourceSchema`.
     """
 
-    name: str
-    slug: "str | None"
-    version: str
+    name: Annotated[str, SIMPLE_FIELD]
+    slug: Annotated[str | None, SIMPLE_FIELD]
+    version: Annotated[str, SIMPLE_FIELD]
     types: list[ResourceTypeSchema] = Field(default_factory=list)
     parent: ResourceTemplateRef | None = Field(default=None, exclude=True)
     children: dict[str, Self] = Field(default_factory=dict)
@@ -353,9 +355,9 @@ class ResourceSlotSchema(CommonFields):
             ``INPUT`` or ``OUTPUT``.
     """
 
-    name: str
+    name: Annotated[str, SIMPLE_FIELD]
     resource_type: ResourceTypeSchema
-    direction: Direction
+    direction: Annotated[Direction, SIMPLE_FIELD]
 
 
 class ResourceSchema(CommonFields):
@@ -390,12 +392,46 @@ class ResourceSchema(CommonFields):
             :class:`PropertySchema`.
     """
 
-    name: str
+    name: Annotated[str, SIMPLE_FIELD]
     template: ResourceTemplateSchema
     parent: "ResourceRef | None" = Field(default=None, exclude=True)
     children: dict[str, Self]
     properties: BaseModel | dict[str, PropertySchema]
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
+    _loaded_relations: dict[str, bool] = PrivateAttr(default_factory=dict)
+    _on_unloaded: Literal["silent", "warn", "raise"] = PrivateAttr(default="warn")
+    _warned_unloaded: set[str] = PrivateAttr(default_factory=set)
+
+    def set_loaded_relations(
+        self,
+        loaded_relations: dict[str, bool],
+        *,
+        on_unloaded: Literal["silent", "warn", "raise"] = "warn",
+    ) -> "ResourceSchema":
+        self._loaded_relations = loaded_relations
+        self._on_unloaded = on_unloaded
+        self._warned_unloaded = set()
+        return self
+
+    def _handle_unloaded(self, field_name: str, include_hint: str) -> None:
+        if self._loaded_relations.get(field_name, True):
+            return
+        message = (
+            f"'{field_name}' was not loaded for ResourceSchema; "
+            f"use {include_hint} or load='full'."
+        )
+        if self._on_unloaded == "raise":
+            raise UnloadedFieldError(message)
+        if self._on_unloaded == "warn" and field_name not in self._warned_unloaded:
+            warnings.warn(message, UnloadedFieldWarning, stacklevel=3)
+            self._warned_unloaded.add(field_name)
+
+    def __getattribute__(self, name: str):
+        if name == "properties":
+            self._handle_unloaded("properties", "include('properties')")
+        elif name == "children":
+            self._handle_unloaded("children", "include('children')")
+        return super().__getattribute__(name)
 
     @model_validator(mode="after")
     def build_property_model(self) -> "ResourceSchema":
@@ -412,24 +448,18 @@ class ResourceSchema(CommonFields):
         if isinstance(self.properties, BaseModel):
             return self
 
-        prop_fields: dict[str, Any] = {}
+        prop_fields: list[tuple[str, str]] = []
         prop_values: dict[str, PropertySchema] = {}
         for prop in self.properties.values():
             tmpl = prop.template
             field_name = getattr(tmpl, "slug", None) or tmpl.name
-            prop_fields[field_name] = (PropertySchema, Field(alias=tmpl.name))
+            prop_fields.append((field_name, tmpl.name))
             prop_values[field_name] = prop
 
         if prop_fields:
-            model = create_model(
-                f"ResourceProperties_{self.template.slug or self.template.name}",
-                __base__=AliasMixinBase,
-                __config__=ConfigDict(
-                    validate_assignment=True,
-                    populate_by_name=True,
-                    arbitrary_types_allowed=True,
-                ),
-                **prop_fields,
+            model = build_property_groups_model(
+                self.template.slug or self.template.name,
+                tuple(prop_fields),
             )
             self.properties = model.model_validate(prop_values)
 
@@ -448,7 +478,7 @@ class ResourceRef(CommonFields):
             template.
     """
 
-    name: str
+    name: Annotated[str, SIMPLE_FIELD]
     template: ResourceTemplateRef
 
 
@@ -469,4 +499,4 @@ class ResourceAssignmentSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
     slot: ResourceSlotSchema
     resource: ResourceSchema
-    step_id: UUID | None = None
+    step_id: Annotated[UUID | None, SIMPLE_FIELD] = None

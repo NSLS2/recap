@@ -9,9 +9,12 @@ model inherits.
 
 from datetime import datetime
 from enum import Enum
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+SIMPLE_FIELD = "simple_field"
 
 
 class ValueType(str, Enum):
@@ -126,8 +129,8 @@ class CommonFields(BaseModel):
         modified_date: Timestamp of the most recent update.
     """
 
-    id: UUID = Field(repr=False)
-    create_date: datetime = Field(repr=False)
-    modified_date: datetime = Field(repr=False)
+    id: Annotated[UUID, SIMPLE_FIELD] = Field(repr=False)
+    create_date: Annotated[datetime, SIMPLE_FIELD] = Field(repr=False)
+    modified_date: Annotated[datetime, SIMPLE_FIELD] = Field(repr=False)
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)

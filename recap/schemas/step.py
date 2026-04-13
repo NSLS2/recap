@@ -14,10 +14,10 @@ a :class:`~recap.schemas.process.ProcessRunSchema`:
   serialisation.
 """
 
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from recap.db.step import Parameter
 from recap.schemas.attribute import (
@@ -25,9 +25,12 @@ from recap.schemas.attribute import (
     AttributeTemplateValidator,
     AttributeValueSchema,
 )
-from recap.schemas.common import CommonFields, StepStatus
+from recap.schemas.common import SIMPLE_FIELD, CommonFields, StepStatus
 from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
-from recap.utils.dsl import AliasMixinBase, build_param_values_model
+from recap.utils.dsl import (
+    build_param_values_model,
+    build_step_parameters_model,
+)
 
 
 def _attr_metadata(vt: Any) -> dict | None:
@@ -58,7 +61,7 @@ class StepTemplateRef(CommonFields):
         name: Human-readable step template name.
     """
 
-    name: str
+    name: Annotated[str, SIMPLE_FIELD]
 
 
 class StepTemplateSchema(CommonFields):
@@ -79,7 +82,7 @@ class StepTemplateSchema(CommonFields):
             and ``"destination"``).
     """
 
-    name: str
+    name: Annotated[str, SIMPLE_FIELD]
     attribute_group_templates: list[AttributeGroupTemplateSchema]
     resource_slots: dict[str, ResourceSlotSchema]
 
@@ -356,12 +359,12 @@ class StepSchema(CommonFields):
             :class:`~recap.schemas.process.ProcessRunSchema`.
     """
 
-    name: str
+    name: Annotated[str, SIMPLE_FIELD]
     template: StepTemplateSchema
     parameters: BaseModel | dict[str, ParameterSchema]
-    state: StepStatus
-    process_run_id: UUID
-    parent_id: UUID | None = None
+    state: Annotated[StepStatus, SIMPLE_FIELD]
+    process_run_id: Annotated[UUID, SIMPLE_FIELD]
+    parent_id: Annotated[UUID | None, SIMPLE_FIELD] = None
     children: list["StepSchema"] = Field(default_factory=list)
     resources: dict[str, "ResourceSchema"] = Field(default_factory=dict)
 
@@ -373,24 +376,18 @@ class StepSchema(CommonFields):
         if isinstance(self.parameters, BaseModel):
             return self
 
-        param_fields: dict[str, Any] = {}
+        param_fields: list[tuple[str, str]] = []
         param_values: dict[str, ParameterSchema] = {}
         for param in self.parameters.values():
             tmpl = param.template
             field_name = getattr(tmpl, "slug", None) or tmpl.name
-            param_fields[field_name] = (ParameterSchema, Field(alias=tmpl.name))
+            param_fields.append((field_name, tmpl.name))
             param_values[field_name] = param
 
         if param_fields:
-            model = create_model(
-                f"StepParameters_{self.template.name}",
-                __base__=AliasMixinBase,
-                __config__=ConfigDict(
-                    validate_assignment=True,
-                    populate_by_name=True,
-                    arbitrary_types_allowed=True,
-                ),
-                **param_fields,
+            model = build_step_parameters_model(
+                self.template.name,
+                tuple(param_fields),
             )
             self.parameters = model.model_validate(param_values)
 

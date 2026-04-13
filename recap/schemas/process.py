@@ -13,12 +13,14 @@ This module defines the top-level provenance objects:
   reference types used to avoid circular serialisation.
 """
 
-from typing import Any
+import warnings
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import ConfigDict, field_validator
+from pydantic import ConfigDict, PrivateAttr, field_validator
 
-from recap.schemas.common import CommonFields
+from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
+from recap.schemas.common import SIMPLE_FIELD, CommonFields
 from recap.schemas.resource import ResourceAssignmentSchema, ResourceSlotSchema
 from recap.schemas.step import StepSchema, StepTemplateSchema
 
@@ -35,8 +37,8 @@ class ProcessTemplateRef(CommonFields):
         version: Version string (e.g. ``"1.0"``).
     """
 
-    name: str
-    version: str
+    name: Annotated[str, SIMPLE_FIELD]
+    version: Annotated[str, SIMPLE_FIELD]
 
 
 class ProcessTemplateSchema(CommonFields):
@@ -63,9 +65,9 @@ class ProcessTemplateSchema(CommonFields):
             declaring the typed input/output slots.
     """
 
-    name: str
-    version: str
-    is_active: bool
+    name: Annotated[str, SIMPLE_FIELD]
+    version: Annotated[str, SIMPLE_FIELD]
+    is_active: Annotated[bool, SIMPLE_FIELD]
     step_templates: dict[str, StepTemplateSchema]
     resource_slots: list["ResourceSlotSchema"]
 
@@ -85,9 +87,9 @@ class ProcessRunRef(CommonFields):
             template was used.
     """
 
-    name: str
-    description: str
-    campaign_id: UUID
+    name: Annotated[str, SIMPLE_FIELD]
+    description: Annotated[str, SIMPLE_FIELD]
+    campaign_id: Annotated[UUID, SIMPLE_FIELD]
     template: ProcessTemplateRef
 
 
@@ -120,13 +122,16 @@ class ProcessRunSchema(CommonFields):
             ``run.assigned_resources["crystal_plate"]``.
     """
 
-    name: str
-    description: str
-    campaign_id: UUID
+    name: Annotated[str, SIMPLE_FIELD]
+    description: Annotated[str, SIMPLE_FIELD]
+    campaign_id: Annotated[UUID, SIMPLE_FIELD]
     template: ProcessTemplateSchema
     steps: dict[str, StepSchema]
     assigned_resources: dict[str, ResourceAssignmentSchema]
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
+    _loaded_relations: dict[str, bool] = PrivateAttr(default_factory=dict)
+    _on_unloaded: Literal["silent", "warn", "raise"] = PrivateAttr(default="warn")
+    _warned_unloaded: set[str] = PrivateAttr(default_factory=set)
 
     @field_validator("assigned_resources", mode="before")
     @classmethod
@@ -135,6 +140,37 @@ class ProcessRunSchema(CommonFields):
         if isinstance(v, list):
             return {item.slot.name: item for item in v}
         return v
+
+    def set_loaded_relations(
+        self,
+        loaded_relations: dict[str, bool],
+        *,
+        on_unloaded: Literal["silent", "warn", "raise"] = "warn",
+    ) -> "ProcessRunSchema":
+        self._loaded_relations = loaded_relations
+        self._on_unloaded = on_unloaded
+        self._warned_unloaded = set()
+        return self
+
+    def _handle_unloaded(self, field_name: str, include_hint: str) -> None:
+        if self._loaded_relations.get(field_name, True):
+            return
+        message = (
+            f"'{field_name}' was not loaded for ProcessRunSchema; "
+            f"use {include_hint} or load='full'."
+        )
+        if self._on_unloaded == "raise":
+            raise UnloadedFieldError(message)
+        if self._on_unloaded == "warn" and field_name not in self._warned_unloaded:
+            warnings.warn(message, UnloadedFieldWarning, stacklevel=3)
+            self._warned_unloaded.add(field_name)
+
+    def __getattribute__(self, name: str):
+        if name == "assigned_resources":
+            self._handle_unloaded("assigned_resources", "include('resources')")
+        elif name == "steps":
+            self._handle_unloaded("steps", "include('steps')")
+        return super().__getattribute__(name)
 
 
 class CampaignSchema(CommonFields):
@@ -162,8 +198,8 @@ class CampaignSchema(CommonFields):
             to this campaign.
     """
 
-    name: str
-    proposal: str
-    saf: str | None
-    meta_data: dict[str, Any] | None
+    name: Annotated[str, SIMPLE_FIELD]
+    proposal: Annotated[str, SIMPLE_FIELD]
+    saf: Annotated[str | None, SIMPLE_FIELD]
+    meta_data: Annotated[dict[str, Any] | None, SIMPLE_FIELD]
     process_runs: list["ProcessRunSchema"]
