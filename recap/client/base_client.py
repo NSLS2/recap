@@ -624,7 +624,9 @@ class RecapClient:
             uow.rollback()
             raise
 
-    def set_campaign(self, id: UUID):
+    def set_campaign(
+        self, id: UUID | None = None, campaign: CampaignSchema | None = None
+    ):
         """Load an existing campaign by ID and make it the active campaign.
 
         Use this to resume work against a campaign that was created in a
@@ -645,6 +647,14 @@ class RecapClient:
             raise RuntimeError("Backend not initialized")
         uow = self.backend.begin()
         try:
+            if isinstance(id, UUID):
+                id = id
+            elif isinstance(campaign, CampaignSchema):
+                id = campaign.id
+            else:
+                raise TypeError(
+                    f"id should be of type UUID or campaign should be of type CampaignSchema, found type, id: {type(id)} campaign: {type(campaign)}"
+                )
             self._campaign = self.backend.set_campaign(id)
             uow.commit()
         except Exception:
