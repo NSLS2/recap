@@ -1,3 +1,4 @@
+import json
 import warnings
 from contextlib import contextmanager
 from typing import Any, Literal
@@ -310,11 +311,19 @@ class LocalBackend(Backend):
         attribute_group_ref: AttributeGroupRef,
         metadata: dict[str, Any] | None = None,
     ) -> AttributeTemplateSchema:
+        # The default_value column is Mapped[str | None].  Non-string values
+        # (e.g. MutableList from type="array") must be serialized to a JSON
+        # string so they can be stored and compared in filter_by().
+        if isinstance(default, list):
+            serialized_default = json.dumps(default, default=str)
+        else:
+            serialized_default = default
+
         filter_params: dict[str, Any] = {
             "name": name,
             "value_type": value_type,
             "unit": unit,
-            "default_value": default,
+            "default_value": serialized_default,
             "attribute_group_template_id": attribute_group_ref.id,
             "metadata_json": metadata or {},
         }
