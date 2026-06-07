@@ -666,6 +666,18 @@ class QueryDSL:
         campaign: UUID | str | Any | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ResourceQuery:
+        """Start a resource query, optionally scoped to a campaign.
+
+        .. note:: Campaign scoping for resources
+
+           Resources do not have a direct ``campaign_id`` column.  When a
+           campaign is active, the scope is applied by joining through
+           ``ResourceAssignment`` -> ``ProcessRun`` and filtering on
+           ``ProcessRun.campaign_id``.  Resources that have never been
+           assigned to a process run in the target campaign will be
+           excluded.  Use ``query_maker(unscoped=True)`` to include all
+           resources regardless of assignment status.
+        """
         campaign_id = self._pick_campaign_id(campaign)
         return ResourceQuery(
             self.backend,

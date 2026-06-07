@@ -34,7 +34,7 @@ class ResourceBuilder:
         backend: Backend | None = None,
         parent: "ResourceBuilder | ResourceSchema | None" = None,
         resource_id: UUID | None = None,
-        on_existing: Literal["silent", "warn", "raise"] = "warn",
+        on_existing: Literal["create", "silent", "warn", "raise"] = "warn",
     ):
         self.name = name
         self._children: list[Resource] = []
@@ -42,8 +42,10 @@ class ResourceBuilder:
         self.parent_resource = None
         self.template_name = template_name
         self.template_version = template_version
-        if on_existing not in {"silent", "warn", "raise"}:
-            raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
+        if on_existing not in {"create", "silent", "warn", "raise"}:
+            raise ValueError(
+                "on_existing must be one of: 'create', 'silent', 'warn', 'raise'"
+            )
         self.on_existing = on_existing
         self._resource: ResourceSchema | None = None
         self._uow = None
@@ -96,35 +98,39 @@ class ResourceBuilder:
         template = self.backend.get_resource_template(
             name=self.template_name, version=self.template_version
         )
-        try:
-            self._resource = self.backend.create_resource(
-                self.name,
-                resource_template=template,
-                parent_resource=self.parent_resource,
-                expand=True,
-            )
-        except Exception as exc:
-            self._handle_existing_resource(exc)
 
-    def _handle_existing_resource(self, create_error: Exception):
-        self._restart_uow()
-        existing = self._find_existing_resource()
-        if self.on_existing == "raise":
-            raise ExistingResourceError(f"Resource {self.name!r} already exists") from (
-                create_error
+        # For "create" mode, skip lookup and always insert
+        if self.on_existing != "create":
+            parent_id = self.parent_resource.id if self.parent_resource else None
+            matches = self.backend.find_resources_by_identity(
+                self.name, parent_id, template.id
             )
-        if existing is None:
-            raise create_error
-        if self.on_existing == "warn":
-            warnings.warn(
-                (
-                    f"Resource {self.name!r} already exists and will be reused; "
-                    "no new resource will be created."
-                ),
-                ExistingResourceWarning,
-                stacklevel=2,
-            )
-        self._resource = existing
+            if matches:
+                existing = matches[0]
+                if self.on_existing == "raise":
+                    raise ExistingResourceError(
+                        f"Resource {self.name!r} already exists"
+                    )
+                if self.on_existing == "warn":
+                    warnings.warn(
+                        (
+                            f"Resource {self.name!r} already exists and will be "
+                            "reused; no new resource will be created."
+                        ),
+                        ExistingResourceWarning,
+                        stacklevel=2,
+                    )
+                # silent or warn: reuse
+                self._resource = ResourceSchema.model_validate(existing)
+                return
+
+        # No match found (or "create" mode) — create new resource
+        self._resource = self.backend.create_resource(
+            self.name,
+            resource_template=template,
+            parent_resource=self.parent_resource,
+            expand=True,
+        )
 
     @classmethod
     def create(
@@ -134,8 +140,16 @@ class ResourceBuilder:
         template_version: str,
         backend: Backend,
         parent=None,
+        on_existing: Literal["create", "silent", "warn", "raise"] = "create",
     ):
-        with cls(name, template_name, template_version, backend, parent=parent) as rb:
+        with cls(
+            name,
+            template_name,
+            template_version,
+            backend,
+            parent=parent,
+            on_existing=on_existing,
+        ) as rb:
             return rb.resource
 
     def __enter__(self):
@@ -196,23 +210,6 @@ class ResourceBuilder:
         if not resources:
             raise ValueError(f"Resource with id {resource_id} not found")
         return resources[0]
-
-    def _find_existing_resource(self) -> ResourceSchema | None:
-        parent_id = self.parent_resource.id if self.parent_resource else None
-        resources = self.backend.query(
-            ResourceSchema,
-            QuerySpec(
-                filters={"name": self.name, "parent_id": parent_id},
-                preloads=["children", "properties", "template"],
-            ),
-        )
-        for resource in resources:
-            if (
-                resource.template.name == self.template_name
-                and resource.template.version == self.template_version
-            ):
-                return resource
-        return None
 
     @property
     def resource(self) -> ResourceSchema:

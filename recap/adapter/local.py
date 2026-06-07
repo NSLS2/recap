@@ -5,7 +5,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, create_model
-from sqlalchemy import Boolean, Float, Integer, Select, String, cast, insert, select
+from sqlalchemy import Float, Integer, Select, String, cast, insert, select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import and_, or_
@@ -38,6 +38,7 @@ from recap.db.resource import (
 )
 from recap.db.step import Parameter, Step, StepTemplate, StepTemplateResourceSlotBinding
 from recap.dsl.query import QuerySpec, SchemaT
+from recap.exceptions import ExistingResourceError, ExistingResourceWarning
 from recap.schemas.attribute import (
     AttributeGroupRef,
     AttributeTemplateSchema,
@@ -214,6 +215,7 @@ class LocalBackend(Backend):
         direction: Direction,
         process_template_ref: ProcessTemplateRef,
         create_resource_type=False,
+        required: bool = True,
     ) -> ResourceSlotSchema:
         rt = self.session.execute(
             select(ResourceType).filter_by(name=resource_type)
@@ -230,9 +232,13 @@ class LocalBackend(Backend):
             self.session,
             ResourceSlot,
             where={"process_template_id": process_template_ref.id, "name": name},
-            defaults={"resource_type": rt, "direction": direction},
+            defaults={
+                "resource_type": rt,
+                "direction": direction,
+                "required": required,
+            },
         )
-        if slot.resource_type_id != rt.id and slot.direction != direction:
+        if slot.resource_type_id != rt.id or slot.direction != direction:
             raise ValueError(
                 f"ResourceSlot {name} already exists with different type/direction"
             )
@@ -241,11 +247,12 @@ class LocalBackend(Backend):
     def add_step(
         self, name: str, process_template_ref: ProcessTemplateRef
     ) -> StepTemplateRef:
-        step_template = StepTemplate(
-            name=name, process_template_id=process_template_ref.id
+        step_template, _ = get_or_create(
+            self.session,
+            StepTemplate,
+            where={"name": name, "process_template_id": process_template_ref.id},
+            defaults={},
         )
-        self.session.add(step_template)
-        self.session.flush()
         return StepTemplateRef.model_validate(step_template)
 
     def bind_slot(
@@ -462,33 +469,85 @@ class LocalBackend(Backend):
             return ResourceTemplateSchema.model_validate(template)
         return ResourceTemplateRef.model_validate(template)
 
+    def find_resources_by_identity(
+        self,
+        name: str,
+        parent_id: UUID | None,
+        template_id: UUID,
+    ) -> list[Resource]:
+        """Lookup existing resources by the policy key (name, parent_id,
+        resource_template_id).  Returns results in deterministic order
+        (create_date, then id).
+        """
+        if parent_id is None:
+            parent_clause = Resource.parent_id.is_(None)
+        else:
+            parent_clause = Resource.parent_id == parent_id
+        stmt = (
+            select(Resource)
+            .where(
+                parent_clause,
+                Resource.name == name,
+                Resource.resource_template_id == template_id,
+            )
+            .order_by(Resource.create_date, Resource.id)
+        )
+        return list(self.session.scalars(stmt).all())
+
     def create_resource(
         self,
         name: str,
         resource_template: ResourceTemplateRef | ResourceTemplateSchema,
         parent_resource: ResourceRef | ResourceSchema | None = None,
         expand=False,
+        on_existing: Literal["create", "silent", "warn", "raise"] = "create",
     ) -> ResourceRef | ResourceSchema:
         parent_id = parent_resource.id if parent_resource else None
         template_model = self.session.get(ResourceTemplate, resource_template.id)
-        existing = self.session.scalars(
-            select(Resource).where(
-                Resource.parent_id == parent_id,
-                Resource.name == name,
+
+        if on_existing != "create":
+            matches = self.find_resources_by_identity(
+                name, parent_id, resource_template.id
             )
-        ).one_or_none()
-        if existing:
-            parent_label = getattr(parent_resource, "name", None) or "__root__"
-            raise ValidationError(
-                "resource",
-                f"Resource {name!r} already exists under parent {parent_label!r}",
-            )
+            if matches:
+                existing = matches[0]
+                if on_existing == "raise":
+                    raise ExistingResourceError(f"Resource {name!r} already exists")
+                if on_existing == "warn":
+                    warnings.warn(
+                        f"Resource {name!r} already exists and will be reused; "
+                        "no new resource will be created.",
+                        ExistingResourceWarning,
+                        stacklevel=2,
+                    )
+                if expand:
+                    return ResourceSchema.model_validate(existing)
+                return ResourceRef.model_validate(existing)
+
         resource = Resource(
             name=name,
             resource_template_id=resource_template.id,
             parent_id=parent_id,
             template=template_model,
         )
+
+        # Guard against the DB UNIQUE constraint on (parent_id, name).
+        # This is a broader check than find_resources_by_identity (which also
+        # filters by template_id) — two children under the same parent cannot
+        # share a name regardless of template.
+        if parent_id is not None:
+            dup = self.session.scalars(
+                select(Resource).where(
+                    Resource.parent_id == parent_id,
+                    Resource.name == name,
+                )
+            ).first()
+            if dup is not None:
+                raise ValidationError(
+                    "name",
+                    f"Resource {name!r} already exists under parent {parent_id!r}",
+                )
+
         self.session.add(resource)
         self.session.flush()
         if expand:
@@ -629,10 +688,11 @@ class LocalBackend(Backend):
             ResourceSlot.process_template_id == process_template.id,
         )
         _resource_slots = self.session.scalars(statement).all()
-        expected_ids = {slot.id for slot in _resource_slots}
+        # Only required slots must be assigned
+        required_ids = {slot.id for slot in _resource_slots if slot.required}
         assigned_ids = {ar.slot.id for ar in process_run.assigned_resources.values()}
 
-        missing_ids = expected_ids - assigned_ids
+        missing_ids = required_ids - assigned_ids
         if not missing_ids:
             return
 
@@ -719,6 +779,8 @@ class LocalBackend(Backend):
                     av.set_value(getattr(entry, "value", entry))
                     unit = getattr(entry, "unit", None)
                 av.unit = av.template.unit if unit is None else unit
+        # Flush so that _reload_process_run sees the updated values
+        self.session.flush()
 
     def add_child_step(  # noqa
         self, process_run: ProcessRunSchema, child_step: StepSchema
@@ -865,10 +927,14 @@ class LocalBackend(Backend):
         )
 
     def _coerce_value(self, pf, left_expr):
+        # For int/float, SQLite stores JSON numbers as native numeric types,
+        # so casting the column expression lets SQL comparison operators work
+        # naturally.  For bool/str/enum, SQLite stores these as text
+        # ('true'/'false' or '"value"'), so we skip the cast and instead
+        # JSON-encode the comparison value to match the stored representation.
         type_mapping = {
             "int": Integer,
             "float": Float,
-            "bool": Boolean,
             "datetime": String,
         }
         sa_type = type_mapping.get(pf.value_type)
@@ -878,17 +944,30 @@ class LocalBackend(Backend):
         coerced_value = pf.value
         if pf.value_type:
             coerced_value = to_json_compatible(pf.value_type, pf.value)
-        return coerced_value
+        # JSON columns store strings/enums/bools with JSON encoding
+        # (e.g., '"active"', 'true').  Wrap with json.dumps so the SQL
+        # comparison matches the stored representation.
+        if pf.value_type in ("str", "enum"):
+            if isinstance(coerced_value, str):
+                coerced_value = json.dumps(coerced_value)
+        elif pf.value_type == "bool":
+            coerced_value = json.dumps(coerced_value)
+        return left_expr, coerced_value
 
     def _between_filter(self, prop_filter, conditions, left_expr):
         if prop_filter.upper is None:
             raise ValueError("between comparator requires upper bound")
-        conditions.append(
-            left_expr.between(
-                to_json_compatible(prop_filter.value_type, prop_filter.value),
-                to_json_compatible(prop_filter.value_type, prop_filter.upper),
-            )
-        )
+        lower = to_json_compatible(prop_filter.value_type, prop_filter.value)
+        upper = to_json_compatible(prop_filter.value_type, prop_filter.upper)
+        if prop_filter.value_type in ("str", "enum"):
+            if isinstance(lower, str):
+                lower = json.dumps(lower)
+            if isinstance(upper, str):
+                upper = json.dumps(upper)
+        elif prop_filter.value_type == "bool":
+            lower = json.dumps(lower)
+            upper = json.dumps(upper)
+        conditions.append(left_expr.between(lower, upper))
 
     def _in_filter(self, prop_filter, conditions, left_expr):
         if prop_filter.value is None:
@@ -896,11 +975,12 @@ class LocalBackend(Backend):
         values = prop_filter.value
         if not isinstance(values, list | tuple | set):
             raise ValueError("in comparator requires an iterable of values")
-        conditions.append(
-            left_expr.in_(
-                [to_json_compatible(prop_filter.value_type, v) for v in values]
-            )
-        )
+        coerced = [to_json_compatible(prop_filter.value_type, v) for v in values]
+        if prop_filter.value_type in ("str", "enum"):
+            coerced = [json.dumps(v) if isinstance(v, str) else v for v in coerced]
+        elif prop_filter.value_type == "bool":
+            coerced = [json.dumps(v) for v in coerced]
+        conditions.append(left_expr.in_(coerced))
 
     def _add_filters(self, pf, conditions, left_expr, coerced_value):
         match pf.op:
@@ -944,7 +1024,7 @@ class LocalBackend(Backend):
             conditions.append(tmpl_alias.value_type == pf.value_type)
 
         left_expr = val_alias.value_json
-        coerced_value = self._coerce_value(pf, left_expr)
+        left_expr, coerced_value = self._coerce_value(pf, left_expr)
         conditions = self._add_filters(pf, conditions, left_expr, coerced_value)
 
         return conditions

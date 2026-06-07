@@ -74,6 +74,7 @@ class Backend(Protocol):
         direction: Direction,
         process_template_ref: ProcessTemplateRef,
         create_resource_type=False,
+        required: bool = True,
     ) -> ResourceSlotSchema: ...
 
     def add_step(
@@ -169,6 +170,13 @@ class Backend(Protocol):
         template_version: str | None = "1.0",
         expand: bool = False,
     ) -> ResourceSchema: ...
+
+    def find_resources_by_identity(
+        self,
+        name: str,
+        parent_id: UUID | None,
+        resource_template_id: UUID,
+    ) -> list: ...
 
     def add_child_resources(
         self,

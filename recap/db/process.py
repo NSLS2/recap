@@ -67,6 +67,7 @@ class ResourceSlot(TimestampMixin, Base):
     direction: Mapped[Direction] = mapped_column(
         Enum(Direction, name="direction_enum"), nullable=False
     )
+    required: Mapped[bool] = mapped_column(default=True, server_default="1")
 
     __table_args__ = (
         UniqueConstraint(

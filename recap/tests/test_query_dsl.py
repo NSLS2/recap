@@ -519,6 +519,146 @@ def test_process_run_parameter_filtering(db_session):
     assert {r.name for r in hits2} == {"run-high"}
 
 
+def test_process_run_parameter_filtering_strings(db_session):
+    """filter_parameter(eq=...) must work for string-typed parameters.
+
+    Regression: string values are stored JSON-encoded in the value_json column
+    (e.g., '"active"'), so the comparison must encode the RHS the same way.
+    """
+    with db_session.no_autoflush:
+        campaign = Campaign(name="C-str", proposal="P-str")
+        tmpl = ProcessTemplate(name="PT-str", version="1.0")
+        step_tmpl = StepTemplate(name="Collect", process_template=tmpl)
+        params_grp = AttributeGroupTemplate(name="Status", step_template=step_tmpl)
+        params_grp.attribute_templates.append(
+            AttributeTemplate(name="state", value_type="str", default_value="pending")
+        )
+
+        db_session.add_all([campaign, tmpl, step_tmpl, params_grp])
+        db_session.commit()
+
+        run_active = ProcessRun(
+            name="run-active",
+            description="active run",
+            template=tmpl,
+            campaign=campaign,
+        )
+        run_done = ProcessRun(
+            name="run-done",
+            description="done run",
+            template=tmpl,
+            campaign=campaign,
+        )
+
+        run_active.steps["Collect"].parameters["Status"].values["state"] = "active"
+        run_done.steps["Collect"].parameters["Status"].values["state"] = "done"
+
+        db_session.add_all([run_active, run_done])
+        db_session.commit()
+
+    q = make_query(db_session).process_runs()
+
+    # eq with string value
+    hits = q.filter_parameter("state", eq="active", group="Status").all()
+    assert {r.name for r in hits} == {"run-active"}
+
+    # in_ with string values
+    hits_in = q.filter_parameter("state", in_=["active", "done"], group="Status").all()
+    assert {r.name for r in hits_in} == {"run-active", "run-done"}
+
+    # eq with a value that matches no rows
+    hits_none = q.filter_parameter("state", eq="missing", group="Status").all()
+    assert hits_none == []
+
+
+def test_resource_property_filtering_strings(db_session):
+    """filter_property(eq=...) must work for string-typed properties."""
+    container_type, _ = get_or_create(
+        db_session, ResourceType, where={"name": "container-str"}
+    )
+    parent_tmpl = ResourceTemplate(name="Parent-str", version="1.0")
+    parent_tmpl.types.append(container_type)
+    child_tmpl = ResourceTemplate(name="Child-str", version="1.0", parent=parent_tmpl)
+
+    info = AttributeGroupTemplate(name="info", resource_template=child_tmpl)
+    info.attribute_templates.append(
+        AttributeTemplate(name="status", value_type="str", default_value="unknown")
+    )
+
+    db_session.add_all([container_type, parent_tmpl, child_tmpl, info])
+    db_session.commit()
+
+    parent_res = Resource(name="parent-str", template=parent_tmpl)
+    child_a = Resource(name="child-a", template=child_tmpl, parent=parent_res)
+    child_b = Resource(name="child-b", template=child_tmpl, parent=parent_res)
+
+    child_a.properties["info"].values["status"] = "available"
+    child_b.properties["info"].values["status"] = "reserved"
+
+    db_session.add_all([parent_res, child_a, child_b])
+    db_session.commit()
+
+    q = make_query(db_session).resources()
+
+    hits = q.filter_property("status", eq="available", group="info").all()
+    assert {r.name for r in hits} == {"child-a"}
+
+    hits_in = q.filter_property(
+        "status", in_=["available", "reserved"], group="info"
+    ).all()
+    assert {r.name for r in hits_in} == {"child-a", "child-b"}
+
+
+def test_parameter_filtering_numeric_unchanged(db_session):
+    """Ensure the coercion refactor doesn't break numeric/bool filtering."""
+    with db_session.no_autoflush:
+        campaign = Campaign(name="C-num", proposal="P-num")
+        tmpl = ProcessTemplate(name="PT-num", version="1.0")
+        step_tmpl = StepTemplate(name="Measure", process_template=tmpl)
+        params_grp = AttributeGroupTemplate(name="Readings", step_template=step_tmpl)
+        params_grp.attribute_templates.append(
+            AttributeTemplate(name="count", value_type="int", default_value="0")
+        )
+        params_grp.attribute_templates.append(
+            AttributeTemplate(name="enabled", value_type="bool", default_value="true")
+        )
+
+        db_session.add_all([campaign, tmpl, step_tmpl, params_grp])
+        db_session.commit()
+
+        run_a = ProcessRun(
+            name="run-num-a",
+            description="a",
+            template=tmpl,
+            campaign=campaign,
+        )
+        run_b = ProcessRun(
+            name="run-num-b",
+            description="b",
+            template=tmpl,
+            campaign=campaign,
+        )
+
+        run_a.steps["Measure"].parameters["Readings"].values["count"] = 10
+        run_a.steps["Measure"].parameters["Readings"].values["enabled"] = True
+        run_b.steps["Measure"].parameters["Readings"].values["count"] = 50
+        run_b.steps["Measure"].parameters["Readings"].values["enabled"] = False
+
+        db_session.add_all([run_a, run_b])
+        db_session.commit()
+
+    q = make_query(db_session).process_runs()
+
+    hits_eq = q.filter_parameter("count", eq=50, group="Readings").all()
+    assert {r.name for r in hits_eq} == {"run-num-b"}
+
+    hits_gt = q.filter_parameter("count", gt=20, group="Readings").all()
+    assert {r.name for r in hits_gt} == {"run-num-b"}
+
+    hits_bool = q.filter_parameter("enabled", eq=True, group="Readings").all()
+    assert {r.name for r in hits_bool} == {"run-num-a"}
+
+
 def test_queries_are_scoped_to_campaign(db_session):
     camp_a, run_a = seed_process_run(
         db_session, name="scope-a", with_resource=True, with_parameters=True

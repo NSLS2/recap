@@ -441,7 +441,11 @@ class RecapClient:
 
     @overload
     def build_resource(
-        self, name: str, template_name: str, template_version: str = "1.0"
+        self,
+        name: str,
+        template_name: str,
+        template_version: str = "1.0",
+        parent: "ResourceSchema | UUID | None" = None,
     ) -> ResourceBuilder: ...
 
     @overload
@@ -451,7 +455,8 @@ class RecapClient:
         self,
         *args,
         resource_id: UUID | None = None,
-        on_existing: Literal["silent", "warn", "raise"] = "warn",
+        on_existing: Literal["create", "silent", "warn", "raise"] = "warn",
+        parent: "ResourceSchema | UUID | None" = None,
         **kwargs,
     ):
         """Open a builder for a :class:`~recap.dsl.resource_builder.ResourceBuilder`.
@@ -484,7 +489,13 @@ class RecapClient:
             resource_id: UUID of an existing resource to load.  When
                 supplied, positional arguments must not be provided.
             on_existing: Controls behavior when resource already exists:
-                ``"warn"`` (default), ``"raise"``, or ``"silent"``.
+                ``"warn"`` (default), ``"raise"``, ``"silent"``, or
+                ``"create"``.
+            parent: Optional parent resource for nesting the new resource.
+                Accepts a :class:`~recap.schemas.resource.ResourceSchema`
+                or a :class:`~uuid.UUID` (which will be resolved to a
+                schema via backend query).  Cannot be combined with
+                ``resource_id``.
 
         Returns:
             A :class:`~recap.dsl.resource_builder.ResourceBuilder` context
@@ -502,6 +513,11 @@ class RecapClient:
                 raise TypeError(
                     "Pass either an existing resource_id or name/template_name, not both"
                 )
+            if parent is not None:
+                raise TypeError(
+                    "Cannot combine resource_id with parent — the resource's "
+                    "parent is already determined by the existing resource"
+                )
             return ResourceBuilder(
                 name=None,
                 template_name=None,
@@ -511,20 +527,8 @@ class RecapClient:
                 on_existing=on_existing,
             )
 
-        if args:
-            if len(args) != 2:
-                raise TypeError("Provide name and template_name")
-            name, template_name = args
-            template_version = "1.0"
-        else:
-            try:
-                name = kwargs.pop("name")
-                template_name = kwargs.pop("template_name")
-                template_version = kwargs.pop("template_version", "1.0")
-            except KeyError as exc:
-                raise TypeError("name and template_name are required") from exc
-            if kwargs:
-                raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
+        resolved_parent = self._resolve_parent(parent)
+        name, template_name, template_version = self._parse_resource_args(args, kwargs)
 
         return ResourceBuilder(
             name=name,
@@ -532,7 +536,47 @@ class RecapClient:
             template_version=template_version,
             backend=self.backend,
             on_existing=on_existing,
+            parent=resolved_parent,
         )
+
+    def _resolve_parent(
+        self, parent: "ResourceSchema | UUID | None"
+    ) -> "ResourceSchema | None":
+        """Resolve a parent argument to a ResourceSchema (or None)."""
+        if parent is None:
+            return None
+        if isinstance(parent, UUID):
+            from recap.dsl.query import QuerySpec
+
+            results = self.backend.query(
+                ResourceSchema,
+                QuerySpec(
+                    filters={"id": parent},
+                    preloads=["children", "properties"],
+                ),
+            )
+            if not results:
+                raise ValueError(f"Parent resource with id {parent!r} not found")
+            return results[0]
+        return parent
+
+    @staticmethod
+    def _parse_resource_args(args, kwargs):
+        """Extract (name, template_name, template_version) from build_resource args."""
+        if args:
+            if len(args) != 2:
+                raise TypeError("Provide name and template_name")
+            name, template_name = args
+            return name, template_name, "1.0"
+        try:
+            name = kwargs.pop("name")
+            template_name = kwargs.pop("template_name")
+            template_version = kwargs.pop("template_version", "1.0")
+        except KeyError as exc:
+            raise TypeError("name and template_name are required") from exc
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
+        return name, template_name, template_version
 
     def create_resource(
         self,
@@ -540,6 +584,7 @@ class RecapClient:
         template_name: str,
         template_version: str = "1.0",
         parent: ResourceSchema | None = None,
+        on_existing: Literal["create", "silent", "warn", "raise"] = "create",
     ):
         """Create a resource instance from a template with default values.
 
@@ -564,6 +609,16 @@ class RecapClient:
                 to ``"1.0"``.
             parent: Optional parent :class:`~recap.schemas.resource.ResourceSchema`
                 when the new resource should be nested inside an existing one.
+            on_existing: Controls behavior when a resource with the same
+                name, parent, and template already exists:
+
+                - ``"create"`` (default): always create a new resource.
+                  Resource names are NOT globally unique — multiple resources
+                  with the same name can coexist (e.g., for different
+                  campaigns).
+                - ``"silent"``: reuse the existing resource silently.
+                - ``"warn"``: reuse the existing resource and emit a warning.
+                - ``"raise"``: raise :class:`ExistingResourceError`.
 
         Returns:
             A :class:`~recap.schemas.resource.ResourceSchema` representing
@@ -577,6 +632,7 @@ class RecapClient:
             template_version=template_version,
             backend=self.backend,
             parent=parent,
+            on_existing=on_existing,
         )
 
     def create_campaign(
@@ -665,6 +721,7 @@ class RecapClient:
         self,
         *,
         campaign=None,
+        unscoped: bool = False,
         on_unloaded: str = "warn",
     ):
         """Return a :class:`~recap.dsl.query.QueryDSL` scoped to a campaign.
@@ -676,18 +733,38 @@ class RecapClient:
         used. Pass an explicit campaign (or its UUID) to query a different
         one without changing the client's active campaign.
 
+        Pass ``unscoped=True`` to disable campaign scoping entirely and
+        query across all campaigns.  This is mutually exclusive with an
+        explicit *campaign* argument.
+
         ``on_unloaded`` controls behavior when accessing relationship fields
         that were not included in the originating query.
+
+        .. note:: Campaign scoping for resources
+
+           Resources do **not** carry a ``campaign_id`` column directly.
+           Campaign scoping for resource queries is achieved by joining
+           through ``ResourceAssignment`` -> ``ProcessRun`` and filtering
+           on ``ProcessRun.campaign_id``.  A consequence is that resources
+           which have never been assigned to any process run will be
+           invisible to campaign-scoped queries.  Use ``unscoped=True`` to
+           include all resources regardless of assignment status.
 
         Example::
 
             qm = client.query_maker()
             resources = qm.resources().of_type("library_plate").all()
 
+            # Cross-campaign query
+            qm_all = client.query_maker(unscoped=True)
+
         Args:
             campaign: A :class:`~recap.schemas.process.CampaignSchema` instance
                 or its UUID to scope the query.  When ``None`` the active
                 campaign is used (if one is set).
+            unscoped: When ``True``, ignore the active campaign and return
+                results across all campaigns.  Cannot be combined with
+                an explicit *campaign*.
             on_unloaded: One of ``"silent"``, ``"warn"``, or ``"raise"``.
                 Defaults to ``"warn"``.
 
@@ -696,12 +773,21 @@ class RecapClient:
 
         Raises:
             RuntimeError: If the backend has not been initialised.
+            ValueError: If both *campaign* and ``unscoped=True`` are given.
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
 
+        if unscoped and campaign is not None:
+            raise ValueError(
+                "Cannot combine campaign with unscoped=True — "
+                "pass one or the other, not both"
+            )
+
         campaign_id = None
-        if campaign is not None:
+        if unscoped:
+            campaign_id = None
+        elif campaign is not None:
             campaign_id = getattr(campaign, "id", campaign)
         elif self._campaign is not None:
             campaign_id = self._campaign.id

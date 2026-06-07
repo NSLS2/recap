@@ -144,11 +144,17 @@ class ProcessTemplateBuilder:
         resource_type: str,
         direction: Direction,
         create_resource_type=False,
+        required: bool = True,
     ) -> "ProcessTemplateBuilder":
         self._ensure_uow()
         self._ensure_template()
         self._resource_slots[name] = self.backend.add_resource_slot(
-            name, resource_type, direction, self.template, create_resource_type
+            name,
+            resource_type,
+            direction,
+            self.template,
+            create_resource_type,
+            required=required,
         )
         return self
 

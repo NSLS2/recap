@@ -358,6 +358,7 @@ class ResourceSlotSchema(CommonFields):
     name: Annotated[str, SIMPLE_FIELD]
     resource_type: ResourceTypeSchema
     direction: Annotated[Direction, SIMPLE_FIELD]
+    required: Annotated[bool, SIMPLE_FIELD] = True
 
 
 class ResourceSchema(CommonFields):
