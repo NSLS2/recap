@@ -30,16 +30,28 @@ RECAP is a Python framework that captures **experimental provenance** using a SQ
 - [ProcessTemplates and ProcessRuns](#processtemplates-and-processruns)
 - [Instantiating a ProcessRun](#instantiating-a-processrun)
 - [Adding child resources and steps during runtime](#adding-child-resources-and-steps-during-runtime)
-- [Querying Data](./docs/querying_data.md)
+- [Querying Data](#querying-data)
+  - [Getting a QueryDSL Handle](#getting-a-querydsl-handle)
+  - [Basic Filtering](#basic-filtering)
+  - [Filtering Resource Templates by Type](#filtering-resource-templates-by-type)
+  - [Filtering Resources by Properties](#filtering-resources-by-properties)
+  - [Filtering Process Runs by Step Parameters](#filtering-process-runs-by-step-parameters)
+  - [Eager Loading Related Data](#eager-loading-related-data-with-include)
+  - [Accessing Assigned Resources](#accessing-assigned-resources)
+  - [Accessing Resource Children](#accessing-resource-children)
+  - [Provenance Queries](#provenance-queries)
+  - [Pagination and Ordering](#pagination-and-ordering)
+- [Performance Guide](#performance-guide)
+- [Roadmap](#roadmap)
 
 ## What Recap does
 
 Lifecycle of experiments can be arbitrarily long, managing high throughput experiment plans and data capture is difficult and relationships between phases of experiments can be complex.
 
-Recap provides an “experiment data management” framework which unifies different stages of an experiment under one scalable provenance rich backbone.
+Recap provides an "experiment data management" framework which unifies different stages of an experiment under one scalable provenance rich backbone.
 It allows a complete audit trail of experiments and answers questions like, "Who ran it?", "When and with what settings?"
 
-Recap is ideal for high throughput experiments and models physical and digital artifacts and defines relationships between them
+Recap is ideal for high throughput experiments and models physical and digital artifacts and defines relationships between them.
 
 ## What its _not_ meant for
 
@@ -62,8 +74,8 @@ To create and connect to a temporary SQLite database:
 ```python
 from recap.client import RecapClient
 
-client = RecapClient.from_sqlite() 
-print(client.database_path) # print path of your database
+client = RecapClient.from_sqlite()
+print(client.database_path)  # print path of your database
 ```
 
 If you want a database at a specific path, pass it in. You can also point at an existing database the same way:
@@ -74,13 +86,13 @@ client = RecapClient.from_sqlite("/path/to/database.db")
 
 ## Core concepts
 
-Data provenance is captured using a combination of `Resources` and `ProcessRuns`. A `Resource` is any trackable entity such as samples, raw detector data, or processed data. A `ProcessRun` is a workflow that describe interactions with `Resources`. Typically, `Resources` are inputs and outputs to a `ProcessRun`. We can chain multiple `ProcessRuns` together either by using the output `Resource` of one process as the input to another, or re-using the same `Resource` as inputs to different `ProcessRuns`. The figure below illustrates how this chain can be created at the MX beamline for a particular set of samples
+Data provenance is captured using a combination of `Resources` and `ProcessRuns`. A `Resource` is any trackable entity such as samples, raw detector data, or processed data. A `ProcessRun` is a workflow that describes interactions with `Resources`. Typically, `Resources` are inputs and outputs to a `ProcessRun`. We can chain multiple `ProcessRuns` together either by using the output `Resource` of one process as the input to another, or re-using the same `Resource` as inputs to different `ProcessRuns`. The figure below illustrates how this chain can be created at the MX beamline for a particular set of samples.
 
 <p align="center">
   <img src="docs/img/process_chain.png" alt="Resource Template Schema" />
 </p>
 
-Circles represent `Resources` and the rounded boxes represent `ProcessRuns`. Different phases of the experiment process is represented by dashed boxes. By chaining resources together, one can query the database for information such as, given a processing result file, what were the sample preparation conditions? This kind of data provenance is particularly useful to build statistical or machine-learning models to optimize sample preparation or even data acquisition parameters. The next few sections will dive deeper into the way one can use Recap to define [Resources](#resources) and [ProcessRuns](#processtemplates-and-processruns)
+Circles represent `Resources` and the rounded boxes represent `ProcessRuns`. Different phases of the experiment process is represented by dashed boxes. By chaining resources together, one can query the database for information such as, given a processing result file, what were the sample preparation conditions? This kind of data provenance is particularly useful to build statistical or machine-learning models to optimize sample preparation or even data acquisition parameters. The next few sections will dive deeper into the way one can use Recap to define [Resources](#resources) and [ProcessRuns](#processtemplates-and-processruns).
 
 
 ## Resources
@@ -101,6 +113,7 @@ Plate
 
 Each child is also a resource with its own attributes. Before creating a resource you define a `ResourceTemplate`, which is the canonical blueprint for what gets instantiated.
 
+**Note**: `resource.children` is a `dict[str, ResourceSchema]` keyed by the child resource's name — not a list. Use `resource.children["A01"]` for direct access or `.values()` to iterate all children. See [Accessing Resource Children](#accessing-resource-children).
 
 ### Resource Template
 
@@ -120,7 +133,6 @@ Here we build or update a template in the database. A template needs a unique na
 ### Properties and Property Groups
 
 Resources can carry metadata organized into groups of related properties.
-
 
 Example: Here we add properties to the plate template. The group is called `dimensions` and contains two parameters, `rows` and `columns`. Each entry declares the data `type` and a `default` value; add a `unit` if it matters. We follow up by adding wells as child resource templates, and add properties specific to wells.
 
@@ -151,7 +163,7 @@ with client.build_resource_template(name="Library Plate",
              .close_child()
 ```
 
-The following table shows the available data types that can be assigned to properties. Metadata is an optional dictionary that can be provided for additional data validation
+The following table shows the available data types that can be assigned to properties. Metadata is an optional dictionary that can be provided for additional data validation.
 
 #### AttributeValue types and metadata
 
@@ -179,9 +191,7 @@ Visualizing ResourceTemplates, PropertyGroups and Properties
 Once the template is defined, you can create a Resource instance. Instantiation also materializes any child resources from the template. For example,
 
 ```python
-
 plate = client.create_resource(name="Plate A", template_name="Library Plate")
-
 ```
 
 creates a Resource from the `Library Plate` template; children are created automatically and properties are initialized with their defaults.
@@ -222,40 +232,53 @@ The returned object is a Pydantic model, well suited for inspection and local ch
 2. Use a builder to tweak values or add extra children before persisting:
 
 ```python
-
 with client.build_resource(name="Plate B", template_name="Library Plate") as resource_builder:
     resource = resource_builder.get_model()
     # Make changes to the resource and its default parameters
     resource.children["A01"].properties.status.used = True
     # Then update the builder with the newly edited object
-    resource_builder.set_model(resource) 
-
+    resource_builder.set_model(resource)
 ```
 
 **Note**: Values in the database can _only_ be changed via builders. Editing the Pydantic model changes your local copy, not the database. Builders are context managers that manage the transaction; if validation fails, the context rolls back safely.
 
 **Note**: `create_resource` generates the resource with default values and returns a Pydantic model. `build_resource` opens a builder so you can modify values before commit.
 
-**Note**: Builders support `on_existing="warn" | "raise" | "silent"` (default `"warn"`). Use `"silent"` to reuse existing objects without warning noise in idempotent pipelines.
+**Note**: Builders support `on_existing="warn" | "raise" | "silent"` (default `"warn"`). Use `"silent"` to reuse existing objects without warning noise in idempotent pipelines. See the [Performance Guide](#on_existing-silent-for-known-existing-records) for the cost of `"silent"` on existing records.
 
-You can also re-use an existing builder,
+You can also re-use an existing builder:
 
 ```python
-
 with resource_builder:
     # This is the same builder as the one created above
     # Any changes here modify the resource called "Plate B"
     ...
-    
 ```
 
-If you already have a Pydantic model (from a query or `create_resource`), you can build from it:
+To update a known existing resource by its ID (avoids a name-based lookup):
 
 ```python
+with client.build_resource(resource_id=resource.id) as rb:
+    m = rb.get_model()
+    m.properties.status.used = True
+    rb.set_model(m)
+```
 
-with client.build_resource(resource_id=resource.id) as rb2:
-    rb2.set_model(resource)
-    
+#### Calling `build_property_model()` on queried resources
+
+Resources returned from `create_resource()` have their property access model built automatically. For resources obtained from **queries**, whether `build_property_model()` is called automatically depends on the load strategy used:
+
+| Load strategy | `build_property_model()` called? |
+|---|---|
+| `load="full"` on a resource query | Yes — automatically |
+| `include(["properties"])` on a resource query | **No** — call `resource.build_property_model()` manually before accessing `resource.properties.group.attr.value` |
+| `include_resources()` on a process run query | Yes — automatically, including for child resources |
+
+```python
+# If you used include(["properties"]) on a resource query:
+for resource in results:
+    resource.build_property_model()          # required before property access
+    print(resource.properties.dimensions.rows.value)
 ```
 
 Every time the context manager is initialized, the builder pulls the latest data for the model from the database. In the example above, the builder updates itself from the database.
@@ -345,7 +368,6 @@ with client.build_resource_template(
 
 Once the resource templates exist, you can create the process template. You can technically define it earlier, but the resource types it references must already exist.
 
-
 ```python
 from recap.utils.general import Direction
 with client.build_process_template("PM Workflow", "1.0") as pt:
@@ -391,7 +413,6 @@ with client.build_process_template("PM Workflow", "1.0") as pt:
         .bind_slot("dest", "puck_collection")
         .close_step()
     )
-
 ```
 
 **Note**: For a given database, it is only required to define a template _once_. Templates are reusable definitions of a resource or process.
@@ -429,11 +450,8 @@ campaign = client.create_campaign(
 After you set or create a campaign, any ProcessRun or Resource is automatically associated with it. The snippet below creates a ProcessRun tied to that campaign. Recap will raise an exception if you forget to set a campaign first.
 
 ```python
-
 test_xtal_plate = client.create_resource(name="Test crystal plate", template_name="Crystal Plate", version="1.0")
-
 test_library_plate = client.create_resource(name="Test library plate", template_name="Library Plate", version="1.0")
-
 test_puck_collection = client.create_resource("Test puck collection", "Puck Collection")
 
 with client.build_process_run(
@@ -454,43 +472,44 @@ The figure below shows the resources we created. Resources are assigned to the a
   <img src="docs/img/process_run.png" alt="Process Template Schema" />
 </p>
 
+To update parameters on a known existing process run without triggering a failed INSERT, use `process_run_id=`:
+
+```python
+with client.build_process_run(process_run_id=existing_run.id) as prb:
+    p = prb.get_params("Harvesting")
+    p.harvest.harvested = True
+    prb.set_params(p)
+```
+
+See the [Performance Guide](#on_existing-silent-for-known-existing-records) for why this matters.
 
 ## Adding child resources and steps during runtime
 
 Sometimes templates can't predict every child resource or step ahead of time. For example, a puck collection may have an arbitrary number of pucks. To add children at runtime, use the `add_child` method in the resource builder:
 
 ```python
-
 with client.build_resource(resource_id=test_puck_collection.id) as pcb:
     pcb.add_child(name="Puck01", template_name="Puck", template_version="1.0")
-    
 ```
 
 Or if you have a reference to the template id:
 
 ```python
-
 with client.build_resource(resource_id=test_puck_collection.id) as pcb:
     pcb.add_child(name="Puck01", template_id=puck_template.id)
-
 ```
 
-Child steps can be added dynamically in cases where details are unknown ahead of time. For example, to capture an Echo Transfer step from 1 well of the library plate to the crystal plate we can do the following
+Child steps can be added dynamically in cases where details are unknown ahead of time. For example, to capture an Echo Transfer step from 1 well of the library plate to the crystal plate we can do the following:
 
 ```python
-
 with client.build_process(process_id=process_run.id) as prb:
-    # Generate a pydantic model for the child step
     echo_transfer_step = process_run.steps["Echo Transfer"].generate_child()
-    # Update its values
     echo_transfer_step.parameters.echo.batch = 2
     echo_transfer_step.parameters.echo.volume = 20
     echo_transfer_step.parameters.echo.volume.unit = "nL"
     echo_transfer_step.resources["source"] = test_library_plate.children["A1"]
     echo_transfer_step.resources["dest"] = test_xtal_plate.children["A1a"]
-    # Add it to the database
     prb.add_child_step(echo_transfer_step)
-
 ```
 
 # Querying Data
@@ -522,10 +541,18 @@ templates = qm.resource_templates()
 process_templates = qm.process_templates()
 ```
 
-> Note: when using `RecapClient`, if a campaign is set via `create_campaign()` or
-> `set_campaign()`, resource and process run queries are scoped to that campaign
-> by default. You can override per-call by passing `campaign=` to `resources()` /
-> `process_runs()`, or leave it unset to query across campaigns.
+> **Campaign scoping**: when a campaign is set via `create_campaign()` or
+> `set_campaign()`, process run queries are scoped to that campaign by default.
+> Resource queries are also scoped, but via a JOIN through `ResourceAssignment →
+> ProcessRun` — any resource not yet assigned to a process run in the active
+> campaign will be **invisible**. Pass `unscoped=True` to query across all
+> campaigns, or reach resources through process run queries using
+> `include_resources()` to avoid this constraint.
+
+```python
+# Cross-campaign query — bypasses any active campaign set on the client
+qm_all = client.query_maker(unscoped=True)
+```
 
 `on_unloaded` controls what happens when you access relationship fields that were
 not loaded by `include(...)` (or `load="full"`):
@@ -548,14 +575,23 @@ run = qm.process_runs(on_unloaded="warn").filter(name="Run-1").first()
 For process runs, choose the payload shape/load strategy directly:
 
 ```python
-qm.process_runs(shape="ref")             # lightweight refs
-qm.process_runs(shape="schema", load="none")  # schema without implicit relationship expansion
-qm.process_runs(shape="schema", load="full")  # schema with full relationship expansion
+qm.process_runs(shape="ref")                       # lightweight refs
+qm.process_runs(shape="schema", load="none")       # schema without relationships
+qm.process_runs(shape="schema", load="full")       # schema with all relationships
 ```
 
-`include(...)` is only valid with `shape="schema", load="none"`.
+`include(...)` is only valid with `shape="schema", load="none"` and raises a `ValueError` if combined with `load="full"`.
 
 The same rule applies to `resources`, `process_templates`, and `resource_templates`.
+
+> **Warning — `load="full"` on resource queries**: `load="full"` eagerly loads
+> all child resources recursively. For a hierarchy with many children (e.g.
+> dewar → pucks → samples), this triggers O(N) lazy SQL SELECT statements for
+> child property values during hydration — a hidden N+1 pattern. Prefer
+> `include(["template", "properties"])` (without `"children"`) for direct
+> resource queries and use `under_parent()` for descendant queries. See the
+> [Performance Guide](#load-full-and-the-hidden-n1-on-resource-queries) for
+> details.
 
 ### Basic Filtering
 
@@ -616,24 +652,37 @@ for tmpl in xtal_plate_templates:
     print(tmpl.name, tmpl.types)
 ```
 
-This corresponds directly to the examples in the workflow section where we create templates tagged with types like `["container", "xtal_plate", "plate"]` or `["library_plate"]`.
-
 ### Filtering Resources by Properties
 
-`ResourceQuery.filter_property` lets you compare against typed property values (int/float/bool/str/datetime inferred from your input). The property group is optional; pass it when you need to disambiguate:
+`ResourceQuery.filter_property` lets you compare against typed property values. The property group is optional; pass it when you need to disambiguate. Supported comparators: `eq`, `gt`, `gte`, `lt`, `lte`, `between`, and `in_`.
 
 ```python
+# Scalar comparisons
 plates = (
     client.query_maker()
     .resources()
     .filter_property("rows", gt=100, group="dimensions")
     .all()
 )
+
+# Membership test with in_
+samples_of_interest = (
+    client.query_maker()
+    .resources()
+    .filter_property("catalog_id", in_=["L001", "L002", "L003"], group="content")
+    .all()
+)
 ```
 
-Scope a property filter to the descendants of a parent resource with `under_parent`:
+Scope a property filter to all descendants of a parent resource with `under_parent`.
+
+> **`under_parent()` uses a recursive SQL CTE** and finds descendants at **any
+> depth** — not just direct children. `under_parent(dewar)` on a
+> `dewar → puck → sample` hierarchy returns both pucks and samples. Add a
+> `filter(resource_template_id=...)` to narrow to a specific level.
 
 ```python
+# All descendants of parent_resource with height > 10 (any depth)
 child_hits = (
     client.query_maker()
     .resources()
@@ -641,24 +690,43 @@ child_hits = (
     .under_parent(parent_resource)
     .all()
 )
+
+# Only samples (leaf level) under a dewar
+samples = (
+    client.query_maker()
+    .resources()
+    .include(["template", "properties"])
+    .filter(resource_template_id=sample_tmpl_id)
+    .under_parent(dewar_resource)
+    .all()
+)
 ```
 
 ### Filtering Process Runs by Step Parameters
 
-`ProcessRunQuery.filter_parameter` works like `filter_property` but targets step parameters. You can optionally narrow by step name and parameter group name; otherwise the match applies to any step/group:
+`ProcessRunQuery.filter_parameter` works like `filter_property` but targets step parameters. Supported comparators: `eq`, `gt`, `gte`, `lt`, `lte`, `between`, and `in_`. Narrow by step name and parameter group name to avoid ambiguity.
 
 ```python
+# Scalar comparison
 runs = (
     client.query_maker()
     .process_runs()
     .filter_parameter("dwell", gt=10, group="Exposure", step="Collect")
     .all()
 )
+
+# Membership test with in_
+active_runs = (
+    client.query_maker()
+    .process_runs()
+    .filter_parameter("state", in_=["queued", "running"], group="queue_meta", step="Request")
+    .all()
+)
 ```
 
 ### Eager Loading Related Data with `include`
 
-Queries can preload related entities via the `include` helper. Each include path maps to a backend loader path (for SQLAlchemy this is typically `selectinload`).
+Queries can preload related entities via the `include` helper. Each include path maps to a backend `selectinload` chain.
 
 `include` accepts either a single string or a list of dot-path strings:
 
@@ -683,6 +751,14 @@ The type-specific queries also expose convenience methods:
 - `ResourceTemplateQuery.include_attribute_groups()`
 - `ResourceTemplateQuery.include_types()`
 
+> **`include_resources()` provides richer property hydration than
+> `include(["properties"])` on direct resource queries.** It batch-loads
+> `Property._values` AND `Property.template` for assigned resources, and
+> automatically calls `build_property_model()` on all assigned resources and
+> their children. Direct resource queries using `include(["properties"])` do not
+> batch-load `Property.template` and require a manual `build_property_model()`
+> call before accessing `resource.properties.group.attr.value`.
+
 Example: load campaigns and their process runs in one go:
 
 ```python
@@ -699,7 +775,7 @@ for c in campaigns:
         print("  Run:", run.name)
 ```
 
-#### Example: load runs with steps and parameter groups
+#### Example: load runs with steps and parameters
 
 ```python
 runs = (
@@ -709,35 +785,16 @@ runs = (
     .all()
 )
 
-# Fetch process templates with their steps and resource slots
-pt = (
-    client.query_maker()
-    .process_templates()
-    .filter(name="Workflow-1")
-    .include_step_templates()
-    .include_resource_slots()
-    .first()
-)
-
-# Fetch resource templates with children, attr groups, and types
-rt = (
-    client.query_maker()
-    .resource_templates()
-    .filter(name="Plate")
-    .include_children()
-    .include_attribute_groups()
-    .include_types()
-    .first()
-)
-
 for run in runs:
     print(f"Run: {run.name}")
-    for step_num, step in enumerate(run.steps):
-        print(f"\tStep {step_num}: {step.name}")
-        for pg_num, (param_group_name, param_group) in enumerate(step.parameters.items()):
-            print(f"\t\tGroup {pg_num}: {param_group_name}")
+    # run.steps is a dict[str, StepSchema] keyed by step name
+    for step_name, step in run.steps.items():
+        print(f"\tStep: {step_name}")
+        # step.parameters is a dict[str, ParameterSchema] keyed by group name
+        for group_name, param_group in step.parameters.items():
+            print(f"\t\tGroup: {group_name}")
             for param_name, param_value in param_group.items():
-                print(f"\t\t\t{param_name} : {param_value}")
+                print(f"\t\t\t{param_name} = {param_value.value}")
 ```
 
 #### Example: load resources with their template
@@ -754,6 +811,62 @@ library_plates = (
 for plate in library_plates:
     print("Resource:", plate.name)
     print("  Template:", plate.template.name)
+```
+
+### Accessing Assigned Resources
+
+When process runs are loaded with `include_resources()`, the assigned resources
+are available via `run.assigned_resources` — a `dict[str, ResourceAssignmentSchema]`
+keyed by the slot name defined in the process template. Each value is a
+`ResourceAssignmentSchema` with `slot` and `resource` fields.
+
+```python
+runs = (
+    client.query_maker()
+    .process_runs()
+    .filter(process_template_id=my_template_id)
+    .include_steps(include_parameters=True)
+    .include_resources()
+    .all()
+)
+
+for run in runs:
+    print(f"Run: {run.name}")
+
+    # Iterate all assigned resources by slot name
+    for slot_name, assignment in run.assigned_resources.items():
+        resource = assignment.resource
+        print(f"  Slot '{slot_name}': {resource.name}")
+        # Properties are fully hydrated — build_property_model() was called automatically
+        print(f"    rows = {resource.properties.dimensions.rows.value}")
+
+    # Or access a specific slot directly
+    xtal_plate = run.assigned_resources["xtal_plate"].resource
+    library_plate = run.assigned_resources["library_plate"].resource
+```
+
+`include_resources()` also loads the child resources of each assigned resource
+(e.g., wells inside a plate, samples inside a puck). Children are accessible via
+`resource.children` — see [Accessing Resource Children](#accessing-resource-children).
+
+### Accessing Resource Children
+
+`resource.children` is a `dict[str, ResourceSchema]` **keyed by the child
+resource's name**. Use bracket access for a named child, or `.values()` to
+iterate all children:
+
+```python
+# Named access
+well = plate.children["A01"]
+print(well.properties.content.volume.value)
+
+# Iterate all children
+for child_name, child_resource in resource.children.items():
+    # If the resource was loaded via include_resources() on a process run query,
+    # build_property_model() has already been called on children automatically.
+    # For resources loaded via direct resource queries, call it manually:
+    child_resource.build_property_model()
+    print(child_name, child_resource.properties.status.used.value)
 ```
 
 ### Provenance Queries
@@ -816,16 +929,19 @@ runs = (
 
 for run in runs:
     print("Run:", run.name)
-    print("  Resources:")
-    for assignment in run.resources:
-        print("   -", assignment.resource.name, f"({assignment.role})")
 
+    # assigned_resources is a dict[str, ResourceAssignmentSchema] keyed by slot name
+    print("  Resources:")
+    for slot_name, assignment in run.assigned_resources.items():
+        print(f"   - {assignment.resource.name} (slot: {slot_name})")
+
+    # steps is a dict[str, StepSchema] keyed by step name
     print("  Steps:")
-    for step in run.steps:
-        print("   -", step.name)
-        for group in step.parameters:
-            for attr in group.values:
-                print(f"       {group.group_name}.{attr.name} = {attr.value}")
+    for step_name, step in run.steps.items():
+        print(f"   - {step_name}")
+        for group_name, param_group in step.parameters.items():
+            for param_name, param_schema in param_group.items():
+                print(f"       {group_name}.{param_name} = {param_schema.value}")
 ```
 
 ### Pagination and Ordering
@@ -855,6 +971,101 @@ recent_runs = (
 for run in recent_runs:
     print(run.created_at, run.name)
 ```
+
+---
+
+# Performance Guide
+
+This section documents behaviours that are correct but have non-obvious
+performance implications at scale.
+
+## `load="full"` and the hidden N+1 on resource queries
+
+When `load="full"` is used on a resource query, Recap sets `include_children=True`
+in the schema hydrator. The hydrator recursively constructs schemas for every
+child resource and accesses each child's `.properties` relationship. Because the
+`selectinload` chain for `load="full"` only loads direct children ORM objects
+(not their properties), each child's properties trigger a separate lazy SQL
+SELECT during hydration.
+
+For a 3-level hierarchy (e.g. dewar → 12 pucks → 96 samples), a dewar query with
+`load="full"` can trigger over 100 additional lazy SELECT statements.
+
+**Prefer** `include(["template", "properties"])` for direct resource queries, and
+use `under_parent()` with a `filter(resource_template_id=...)` to query
+descendants in a single targeted bulk query:
+
+```python
+# Efficient: one query for all samples at any depth under the dewar
+samples = (
+    qm.resources()
+    .include(["template", "properties"])
+    .filter(resource_template_id=sample_tmpl_id)
+    .under_parent(dewar_resource)
+    .all()
+)
+for sample in samples:
+    sample.build_property_model()
+    print(sample.properties.identity.sample_name.value)
+```
+
+## `set_campaign()` has a DB round-trip on every call
+
+Every call to `client.set_campaign()` opens a transaction, runs
+`SELECT Campaign WHERE id = ?`, and commits — even when called with the same
+campaign as last time. In batch write loops that process many items across a
+small number of campaigns, group items by campaign and call `set_campaign()`
+once per group rather than once per item.
+
+```python
+# Inefficient — set_campaign() called 496 times
+for request in all_requests:
+    campaign = get_campaign_for(request)
+    client.set_campaign(campaign=campaign)   # round-trip every iteration
+    with client.build_process_run(...) as prb:
+        ...
+
+# Efficient — set_campaign() called once per unique campaign
+from itertools import groupby
+for campaign, requests in groupby(all_requests, key=get_campaign_for):
+    client.set_campaign(campaign=campaign)   # once per campaign
+    for request in requests:
+        with client.build_process_run(...) as prb:
+            ...
+```
+
+## `on_existing="silent"` for known-existing records
+
+When `build_process_run(name=..., on_existing="silent")` or
+`build_resource(name=..., on_existing="silent")` is called for a record that
+already exists, Recap attempts an INSERT, receives a UNIQUE constraint violation,
+rolls back the transaction, re-opens a new transaction, and then queries for the
+existing record. This is three database round-trips instead of one.
+
+If you already know a record exists (e.g. from a prior bulk query), use the
+`process_run_id=` or `resource_id=` overload to load it directly:
+
+```python
+# Slow for known-existing runs — triggers INSERT → ROLLBACK → SELECT
+with client.build_process_run(
+    run_name, description, template_name, version, on_existing="silent"
+) as prb:
+    ...
+
+# Fast — loads by ID with no failed INSERT
+with client.build_process_run(process_run_id=existing_run.id) as prb:
+    ...
+
+# Same for resources
+with client.build_resource(resource_id=existing_resource.id) as rb:
+    ...
+```
+
+Pre-fetch existing records with a bulk query before entering your write loop, then
+use the ID-based overload for all existing items and the name-based overload only
+for genuinely new ones.
+
+---
 
 ## Roadmap
 
