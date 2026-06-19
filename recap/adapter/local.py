@@ -158,18 +158,34 @@ class LocalBackend(Backend):
             name=name,
             proposal=str(proposal),
             saf=saf,
-            metadata=metadata,
+            meta_data=metadata,
         )
         self.session.add(self._campaign)
         self.session.flush()
         return CampaignSchema.model_validate(self._campaign)
 
     def set_campaign(self, id: UUID) -> CampaignSchema:
+        # The backend never short-circuits: a REST backend's campaign endpoint
+        # always returns fresh data per request, so caching is a client-side
+        # concern. ``RecapClient.set_campaign`` owns the cache + ``force`` flag.
         statement = select(Campaign).filter_by(id=id)
         self._campaign = self.session.execute(statement).scalar_one_or_none()
         if self._campaign is None:
             raise ValueError(f"Campaign with ID {id} not found")
         return CampaignSchema.model_validate(self._campaign)
+
+    def update_campaign(self, campaign: CampaignSchema) -> CampaignSchema:
+        statement = select(Campaign).filter_by(id=campaign.id)
+        model = self.session.execute(statement).scalar_one_or_none()
+        if model is None:
+            raise ValueError(f"Campaign with ID {campaign.id} not found")
+        model.name = campaign.name
+        model.proposal = str(campaign.proposal)
+        model.saf = campaign.saf
+        model.meta_data = campaign.meta_data
+        self._campaign = model
+        self.session.flush()
+        return CampaignSchema.model_validate(model)
 
     def create_process_template(
         self, name: str, version: str

@@ -43,6 +43,8 @@ class Backend(Protocol):
 
     def set_campaign(self, id: UUID) -> CampaignSchema: ...
 
+    def update_campaign(self, campaign: CampaignSchema) -> CampaignSchema: ...
+
     # Process Template creation
 
     def create_process_template(

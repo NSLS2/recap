@@ -641,7 +641,7 @@ class RecapClient:
         proposal: str,
         saf: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ):
+    ) -> CampaignSchema:
         """Create a new campaign and make it the active campaign for this client.
 
         A :class:`~recap.schemas.process.CampaignSchema` is a top-level
@@ -667,8 +667,9 @@ class RecapClient:
                 alongside the campaign record.  Optional.
 
         Returns:
-            ``None``.  The created campaign is stored as the client's active
-            campaign (accessible via ``client._campaign``).
+            The created :class:`~recap.schemas.process.CampaignSchema`, which
+            is also stored as the client's active campaign (accessible via the
+            :attr:`campaign` property).
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
@@ -679,43 +680,137 @@ class RecapClient:
         except Exception:
             uow.rollback()
             raise
+        return self._campaign
+
+    @property
+    def campaign(self) -> CampaignSchema | None:
+        """The client's currently active campaign, or ``None`` if unset.
+
+        Read-only. Use :meth:`create_campaign`/:meth:`set_campaign` to change
+        the active campaign and :meth:`update_campaign` to persist edits.
+        """
+        return self._campaign
 
     def set_campaign(
-        self, id: UUID | None = None, campaign: CampaignSchema | None = None
-    ):
+        self,
+        id: UUID | None = None,
+        campaign: CampaignSchema | None = None,
+        *,
+        force: bool = False,
+    ) -> CampaignSchema:
         """Load an existing campaign by ID and make it the active campaign.
 
         Use this to resume work against a campaign that was created in a
         previous session or by another client instance.
 
+        The active campaign is cached client-side: re-activating the campaign
+        that is already active is a no-op that skips the database round-trip.
+        There is **no automatic staleness detection** — the client cannot tell
+        whether another process has edited the campaign without re-querying.
+        Pass ``force=True`` to discard the cache and re-read from the backend
+        when you suspect the campaign was changed out of band.
+
         Example::
 
             client.set_campaign(existing_campaign_id)
+            # later, after an external edit:
+            client.set_campaign(existing_campaign_id, force=True)
 
         Args:
             id: The UUID of the campaign to activate.
+            campaign: Alternatively, the campaign to activate, as a schema.
+            force: When ``True``, always re-query the backend even if the
+                requested campaign is already active.
 
         Returns:
-            ``None``.  The loaded campaign is stored as the client's active
-            campaign.
+            The activated :class:`~recap.schemas.process.CampaignSchema`.
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
+        if isinstance(id, UUID):
+            target_id = id
+        elif isinstance(campaign, CampaignSchema):
+            target_id = campaign.id
+        else:
+            raise TypeError(
+                f"id should be of type UUID or campaign should be of type CampaignSchema, found type, id: {type(id)} campaign: {type(campaign)}"
+            )
+        # Short-circuit: the requested campaign is already active. Avoid the
+        # transaction + SELECT round-trip unless the caller forces a reload.
+        if not force and self._campaign is not None and self._campaign.id == target_id:
+            return self._campaign
         uow = self.backend.begin()
         try:
-            if isinstance(id, UUID):
-                id = id
-            elif isinstance(campaign, CampaignSchema):
-                id = campaign.id
-            else:
-                raise TypeError(
-                    f"id should be of type UUID or campaign should be of type CampaignSchema, found type, id: {type(id)} campaign: {type(campaign)}"
-                )
-            self._campaign = self.backend.set_campaign(id)
+            self._campaign = self.backend.set_campaign(target_id)
             uow.commit()
         except Exception:
             uow.rollback()
             raise
+        return self._campaign
+
+    def update_campaign(
+        self, campaign: CampaignSchema | None = None, **fields: Any
+    ) -> CampaignSchema:
+        """Persist edits to a campaign and refresh the active-campaign cache.
+
+        Edit a campaign either by passing field overrides as keyword arguments
+        or by passing an explicit (already-mutated) schema. When no *campaign*
+        is supplied the client's active campaign is updated. Keyword overrides,
+        when given, are applied on top of the target schema.
+
+        Only the writable fields ``name``, ``proposal``, ``saf`` and
+        ``meta_data`` may be set; all four are written (full overwrite).
+
+        Example::
+
+            # via keyword overrides on the active campaign
+            client.update_campaign(name="MX Beamtime May 2026", saf="SAF-43")
+
+            # via an explicit, mutated schema (GET -> mutate -> PUT)
+            camp = client.campaign
+            camp.proposal = "MX-2026-002"
+            client.update_campaign(camp)
+
+        Args:
+            campaign: The campaign to update. Defaults to the active campaign.
+            **fields: Field overrides (``name``, ``proposal``, ``saf``,
+                ``meta_data``).
+
+        Returns:
+            The updated :class:`~recap.schemas.process.CampaignSchema`, which
+            also becomes the client's active campaign.
+
+        Raises:
+            ValueError: If no campaign is supplied and none is active.
+            TypeError: If an unknown field name is passed.
+        """
+        if self.backend is None:
+            raise RuntimeError("Backend not initialized")
+        base = campaign if campaign is not None else self._campaign
+        if base is None:
+            raise ValueError(
+                "No campaign to update. Pass a campaign or set one with "
+                "create_campaign()/set_campaign() first"
+            )
+        if fields:
+            allowed = {"name", "proposal", "saf", "meta_data"}
+            unknown = set(fields) - allowed
+            if unknown:
+                raise TypeError(
+                    f"Unknown campaign field(s): {', '.join(sorted(unknown))}. "
+                    f"Allowed: {', '.join(sorted(allowed))}"
+                )
+            target = base.model_copy(update=fields)
+        else:
+            target = base
+        uow = self.backend.begin()
+        try:
+            self._campaign = self.backend.update_campaign(target)
+            uow.commit()
+        except Exception:
+            uow.rollback()
+            raise
+        return self._campaign
 
     def query_maker(
         self,

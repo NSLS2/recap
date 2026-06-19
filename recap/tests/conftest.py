@@ -1,5 +1,7 @@
+from contextlib import contextmanager
+
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -7,6 +9,42 @@ from recap.client.base_client import RecapClient
 from recap.db.base import Base
 from recap.utils.migrations import apply_migrations as upgrade_database
 from recap.utils.migrations import downgrade_migrations
+
+
+@contextmanager
+def count_statements(target):
+    """Count SQL statements executed against ``target`` within the block.
+
+    ``target`` may be an :class:`~sqlalchemy.engine.Engine`, a
+    :class:`~sqlalchemy.engine.Connection`, or any object exposing an
+    ``engine`` attribute (e.g. a :class:`RecapClient`).  Yields a mutable
+    counter dict with a single ``"n"`` key so callers can assert a bounded
+    statement count and verify that N+1 / redundant-round-trip regressions
+    have not crept back in.
+
+    Example::
+
+        with count_statements(client) as counter:
+            client.set_campaign(existing_id)
+        assert counter["n"] == 0
+    """
+    engine = getattr(target, "engine", target)
+    counter = {"n": 0}
+
+    def _before(conn, cursor, statement, parameters, context, executemany):
+        counter["n"] += 1
+
+    event.listen(engine, "before_cursor_execute", _before)
+    try:
+        yield counter
+    finally:
+        event.remove(engine, "before_cursor_execute", _before)
+
+
+@pytest.fixture
+def statement_counter():
+    """Fixture exposing :func:`count_statements` for use in tests."""
+    return count_statements
 
 
 @pytest.fixture(scope="session")
