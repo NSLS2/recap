@@ -584,14 +584,15 @@ qm.process_runs(shape="schema", load="full")       # schema with all relationshi
 
 The same rule applies to `resources`, `process_templates`, and `resource_templates`.
 
-> **Warning — `load="full"` on resource queries**: `load="full"` eagerly loads
-> all child resources recursively. For a hierarchy with many children (e.g.
-> dewar → pucks → samples), this triggers O(N) lazy SQL SELECT statements for
-> child property values during hydration — a hidden N+1 pattern. Prefer
-> `include(["template", "properties"])` (without `"children"`) for direct
-> resource queries and use `under_parent()` for descendant queries. See the
-> [Performance Guide](#load-full-and-the-hidden-n1-on-resource-queries) for
-> details.
+> **Note — `load="full"` on resource queries**: `load="full"` eagerly loads the
+> entire child-resource hierarchy. This is fetched in a single bulk query
+> (recursive CTE) with a bounded, depth-independent number of SELECTs — it is no
+> longer an N+1 pattern. It still materialises the whole subtree, so when you
+> only need specific descendants prefer `include(["template", "properties"])`
+> for direct resource queries and `under_parent()` for targeted descendant
+> queries. See the
+> [Performance Guide](#load-full-on-resource-queries-fetches-the-whole-subtree)
+> for details.
 
 ### Basic Filtering
 
@@ -979,17 +980,19 @@ for run in recent_runs:
 This section documents behaviours that are correct but have non-obvious
 performance implications at scale.
 
-## `load="full"` and the hidden N+1 on resource queries
+## `load="full"` on resource queries fetches the whole subtree
 
-When `load="full"` is used on a resource query, Recap sets `include_children=True`
-in the schema hydrator. The hydrator recursively constructs schemas for every
-child resource and accesses each child's `.properties` relationship. Because the
-`selectinload` chain for `load="full"` only loads direct children ORM objects
-(not their properties), each child's properties trigger a separate lazy SQL
-SELECT during hydration.
+When `load="full"` is used on a resource query (or `include(["children"])`),
+Recap sets `include_children=True` and hydrates the entire child-resource
+hierarchy. This is loaded in a single recursive-CTE bulk query — roots plus all
+descendants — with their templates and properties eagerly fetched. The number of
+SQL statements is **bounded and independent of tree depth or size**; it is no
+longer an N+1 pattern.
 
-For a 3-level hierarchy (e.g. dewar → 12 pucks → 96 samples), a dewar query with
-`load="full"` can trigger over 100 additional lazy SELECT statements.
+The remaining cost is that the *whole* subtree is materialised into schemas.
+When you only need certain descendants (e.g. just the samples under a dewar, not
+the intervening pucks), it is still cheaper to fetch them directly than to
+hydrate the full tree.
 
 **Prefer** `include(["template", "properties"])` for direct resource queries, and
 use `under_parent()` with a `filter(resource_template_id=...)` to query

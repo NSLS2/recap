@@ -233,6 +233,7 @@ class ResourceSchemaHydrator:
         include_children: bool,
         full: bool,
         on_unloaded: Literal["silent", "warn", "raise"],
+        children_map: dict[Any, list[Resource]] | None = None,
     ) -> ResourceSchema:
         cached = self._resource_cache.get(resource.id)
         if cached is not None:
@@ -259,8 +260,17 @@ class ResourceSchemaHydrator:
         self._resource_cache[resource.id] = schema
         if resource.parent is not None:
             schema.parent = self._construct_resource_ref(resource.parent)
-        schema.children = (
-            {
+        # When a pre-assembled ``children_map`` is supplied (flat-list
+        # hydration), build children from it instead of walking
+        # ``resource.children`` — the latter re-triggers a lazy load per node
+        # (the N+1 this path fixes).
+        if include_children:
+            child_resources = (
+                children_map.get(resource.id, [])
+                if children_map is not None
+                else resource.children.values()
+            )
+            schema.children = {
                 child.name: self._construct_resource_schema(
                     child,
                     include_template=include_template,
@@ -268,12 +278,12 @@ class ResourceSchemaHydrator:
                     include_children=include_children,
                     full=full,
                     on_unloaded=on_unloaded,
+                    children_map=children_map,
                 )
-                for child in resource.children.values()
+                for child in child_resources
             }
-            if include_children
-            else {}
-        )
+        else:
+            schema.children = {}
         schema.properties = (
             {
                 prop.template.name: self._construct_property_schema(prop)
@@ -334,3 +344,49 @@ class ResourceSchemaHydrator:
             )
             for resource in resources
         ]
+
+    def construct_tree(
+        self,
+        flat_resources: list[Resource],
+        root_ids: list[Any],
+        *,
+        include_template: bool,
+        include_properties: bool,
+        full: bool,
+        on_unloaded: Literal["silent", "warn", "raise"],
+    ) -> list[ResourceSchema]:
+        """Hydrate resource trees from a **flat list** of roots + descendants.
+
+        The parent->children map is assembled in Python by ``parent_id`` instead
+        of walking lazy ``Resource.children`` relationships, so hydration issues
+        zero per-node lazy loads. One schema is returned per id in ``root_ids``,
+        in order.
+        """
+        children_map: dict[Any, list[Resource]] = {}
+        for resource in flat_resources:
+            parent_id = resource.parent_id
+            if parent_id is not None:
+                children_map.setdefault(parent_id, []).append(resource)
+
+        by_id = {resource.id: resource for resource in flat_resources}
+        results: list[ResourceSchema] = []
+        for root_id in root_ids:
+            root = by_id.get(root_id)
+            if root is None:
+                continue
+            results.append(
+                self._post_build_dynamic_models(
+                    self._construct_resource_schema(
+                        root,
+                        include_template=include_template,
+                        include_properties=include_properties,
+                        include_children=True,
+                        full=full,
+                        on_unloaded=on_unloaded,
+                        children_map=children_map,
+                    ),
+                    include_properties=include_properties,
+                    include_children=True,
+                )
+            )
+        return results

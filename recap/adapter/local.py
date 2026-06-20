@@ -1118,6 +1118,55 @@ class LocalBackend(Backend):
             stmt = stmt.distinct()
         return stmt
 
+    def _resource_subtree_loaders(self):
+        """Eager-load options covering everything the resource hydrator touches
+        on a full-load tree, so flat-list hydration triggers zero lazy loads."""
+        return (
+            chain_load(Resource.parent),
+            chain_load(Resource.properties, Property._values),
+            chain_load(
+                Resource.properties,
+                Property.template,
+                AttributeGroupTemplate.attribute_templates,
+            ),
+            chain_load(Resource.template, ResourceTemplate.types),
+            chain_load(
+                Resource.template, ResourceTemplate.parent, ResourceTemplate.types
+            ),
+            chain_load(Resource.template, ResourceTemplate.children),
+            chain_load(
+                Resource.template,
+                ResourceTemplate.attribute_group_templates,
+                AttributeGroupTemplate.attribute_templates,
+            ),
+        )
+
+    def _load_resource_subtrees(
+        self, session: Session, root_ids: list[UUID]
+    ) -> list[Resource]:
+        """Fetch the given root resources **and all their descendants** in a
+        single recursive-CTE query, with every relationship the hydrator needs
+        eager-loaded. Returns the flat list (roots + descendants).
+
+        The statement count is bounded and independent of tree depth: one CTE
+        row-fetch plus a fixed number of ``selectinload`` batches.
+        """
+        if not root_ids:
+            return []
+        res_tbl = Resource.__table__
+        base_cte = (
+            select(res_tbl.c.id).where(res_tbl.c.id.in_(root_ids)).cte(recursive=True)
+        )
+        children = select(res_tbl.c.id).where(res_tbl.c.parent_id == base_cte.c.id)
+        subtree_cte = base_cte.union_all(children)
+
+        stmt = (
+            select(Resource)
+            .join(subtree_cte, Resource.id == subtree_cte.c.id)
+            .options(*self._resource_subtree_loaders())
+        )
+        return list(session.scalars(stmt).unique())
+
     def _apply_campaign_scope(self, model, stmt, spec):
         if spec.campaign_id is None:
             return stmt
@@ -1182,9 +1231,19 @@ class LocalBackend(Backend):
     def query(self, schema: type[SchemaT], spec: QuerySpec) -> list[SchemaT]:
         stmt = self._build_select(schema, spec)
 
-        loader_options = self._relationship_loaders(schema, list(spec.preloads), spec)
-        if loader_options:
-            stmt = stmt.options(*loader_options)
+        # Resource trees with children go through the bulk recursive-CTE path
+        # below; the root query then only needs ids, so skip the (one-level,
+        # redundant) relationship loaders for that case.
+        resource_tree_path = schema is ResourceSchema and (
+            spec.load_mode == "full" or "children" in spec.preloads
+        )
+
+        if not resource_tree_path:
+            loader_options = self._relationship_loaders(
+                schema, list(spec.preloads), spec
+            )
+            if loader_options:
+                stmt = stmt.options(*loader_options)
 
         if spec.limit is not None:
             stmt = stmt.limit(spec.limit)
@@ -1225,6 +1284,22 @@ class LocalBackend(Backend):
                 include_children = (
                     spec.load_mode == "full" or "children" in spec.preloads
                 )
+                if include_children:
+                    # Bulk-load the whole subtree (roots + all descendants) in a
+                    # single recursive-CTE query, then hydrate from the flat
+                    # list. Avoids the per-node lazy load (N+1) that walking
+                    # ``Resource.children`` would trigger. Preserve root order.
+                    root_ids = list(session.scalars(stmt).unique())
+                    root_ids = [r.id for r in root_ids]
+                    flat = self._load_resource_subtrees(session, root_ids)
+                    return resource_hydrator.construct_tree(
+                        flat,
+                        root_ids,
+                        include_template=include_template,
+                        include_properties=include_properties,
+                        full=spec.load_mode == "full",
+                        on_unloaded=spec.on_unloaded or "warn",
+                    )
                 return resource_hydrator.construct_many(
                     list(session.scalars(stmt).unique()),
                     include_template=include_template,
