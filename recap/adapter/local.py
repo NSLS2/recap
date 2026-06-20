@@ -587,20 +587,29 @@ class LocalBackend(Backend):
                 Resource.active.is_(True),
             )
         )
-        if expand:
-            stmt = stmt.options(
-                chain_load(Resource.children, Resource.children),
-                chain_load(Resource.template),
-                chain_load(Resource.children, Resource.properties),
-                chain_load(Resource.properties),
-            )
         with self._session_scope() as session:
             resource = load_single(session, stmt, label="Resource")
 
-        if expand:
-            return ResourceSchema.model_validate(resource)
+            if expand:
+                # Fetch the whole subtree (root + all descendants) in one
+                # query via _load_resource_subtrees, then build the schema tree
+                # from that flat list. Hydrating from the pre-fetched list keeps
+                # the statement count bounded and independent of tree depth;
+                # walking Resource.children directly would instead lazy-load
+                # each level on demand (an N+1 that grows with depth).
+                root_ids = [resource.id]
+                flat = self._load_resource_subtrees(session, root_ids)
+                trees = ResourceSchemaHydrator().construct_tree(
+                    flat,
+                    root_ids,
+                    include_template=True,
+                    include_properties=True,
+                    full=True,
+                    on_unloaded="warn",
+                )
+                return trees[0]
 
-        return ResourceRef.model_validate(resource)
+            return ResourceRef.model_validate(resource)
 
     def create_process_run(
         self,

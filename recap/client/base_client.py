@@ -14,7 +14,7 @@ from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
 from recap.schemas.process import CampaignSchema
-from recap.schemas.resource import ResourceSchema
+from recap.schemas.resource import ResourceRef, ResourceSchema
 from recap.utils.migrations import apply_migrations
 
 
@@ -633,6 +633,72 @@ class RecapClient:
             backend=self.backend,
             parent=parent,
             on_existing=on_existing,
+        )
+
+    @overload
+    def get_resource(
+        self,
+        name: str,
+        template_name: str,
+        template_version: str | None = "1.0",
+        *,
+        expand: Literal[False] = False,
+    ) -> ResourceRef: ...
+
+    @overload
+    def get_resource(
+        self,
+        name: str,
+        template_name: str,
+        template_version: str | None = "1.0",
+        *,
+        expand: Literal[True],
+    ) -> ResourceSchema: ...
+
+    def get_resource(
+        self,
+        name: str,
+        template_name: str,
+        template_version: str | None = "1.0",
+        *,
+        expand: bool = False,
+    ) -> ResourceRef | ResourceSchema:
+        """Load a single resource by name and template.
+
+        Looks up the active resource with the given ``name`` whose template
+        matches ``template_name`` and ``template_version``. Raises if no such
+        resource exists.
+
+        Example::
+
+            plate = client.get_resource("Plate A", "Library Plate", expand=True)
+            plate.children["A01"].properties.status.used.value  # False
+
+        Args:
+            name: Name of the resource to load.
+            template_name: Name of the :class:`ResourceTemplate` the resource
+                was instantiated from.
+            template_version: Version of the resource template. Defaults to
+                ``"1.0"``.
+            expand: When ``True``, eagerly hydrate the full resource subtree
+                (template, properties, and the entire child hierarchy) and
+                return a :class:`~recap.schemas.resource.ResourceSchema`. When
+                ``False`` (default), return a lightweight
+                :class:`~recap.schemas.resource.ResourceRef`.
+
+        Returns:
+            A :class:`~recap.schemas.resource.ResourceRef` when
+            ``expand=False``, or a fully hydrated
+            :class:`~recap.schemas.resource.ResourceSchema` when
+            ``expand=True``.
+        """
+        if self.backend is None:
+            raise RuntimeError("Backend not initialized")
+        return self.backend.get_resource(
+            name,
+            template_name,
+            template_version,
+            expand=expand,
         )
 
     def create_campaign(

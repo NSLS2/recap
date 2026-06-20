@@ -1,14 +1,16 @@
-"""Performance + correctness tests for resource-tree hydration (Step A, F1).
+"""Performance + correctness tests for resource-tree hydration.
 
-See ``RECAP_QUERY_OPTIMIZATION.md`` Step A: a ``load="full"`` /
-``include("children")`` resource query must hydrate the whole tree with a
-**bounded, depth-independent** number of SQL statements. The current
-implementation walks ``resource.children.values()`` in Python, which lazy-loads
-each node below depth 1 (the eager-loader is only one level deep) -> N+1 that
-scales with tree size.
+A ``load="full"`` / ``include("children")`` resource query must hydrate the
+whole tree with a **bounded, depth-independent** number of SQL statements: the
+root and all descendants are bulk-fetched in one query and the schema tree is
+built from that flat result.
 
-The key regression guard is *depth-independence*: a 3-level and a 4-level chain
-must issue the **same** number of statements.
+The regression these tests guard against is hydrating the tree by walking
+``resource.children.values()`` in Python, which lazy-loads each node on demand —
+an N+1 that scales with tree size.
+
+The key assertion is *depth-independence*: a 3-level and a 4-level chain must
+issue the **same** number of statements.
 """
 
 from recap.dsl.resource_builder import ResourceTemplateBuilder

@@ -186,10 +186,10 @@ def test_platemate_via_client_child_steps(client):  # noqa
         """Ensure a resource has instantiated children from its template."""
         uow_inner = client.backend.begin()
         try:
-            res = client.backend.get_resource(resource_name, template_name)
+            res = client.get_resource(resource_name, template_name)
             tmpl = client.backend.get_resource_template(template_name, expand=True)
             # If children already exist, skip creation
-            existing_children = client.backend.get_resource(
+            existing_children = client.get_resource(
                 resource_name, template_name, expand=True
             ).children
             if existing_children:
@@ -208,10 +208,10 @@ def test_platemate_via_client_child_steps(client):  # noqa
     def seed_children(parent_name: str, parent_template: str, child_names: list[str]):
         uow_seed = client.backend.begin()
         try:
-            parent_ref = client.backend.get_resource(parent_name, parent_template)
+            parent_ref = client.get_resource(parent_name, parent_template)
             for child_name in child_names:
                 try:
-                    client.backend.get_resource(child_name, child_name)
+                    client.get_resource(child_name, child_name)
                     continue
                 except Exception:
                     child_template = client.backend.get_resource_template(child_name)
@@ -242,13 +242,13 @@ def test_platemate_via_client_child_steps(client):  # noqa
 
         # Child steps for echo transfer with step-level assignments (lib well -> xtal well)
         xtal_wells = sorted(
-            client.backend.get_resource(
+            client.get_resource(
                 "pmtest", "PM Xtal Plate", expand=True
             ).children.values(),
             key=lambda w: w.name,
         )
         lib_children = sorted(
-            client.backend.get_resource(
+            client.get_resource(
                 "DSI-poised", "PM Library Plate", expand=True
             ).children.values(),
             key=lambda w: w.name,
@@ -273,7 +273,7 @@ def test_platemate_via_client_child_steps(client):  # noqa
         assert len(echo_children_created) == 3
 
         # Child steps for harvesting with step-level assignments (well -> pin inside a puck collection)
-        puck_collection = client.backend.get_resource(
+        puck_collection = client.get_resource(
             "Test Puck Collection", "Puck Collection", expand=True
         )
         # Use the explicitly created puck with pins (FGZ003) for harvesting

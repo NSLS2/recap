@@ -196,6 +196,32 @@ plate = client.create_resource(name="Plate A", template_name="Library Plate")
 
 creates a Resource from the `Library Plate` template; children are created automatically and properties are initialized with their defaults.
 
+#### Loading an existing resource
+
+To load a resource that already exists, use `get_resource`, identifying it by
+name and template:
+
+```python
+# Lightweight reference (ResourceRef) — no children or properties hydrated
+ref = client.get_resource(name="Plate A", template_name="Library Plate")
+
+# Full hydration (ResourceSchema) — template, properties, and the entire
+# child subtree are loaded in a single bulk query
+plate = client.get_resource(
+    name="Plate A", template_name="Library Plate", expand=True
+)
+plate.children["A01"].properties.status.used.value  # False
+```
+
+`template_version` defaults to `"1.0"`. `get_resource` raises if no matching
+active resource is found. With `expand=True` the whole child hierarchy is
+fetched with a bounded, depth-independent number of statements (see the
+[Performance Guide](#load-full-on-resource-queries-fetches-the-whole-subtree));
+`build_property_model()` is called automatically on the returned tree.
+
+For loading **many** resources, or filtering by properties / parent / type, use
+the [Query DSL](#querying-data) instead.
+
 #### Accessing and updating property values
 
 Each attribute group on a resource is a `PropertySchema`. Attributes are accessed by dot (slug) or bracket (slug or original name). Each attribute is an `AttributeValueSchema` with a `.value` and a `.unit`. Its `str()` renders `"<value><unit>"`:
