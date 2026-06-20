@@ -290,8 +290,12 @@ class ProcessRunBuilder:
             raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
         self.on_existing = on_existing
         self._process_template: ProcessTemplateSchema | ProcessTemplateRef | None = None
+        self._loaded_in_uow: bool = False
+        self._model_dirty: bool = False
+        self._params_flushed: bool = False
         try:
             self._initialize_process_run(process_run_id, campaign)
+            self._loaded_in_uow = True  # mark run as fresh in this UoW
             self._steps = list(self._process_run.steps.values())
             self._resources = {}
         except Exception:
@@ -369,10 +373,12 @@ class ProcessRunBuilder:
                 stacklevel=2,
             )
         self._process_run = existing[0]
+        self._loaded_in_uow = True  # mark fresh after recovery load
 
     def __enter__(self):
         self._ensure_uow()
-        if getattr(self, "_process_run", None) is not None:
+        if getattr(self, "_process_run", None) is not None and not self._loaded_in_uow:
+            # Re-entering after save() or _restart_uow() — reload current state
             self._process_run = self._reload_process_run(self._process_run.id)
             template = self._process_run.template
             self._process_template = self.backend.get_process_template(
@@ -387,7 +393,15 @@ class ProcessRunBuilder:
 
     def __exit__(self, exc_type, exc, tb):
         if exc_type is None:
-            self.persist()
+            if self._model_dirty:
+                if self._params_flushed:
+                    # set_params() flushed param values directly to the ORM, but
+                    # the in-memory pydantic schema still holds the pre-flush
+                    # values. Reload so persist() does not overwrite the flushed
+                    # params with stale schema data. (Only needed when a model
+                    # mutation is combined with set_params() in the same block.)
+                    self._process_run = self._reload_process_run(self._process_run.id)
+                self.persist()
             self.save()
         else:
             if self._uow:
@@ -397,6 +411,9 @@ class ProcessRunBuilder:
     def save(self):
         self._ensure_uow()
         self._uow.commit()
+        self._loaded_in_uow = False
+        self._model_dirty = False
+        self._params_flushed = False
         self._uow = None
         return self
 
@@ -414,6 +431,7 @@ class ProcessRunBuilder:
         if model.id != self._process_run.id:
             raise ValueError("ID for this ProcessRun does not match the builder")
         self._process_run = model
+        self._model_dirty = True  # pydantic schema mutated; persist needed
 
     def assign_resource(
         # self, resource_slot_name: str, resource_name: str, resource_template_name: str
@@ -433,6 +451,7 @@ class ProcessRunBuilder:
         self._process_run = self.backend.assign_resource(
             resource_slot, resource, self._process_run
         )
+        self._model_dirty = True  # ORM updated and schema refreshed; persist needed
         return self
 
     def _check_resource_assignment(self):
@@ -469,11 +488,9 @@ class ProcessRunBuilder:
     def set_params(self, filled_params: type[BaseModel]):
         self._ensure_uow()
         self.backend.set_params(filled_params)
-        if getattr(self, "_process_run", None) is not None:
-            # Refresh in-memory schema so subsequent persist writes current values
-            self._process_run = self._reload_process_run(self._process_run.id)
-        # Persist immediately so subsequent operations see updated values
-        self.persist()
+        # backend.set_params() already flushed the values to the session within
+        # the open transaction; __exit__ commits them. No reload/persist needed.
+        self._params_flushed = True
         return self
 
     def add_child_step(
@@ -515,6 +532,9 @@ class ProcessRunBuilder:
         if self._uow:
             self._uow.rollback()
         self._uow = self.backend.begin()
+        self._loaded_in_uow = False
+        self._model_dirty = False
+        self._params_flushed = False
         return self._uow
 
     def _reload_process_run(self, process_run_id: UUID) -> ProcessRunSchema:

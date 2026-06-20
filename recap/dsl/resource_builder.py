@@ -49,6 +49,7 @@ class ResourceBuilder:
         self.on_existing = on_existing
         self._resource: ResourceSchema | None = None
         self._uow = None
+        self._loaded_in_uow: bool = False
         self._configure_parent(parent)
         self._configure_backend(backend)
         try:
@@ -56,10 +57,8 @@ class ResourceBuilder:
                 self._load_existing_resource(resource_id)
             else:
                 self._create_or_reuse_resource()
+            self._loaded_in_uow = True  # mark resource as fresh in this UoW
             if self.parent_resource:
-                print(
-                    f"adding child {self._resource.name} to {self.parent_resource.name}"
-                )
                 self.backend.add_child_resources(self.parent_resource, [self._resource])
         except Exception:
             if self._uow:
@@ -154,7 +153,8 @@ class ResourceBuilder:
 
     def __enter__(self):
         self._ensure_uow()
-        if self._resource is not None:
+        if self._resource is not None and not self._loaded_in_uow:
+            # Re-entering after save() or _restart_uow() — reload current state
             self._resource = self._reload_resource(self._resource.id)
             self.name = self._resource.name
             self.template_name = self._resource.template.name
@@ -181,18 +181,13 @@ class ResourceBuilder:
         self._uow = self.backend.begin()
         if self.parent:
             self.parent._uow = self._uow
+        self._loaded_in_uow = False  # rollback invalidates loaded state
         return self._uow
 
     def save(self):
         self._ensure_uow()
-        self._uow.commit(clear_session=False)
-        self._resource = self.backend.get_resource(
-            self.name,
-            self.template_name,
-            self.template_version,
-            expand=True,
-        )
-        self._uow.end_session()
+        self._uow.commit()
+        self._loaded_in_uow = False  # stale after commit; reload on next __enter__
         self._uow = None
         return self
 

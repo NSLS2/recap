@@ -120,3 +120,43 @@ def test_process_run_builder_set_model_handles_mismatch(client):
 
     with pytest.raises(ValueError):
         set_mismatched_model()
+
+
+def test_resource_builder_add_child_persists_and_links(client):
+    """ResourceBuilder.add_child() creates a child resource in the parent's
+    unit of work and links it to the parent. The parent's __exit__ commits both.
+
+    This locks in the instance-level add_child() path, which shares the parent
+    builder's session and is otherwise untested.
+    """
+    with client.build_resource_template(
+        name="AC-Parent", type_names=["container"]
+    ) as rtb:
+        rtb.close_child()
+    with client.build_resource_template(
+        name="AC-Child", type_names=["container"]
+    ) as rtb:
+        rtb.close_child()
+
+    with client.build_resource("AC-Root", "AC-Parent") as rb:
+        rb.add_child("AC-Leaf", "AC-Child")
+
+    parent = (
+        client.query_maker()
+        .resources()
+        .filter(name="AC-Root")
+        .include(["children", "template"])
+        .first()
+    )
+    child = (
+        client.query_maker()
+        .resources()
+        .filter(name="AC-Leaf")
+        .include(["template"])
+        .first()
+    )
+
+    assert child is not None
+    assert child.template.name == "AC-Child"
+    assert "AC-Leaf" in parent.children
+    assert parent.children["AC-Leaf"].id == child.id

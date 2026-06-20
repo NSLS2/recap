@@ -17,10 +17,12 @@ def test_process_run_update_persists_param_changes(client):
         version="1.0",
     ) as prb:
         run = prb.process_run
-        step = run.steps["Mix"]
 
-        # mutate typed param values and persist
-        step.parameters.inputs.values.voltage.value = 42
+        # Mutate typed param values on the pydantic model, then hand the
+        # mutated model back via set_model() so __exit__ persists it.
+        model = prb.get_model()
+        model.steps["Mix"].parameters.inputs.values.voltage.value = 42
+        prb.set_model(model)
 
     refreshed_run = (
         client.query_maker()
