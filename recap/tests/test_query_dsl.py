@@ -698,3 +698,71 @@ def test_campaign_scope_not_applied_to_templates(db_session):
 
     assert run_b.template.id in tmpl_ids
     assert len(res_tmpl_ids) >= 2
+
+
+def _seed_resource_hierarchy(db_session):
+    """Build a 3-level resource tree spanning two templates.
+
+    root (tmpl_a)
+      ├─ mid-1 (tmpl_b)  └─ leaf-1 (tmpl_b)
+      └─ mid-2 (tmpl_a)
+    """
+    tmpl_a = ResourceTemplate(name="Box", version="1.0")
+    tmpl_b = ResourceTemplate(name="Vial", version="1.0")
+    db_session.add_all([tmpl_a, tmpl_b])
+    db_session.commit()
+
+    root = Resource(name="root", template=tmpl_a)
+    mid_1 = Resource(name="mid-1", template=tmpl_b, parent=root)
+    mid_2 = Resource(name="mid-2", template=tmpl_a, parent=root)
+    leaf_1 = Resource(name="leaf-1", template=tmpl_b, parent=mid_1)
+    db_session.add_all([root, mid_1, mid_2, leaf_1])
+    db_session.commit()
+
+    return root, tmpl_a, tmpl_b
+
+
+def test_descendants_matches_manual_chain(db_session):
+    """descendants(parent) returns the same rows as the README-recommended
+    under_parent().include([...]) chain it wraps."""
+    root, _, _ = _seed_resource_hierarchy(db_session)
+
+    manual = (
+        make_query(db_session)
+        .resources()
+        .under_parent(root)
+        .include(["template", "properties"])
+        .all()
+    )
+    helper = make_query(db_session).resources().descendants(root).all()
+
+    assert {r.id for r in helper} == {r.id for r in manual}
+    # All descendants, every level -- not just direct children.
+    assert {r.name for r in helper} == {"mid-1", "mid-2", "leaf-1"}
+
+
+def test_descendants_of_template_filters_by_template(db_session):
+    """descendants(parent, of_template=...) restricts to one resource template."""
+    root, _, tmpl_b = _seed_resource_hierarchy(db_session)
+
+    rows = (
+        make_query(db_session)
+        .resources()
+        .descendants(root, of_template=tmpl_b.id)
+        .all()
+    )
+
+    assert {r.name for r in rows} == {"mid-1", "leaf-1"}
+
+
+def test_descendants_hydrates_template_and_properties(db_session):
+    """The wrapped include([...]) eagerly loads template + properties so the
+    returned schemas are usable without further round-trips."""
+    root, _, _ = _seed_resource_hierarchy(db_session)
+
+    rows = make_query(db_session).resources().descendants(root).all()
+
+    for r in rows:
+        assert r.template is not None
+        # properties is a loaded (possibly empty) mapping, not an unloaded marker
+        assert r.properties is not None

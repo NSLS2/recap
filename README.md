@@ -615,8 +615,8 @@ The same rule applies to `resources`, `process_templates`, and `resource_templat
 > (recursive CTE) with a bounded, depth-independent number of SELECTs — it is no
 > longer an N+1 pattern. It still materialises the whole subtree, so when you
 > only need specific descendants prefer `include(["template", "properties"])`
-> for direct resource queries and `under_parent()` for targeted descendant
-> queries. See the
+> for direct resource queries and `descendants()` (or `under_parent()`) for
+> targeted descendant queries. See the
 > [Performance Guide](#load-full-on-resource-queries-fetches-the-whole-subtree)
 > for details.
 
@@ -725,6 +725,23 @@ samples = (
     .include(["template", "properties"])
     .filter(resource_template_id=sample_tmpl_id)
     .under_parent(dewar_resource)
+    .all()
+)
+```
+
+For the common case — "give me everything under this resource, hydrated" — use
+the `descendants()` shortcut, which wraps
+`under_parent(parent).include(["template", "properties"])`:
+
+```python
+# Every resource beneath the dewar (any depth), template + properties loaded
+all_below = client.query_maker().resources().descendants(dewar_resource).all()
+
+# Restrict to a single template (e.g. just samples), still one bulk query
+samples = (
+    client.query_maker()
+    .resources()
+    .descendants(dewar_resource, of_template=sample_tmpl_id)
     .all()
 )
 ```
@@ -1006,6 +1023,24 @@ for run in recent_runs:
 This section documents behaviours that are correct but have non-obvious
 performance implications at scale.
 
+## Query recommendations
+
+A quick checklist for fast, predictable queries:
+
+1. **Default to `shape="ref"` or `load="none"`** when you only need
+   identity/scalar fields — this skips relationship hydration entirely.
+2. **Use `include([...])`** to load exactly the relations you touch; avoid
+   `load="full"` on deep resource trees.
+3. **Fetch deep hierarchies with `descendants()`** (or
+   `under_parent()` + `filter(resource_template_id=...)`) — one bulk query, then
+   call `build_property_model()` per row.
+4. **For known-existing records, use the ID overloads**
+   (`resource_id=` / `process_run_id=`) rather than `on_existing="silent"`, which
+   costs extra round-trips (see below).
+5. **Group writes by campaign** and call `set_campaign()` once per group.
+6. **`include(...)` is only valid with `shape="schema", load="none"`** — it
+   raises `ValueError` when combined with `load="full"`.
+
 ## `load="full"` on resource queries fetches the whole subtree
 
 When `load="full"` is used on a resource query (or `include(["children"])`),
@@ -1021,18 +1056,13 @@ the intervening pucks), it is still cheaper to fetch them directly than to
 hydrate the full tree.
 
 **Prefer** `include(["template", "properties"])` for direct resource queries, and
-use `under_parent()` with a `filter(resource_template_id=...)` to query
-descendants in a single targeted bulk query:
+use `descendants()` (which wraps
+`under_parent().include(["template", "properties"])`, optionally narrowed by
+`of_template=`) to query descendants in a single targeted bulk query:
 
 ```python
 # Efficient: one query for all samples at any depth under the dewar
-samples = (
-    qm.resources()
-    .include(["template", "properties"])
-    .filter(resource_template_id=sample_tmpl_id)
-    .under_parent(dewar_resource)
-    .all()
-)
+samples = qm.resources().descendants(dewar_resource, of_template=sample_tmpl_id).all()
 for sample in samples:
     sample.build_property_model()
     print(sample.properties.identity.sample_name.value)

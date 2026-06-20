@@ -465,6 +465,23 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
             )
         return self._clone(parent_resource_id=parent_id)
 
+    def descendants(
+        self,
+        parent: ResourceRef | ResourceSchema | UUID | str | Any,
+        *,
+        of_template: UUID | None = None,
+    ) -> "ResourceQuery":
+        """Fetch every resource beneath ``parent`` (all levels) in one bulk
+        recursive query, with ``template`` and ``properties`` eagerly loaded.
+
+        Wraps the recommended ``under_parent(parent).include([...])`` pattern.
+        Pass ``of_template`` to restrict to a single resource template.
+        """
+        q = self.under_parent(parent).include(["template", "properties"])
+        if of_template is not None:
+            q = q.filter(resource_template_id=of_template)
+        return q
+
 
 class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateRef]):
     model = ResourceTemplateSchema
