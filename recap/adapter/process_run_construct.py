@@ -327,6 +327,7 @@ class ProcessRunSchemaHydrator:
     def _construct_resource_schema(
         self,
         resource: Resource,
+        children_map: dict[Any, list[Resource]] | None = None,
     ) -> ResourceSchema:
         cached = self._resource_cache.get(resource.id)
         if cached is not None:
@@ -342,9 +343,17 @@ class ProcessRunSchemaHydrator:
         self._resource_cache[resource.id] = schema
         if resource.parent is not None:
             schema.parent = self._construct_resource_ref(resource.parent)
+        # When a pre-assembled ``children_map`` is supplied, build children
+        # from it instead of walking ``resource.children`` -- the latter
+        # re-triggers a lazy load per node (the N+1 this path fixes).
+        child_resources = (
+            children_map.get(resource.id, [])
+            if children_map is not None
+            else resource.children.values()
+        )
         schema.children = {
-            child.name: self._construct_resource_schema(child)
-            for child in resource.children.values()
+            child.name: self._construct_resource_schema(child, children_map)
+            for child in child_resources
         }
         schema.properties = {
             prop.template.name: self._construct_property_schema(prop)
@@ -395,6 +404,7 @@ class ProcessRunSchemaHydrator:
         include_resources: bool,
         full: bool,
         on_unloaded: Literal["silent", "warn", "raise"],
+        children_map: dict[Any, list[Resource]] | None = None,
     ) -> ProcessRunSchema:
         template = (
             self._construct_process_template(run.template)
@@ -424,7 +434,7 @@ class ProcessRunSchemaHydrator:
                 children=[],
                 resources=(
                     {
-                        role: self._construct_resource_schema(res)
+                        role: self._construct_resource_schema(res, children_map)
                         for role, res in step.resources.items()
                     }
                     if include_resources
@@ -449,7 +459,9 @@ class ProcessRunSchemaHydrator:
                 assigned_resources[assigned.slot.name] = (
                     ResourceAssignmentSchema.model_construct(
                         slot=self._construct_resource_slot(assigned.slot),
-                        resource=self._construct_resource_schema(assigned.resource),
+                        resource=self._construct_resource_schema(
+                            assigned.resource, children_map
+                        ),
                         step_id=None,
                     )
                 )
@@ -483,6 +495,7 @@ class ProcessRunSchemaHydrator:
         include_resources: bool,
         full: bool,
         on_unloaded: Literal["silent", "warn", "raise"],
+        children_map: dict[Any, list[Resource]] | None = None,
     ) -> list[ProcessRunSchema]:
         return [
             self._construct_process_run_schema(
@@ -492,6 +505,7 @@ class ProcessRunSchemaHydrator:
                 include_resources=include_resources,
                 full=full,
                 on_unloaded=on_unloaded,
+                children_map=children_map,
             )
             for run in runs
         ]

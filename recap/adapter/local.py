@@ -1176,6 +1176,40 @@ class LocalBackend(Backend):
         )
         return list(session.scalars(stmt).unique())
 
+    @staticmethod
+    def _assigned_resource_root_ids(runs: list[ProcessRun]) -> list[UUID]:
+        """Collect the ids of every resource directly assigned to the given
+        process runs -- both run-level and step-level assignments. These are the
+        roots whose subtrees the resource hydrator will expand."""
+        root_ids: list[UUID] = []
+        seen: set[UUID] = set()
+
+        def _add(resource):
+            if resource is not None and resource.id not in seen:
+                seen.add(resource.id)
+                root_ids.append(resource.id)
+
+        for run in runs:
+            for assigned in run.assigned_resources:
+                _add(assigned.resource)
+            for step in run.steps.values():
+                for resource in step.resources.values():
+                    _add(resource)
+        return root_ids
+
+    @staticmethod
+    def _build_children_map(
+        flat_resources: list[Resource],
+    ) -> dict[UUID, list[Resource]]:
+        """Build a ``parent_id -> [child]`` map from a flat resource list, so a
+        hydrator can assemble child trees without lazy-loading per node."""
+        children_map: dict[UUID, list[Resource]] = {}
+        for resource in flat_resources:
+            parent_id = resource.parent_id
+            if parent_id is not None:
+                children_map.setdefault(parent_id, []).append(resource)
+        return children_map
+
     def _apply_campaign_scope(self, model, stmt, spec):
         if spec.campaign_id is None:
             return stmt
@@ -1274,13 +1308,24 @@ class LocalBackend(Backend):
                     or include_step_parameters
                     or include_resources
                 )
+                runs = list(session.scalars(stmt).unique())
+                children_map: dict[UUID, list[Resource]] | None = None
+                if include_resources:
+                    # Bulk-load the full subtree of every assigned resource
+                    # (run-level and step-level) in one recursive-CTE query, so
+                    # the hydrator can build each resource's child tree from the
+                    # flat result instead of lazy-loading per node (N+1).
+                    root_ids = self._assigned_resource_root_ids(runs)
+                    flat = self._load_resource_subtrees(session, root_ids)
+                    children_map = self._build_children_map(flat)
                 return process_run_hydrator.construct_many(
-                    list(session.scalars(stmt).unique()),
+                    runs,
                     include_steps=include_steps,
                     include_step_parameters=include_step_parameters,
                     include_resources=include_resources,
                     full=spec.load_mode == "full",
                     on_unloaded=spec.on_unloaded or "warn",
+                    children_map=children_map,
                 )
             if schema is ResourceSchema:
                 resource_hydrator = ResourceSchemaHydrator()

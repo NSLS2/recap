@@ -83,11 +83,6 @@ PRELOAD_STATEMENTS = {
             Property.template,
             AttributeGroupTemplate.attribute_templates,
         ),
-        chain_load(
-            ProcessRun.assignments,
-            ResourceAssignment.resource,
-            Resource.children,
-        ),
     ],
     (CampaignSchema, "process_run"): [chain_load(Campaign.process_runs)],
     (ProcessTemplateSchema, "step_templates"): [
