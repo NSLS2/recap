@@ -221,6 +221,7 @@ class WriteBackend(Protocol):
     def set_params(self, filled_params: type[BaseModel]) -> None: ...
 
 
+@runtime_checkable
 class Backend(ReadBackend, WriteBackend, Protocol):
     """Combined read+write protocol. Implemented by LocalBackend."""
 

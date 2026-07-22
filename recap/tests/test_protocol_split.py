@@ -1,7 +1,9 @@
+import os
+import tempfile
+from pathlib import Path
+
 from recap.adapter import Backend, ReadBackend, WriteBackend
 from recap.adapter.local import LocalBackend
-from pathlib import Path
-import tempfile, os
 
 
 def test_read_backend_is_protocol():
