@@ -89,6 +89,10 @@ class RecapClient:
         backend = getattr(self, "backend", None)
         if backend and hasattr(backend, "close"):
             backend.close()
+        # Close read_backend separately when it differs from backend (e.g. GraphQLAdapter)
+        read_backend = getattr(self, "_read_backend", None)
+        if read_backend and read_backend is not backend and hasattr(read_backend, "close"):
+            read_backend.close()
         engine = getattr(self, "engine", None)
         if engine:
             engine.dispose()
