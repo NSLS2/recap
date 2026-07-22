@@ -39,10 +39,10 @@ def test_graphql_resources_empty(tmp_path):
 def test_graphql_count_fields(tmp_path):
     app = make_test_app(tmp_path)
     client = TestClient(app)
-    resp = client.post("/graphql", json={"query": "{ resourcesCount campaignsCount resourceTemplatesCount processTemplatesCount }"})
+    resp = client.post("/graphql", json={"query": "{ resources_count campaigns_count resource_templates_count process_templates_count }"})
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert data["resourcesCount"] == 0
-    assert data["campaignsCount"] == 0
-    assert data["resourceTemplatesCount"] == 0
-    assert data["processTemplatesCount"] == 0
+    assert data["resources_count"] == 0
+    assert data["campaigns_count"] == 0
+    assert data["resource_templates_count"] == 0
+    assert data["process_templates_count"] == 0

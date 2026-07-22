@@ -1131,3 +1131,28 @@ for genuinely new ones.
 - REST API backend
 - CLI
 - Web UI for campaign/process management
+
+## GraphQL Server
+
+recap ships an optional read-only GraphQL server (`pyrecap[server]`). Start it with:
+
+```bash
+recap-server --db /path/to/recap.db --port 8000
+# or with a config file:
+recap-server --config recap-server.yaml
+```
+
+`RecapClient.from_url()` connects to a running server — reads go via GraphQL, writes go directly to the shared SQLite file (Phase 1 constraint: client and server must share a filesystem):
+
+```python
+client = RecapClient.from_url("http://localhost:8000")
+```
+
+### Caveat: snake_case field names
+
+The recap GraphQL server disables Strawberry's default camelCase conversion (`auto_camel_case=False`). All field names in queries and responses use **snake_case** (`create_date`, `modified_date`, `process_runs`, etc.) rather than the GraphQL convention of camelCase (`createDate`, `modifiedDate`, `processRuns`).
+
+This is intentional for Phase 1 — it allows the Python client to deserialize GraphQL responses directly into Pydantic schemas without a translation layer.
+
+**Impact for external GraphQL clients** (GraphiQL, language clients, etc.): use snake_case field names in all queries. This behaviour may change in a future release when a dedicated response translation layer is added.
+

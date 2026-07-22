@@ -45,10 +45,10 @@ def test_graphql_resources_after_write(tmp_path):
 
     app = create_app(db_path)
     test_client = TestClient(app)
-    resp = test_client.post("/graphql", json={"query": "{ resources { id name } resourcesCount }"})
+    resp = test_client.post("/graphql", json={"query": "{ resources { id name } resources_count }"})
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["resourcesCount"] == 1
+    assert body["resources_count"] == 1
     assert body["resources"][0]["name"] == "S-001"
 
 

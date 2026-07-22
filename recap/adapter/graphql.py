@@ -23,20 +23,20 @@ from recap.schemas.step import StepSchema
 
 # Maps Pydantic schema type → (list field name, count field name)
 _SCHEMA_FIELD_MAP: dict[type, tuple[str, str]] = {
-    ResourceSchema: ("resources", "resourcesCount"),
-    ResourceTemplateSchema: ("resourceTemplates", "resourceTemplatesCount"),
-    ProcessRunSchema: ("processRuns", "processRunsCount"),
-    ProcessTemplateSchema: ("processTemplates", "processTemplatesCount"),
-    CampaignSchema: ("campaigns", "campaignsCount"),
+    ResourceSchema: ("resources", "resources_count"),
+    ResourceTemplateSchema: ("resource_templates", "resource_templates_count"),
+    ProcessRunSchema: ("process_runs", "process_runs_count"),
+    ProcessTemplateSchema: ("process_templates", "process_templates_count"),
+    CampaignSchema: ("campaigns", "campaigns_count"),
 }
 
 # Minimal field selections per schema type
 _SCHEMA_FIELDS: dict[type, str] = {
-    ResourceSchema: "id name createDate modifiedDate",
-    ResourceTemplateSchema: "id name version createDate modifiedDate",
-    ProcessRunSchema: "id name description createDate modifiedDate",
-    ProcessTemplateSchema: "id name version createDate modifiedDate",
-    CampaignSchema: "id name proposal createDate modifiedDate",
+    ResourceSchema: "id name create_date modified_date",
+    ResourceTemplateSchema: "id name version create_date modified_date",
+    ProcessRunSchema: "id name description create_date modified_date",
+    ProcessTemplateSchema: "id name version create_date modified_date",
+    CampaignSchema: "id name proposal create_date modified_date",
 }
 
 
@@ -74,7 +74,7 @@ class QuerySpecTranslator:
     def to_graphql(self) -> str:
         field = self.root_field_name()
         args = self._build_args()
-        fields = _SCHEMA_FIELDS.get(self._schema, "id name createDate modifiedDate")
+        fields = _SCHEMA_FIELDS.get(self._schema, "id name create_date modified_date")
         return f"{{ {field}{args} {{ {fields} }} }}"
 
     def to_graphql_count(self) -> str:

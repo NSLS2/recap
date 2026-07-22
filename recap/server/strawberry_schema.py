@@ -2,6 +2,7 @@
 
 import strawberry
 from strawberry.fastapi import GraphQLRouter
+from strawberry.schema.config import StrawberryConfig
 
 from recap.adapter.local import LocalBackend
 from recap.server.resolvers import (
@@ -50,7 +51,7 @@ def build_schema(backend: LocalBackend) -> strawberry.Schema:
     context injection — resolvers accessing ``info.context["backend"]`` will
     fail at runtime unless context is supplied externally.
     """
-    return strawberry.Schema(query=Query)
+    return strawberry.Schema(query=Query, config=StrawberryConfig(auto_camel_case=False))
 
 
 def build_router(backend: LocalBackend) -> GraphQLRouter:
@@ -59,5 +60,5 @@ def build_router(backend: LocalBackend) -> GraphQLRouter:
     async def get_context() -> dict:
         return {"backend": backend}
 
-    schema = strawberry.Schema(query=Query)
+    schema = strawberry.Schema(query=Query, config=StrawberryConfig(auto_camel_case=False))
     return GraphQLRouter(schema, context_getter=get_context)

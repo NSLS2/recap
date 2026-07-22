@@ -71,7 +71,7 @@ def test_graphql_adapter_count_calls_post(tmp_path):
     from recap.adapter.graphql import GraphQLAdapter
 
     mock_response = MagicMock()
-    mock_response.json.return_value = {"data": {"resourcesCount": 42}}
+    mock_response.json.return_value = {"data": {"resources_count": 42}}
     mock_response.raise_for_status = MagicMock()
 
     with patch("httpx2.Client.post", return_value=mock_response):
