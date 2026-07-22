@@ -34,6 +34,7 @@ class ServerConfig(BaseSettings):
 
         YAML must have a top-level 'server:' key. db_path is required.
         CLI/env vars still override YAML values when set.
+        Raises FileNotFoundError if the config file does not exist.
         """
         with open(path) as f:
             raw = yaml.safe_load(f)

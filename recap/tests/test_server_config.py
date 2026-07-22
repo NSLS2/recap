@@ -1,5 +1,3 @@
-import os
-import tempfile
 from pathlib import Path
 import yaml
 import pytest
@@ -34,3 +32,4 @@ def test_server_config_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("RECAP_DB_PATH", str(tmp_path / "env.db"))
     cfg = ServerConfig()
     assert cfg.port == 7777
+    assert cfg.db_path == tmp_path / "env.db"
