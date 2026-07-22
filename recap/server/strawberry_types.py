@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
-from uuid import UUID
 
 import strawberry
 from strawberry.scalars import JSON

@@ -1,11 +1,9 @@
 """Root GraphQL Query type and schema builder."""
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
 
 import strawberry
 from strawberry.fastapi import GraphQLRouter
 
+from recap.adapter.local import LocalBackend
 from recap.server.strawberry_types import (
     CampaignType,
     ProcessRunType,
@@ -13,9 +11,6 @@ from recap.server.strawberry_types import (
     ResourceTemplateType,
     ResourceType,
 )
-
-if TYPE_CHECKING:
-    from recap.adapter.local import LocalBackend
 
 
 # Stub resolvers — replaced when recap/server/resolvers.py is created in Task 6.
@@ -66,16 +61,18 @@ class Query:
     campaigns_count: int = strawberry.field(resolver=resolve_campaigns_count)
 
 
-def build_schema(backend: "LocalBackend") -> strawberry.Schema:
-    """Build a Strawberry schema with the given LocalBackend injected into resolver context."""
+def build_schema(backend: LocalBackend) -> strawberry.Schema:
+    """Build a Strawberry schema for introspection or testing only.
 
-    async def get_context() -> dict:
-        return {"backend": backend}
-
+    For serving with FastAPI, use ``build_router()`` which properly injects
+    context via ``context_getter``. This function returns a bare schema without
+    context injection — resolvers accessing ``info.context["backend"]`` will
+    fail at runtime unless context is supplied externally.
+    """
     return strawberry.Schema(query=Query)
 
 
-def build_router(backend: "LocalBackend") -> GraphQLRouter:
+def build_router(backend: LocalBackend) -> GraphQLRouter:
     """Build a GraphQLRouter (for mounting in FastAPI) with backend in context."""
 
     async def get_context() -> dict:
