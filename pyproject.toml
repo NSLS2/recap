@@ -40,6 +40,15 @@ Issues = "https://github.com/NSLS2/recap/issues"
 dev = [
     "pytest"
 ]
+server = [
+    "strawberry-graphql[fastapi]>=0.220",
+    "uvicorn[standard]>=0.30",
+    "pydantic-settings>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+recap-server = "recap.server.__main__:main"
 
 [tool.hatch.version]
 source = "vcs"
@@ -105,9 +114,14 @@ httpx2 = ">=2.0"
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
-dev = { features = ["lint", "test"], solve-group = "default" }
+dev = { features = ["lint", "test", "server"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
 build = { features = [ "build" ], solve-group = "default"}
+
+[tool.pixi.feature.server.pypi-dependencies]
+"strawberry-graphql" = {version = ">=0.220", extras = ["fastapi"]}
+uvicorn = {version = ">=0.30", extras = ["standard"]}
+pydantic-settings = ">=2.0"
 
 [tool.pixi.feature.test.dependencies]
 pytest = ">=8.4.2,<9"
