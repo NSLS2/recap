@@ -159,6 +159,8 @@ class RecapClient:
             response.raise_for_status()
         except httpx2.ConnectError as exc:
             raise RecapConnectionError(url, message=str(exc)) from exc
+        except httpx2.TimeoutException as exc:
+            raise RecapConnectionError(url, message=str(exc)) from exc
         except httpx2.HTTPStatusError as exc:
             raise RecapConnectionError(url, status_code=exc.response.status_code) from exc
 

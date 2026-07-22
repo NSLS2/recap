@@ -10,7 +10,9 @@ from recap.server.resolvers import (
     resolve_process_runs,
     resolve_process_runs_count,
     resolve_process_templates,
+    resolve_process_templates_count,
     resolve_resource_templates,
+    resolve_resource_templates_count,
     resolve_resources,
     resolve_resources_count,
 )
@@ -36,6 +38,8 @@ class Query:
     resources_count: int = strawberry.field(resolver=resolve_resources_count)
     process_runs_count: int = strawberry.field(resolver=resolve_process_runs_count)
     campaigns_count: int = strawberry.field(resolver=resolve_campaigns_count)
+    resource_templates_count: int = strawberry.field(resolver=resolve_resource_templates_count)
+    process_templates_count: int = strawberry.field(resolver=resolve_process_templates_count)
 
 
 def build_schema(backend: LocalBackend) -> strawberry.Schema:

@@ -171,3 +171,15 @@ def resolve_campaigns_count(info: strawberry.types.Info) -> int:
     backend: LocalBackend = info.context["backend"]
     spec = QuerySpec()
     return backend.count(CampaignSchema, spec)
+
+
+def resolve_resource_templates_count(info: strawberry.types.Info) -> int:
+    backend = info.context["backend"]
+    spec = QuerySpec()
+    return backend.count(ResourceTemplateSchema, spec)
+
+
+def resolve_process_templates_count(info: strawberry.types.Info) -> int:
+    backend = info.context["backend"]
+    spec = QuerySpec()
+    return backend.count(ProcessTemplateSchema, spec)
