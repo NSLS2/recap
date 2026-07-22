@@ -1,7 +1,6 @@
 """End-to-end integration: write via LocalBackend, read via GraphQL server."""
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
 
 
 def test_write_local_read_graphql(tmp_path):
