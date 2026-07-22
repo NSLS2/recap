@@ -1035,6 +1035,8 @@ class RecapClient:
             campaign_id = self._campaign.id
 
         read_backend = getattr(self, "_read_backend", self.backend) or self.backend
+        if read_backend is None:
+            raise RuntimeError("No read backend available")
         return QueryDSL(
             read_backend,
             campaign_id=campaign_id,
