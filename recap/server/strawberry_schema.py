@@ -4,6 +4,16 @@ import strawberry
 from strawberry.fastapi import GraphQLRouter
 
 from recap.adapter.local import LocalBackend
+from recap.server.resolvers import (
+    resolve_campaigns,
+    resolve_campaigns_count,
+    resolve_process_runs,
+    resolve_process_runs_count,
+    resolve_process_templates,
+    resolve_resource_templates,
+    resolve_resources,
+    resolve_resources_count,
+)
 from recap.server.strawberry_types import (
     CampaignType,
     ProcessRunType,
@@ -11,39 +21,6 @@ from recap.server.strawberry_types import (
     ResourceTemplateType,
     ResourceType,
 )
-
-
-# Stub resolvers — replaced when recap/server/resolvers.py is created in Task 6.
-def resolve_resources(info: strawberry.types.Info) -> list[ResourceType]:
-    raise NotImplementedError("resolvers.py not yet implemented")
-
-
-def resolve_resource_templates(info: strawberry.types.Info) -> list[ResourceTemplateType]:
-    raise NotImplementedError("resolvers.py not yet implemented")
-
-
-def resolve_process_runs(info: strawberry.types.Info) -> list[ProcessRunType]:
-    raise NotImplementedError("resolvers.py not yet implemented")
-
-
-def resolve_process_templates(info: strawberry.types.Info) -> list[ProcessTemplateType]:
-    raise NotImplementedError("resolvers.py not yet implemented")
-
-
-def resolve_campaigns(info: strawberry.types.Info) -> list[CampaignType]:
-    raise NotImplementedError("resolvers.py not yet implemented")
-
-
-def resolve_resources_count(info: strawberry.types.Info) -> int:
-    raise NotImplementedError("resolvers.py not yet implemented")
-
-
-def resolve_process_runs_count(info: strawberry.types.Info) -> int:
-    raise NotImplementedError("resolvers.py not yet implemented")
-
-
-def resolve_campaigns_count(info: strawberry.types.Info) -> int:
-    raise NotImplementedError("resolvers.py not yet implemented")
 
 
 @strawberry.type
