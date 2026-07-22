@@ -101,6 +101,7 @@ platforms = ["osx-arm64", "linux-64", "win-64"]
 
 [tool.pixi.pypi-dependencies]
 pyrecap = { path = ".", editable = true }
+httpx2 = ">=2.0"
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
