@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 from uuid import UUID
 
@@ -28,12 +28,13 @@ def _check_graphql_errors(body: Mapping[str, Any]) -> None:
     errors = body.get("errors")
     if not errors:
         return
-    messages = [
-        error.get("message", "Unknown GraphQL error")
-        if isinstance(error, Mapping)
-        else "Unknown GraphQL error"
-        for error in errors
-    ]
+    if (
+        not isinstance(errors, Sequence)
+        or isinstance(errors, (str, bytes))
+        or not all(isinstance(error, Mapping) for error in errors)
+    ):
+        raise RuntimeError("GraphQL request failed: malformed error response")
+    messages = [error.get("message", "Unknown GraphQL error") for error in errors]
     raise RuntimeError(f"GraphQL request failed: {'; '.join(messages)}")
 
 

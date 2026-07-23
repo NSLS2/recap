@@ -6,7 +6,7 @@ import pytest
 from recap.adapter.transport import serialize_model
 from recap.dsl.query import ParameterFilter, PropertyFilter, QuerySpec
 from recap.schemas.resource import ResourceSchema
-from recap.tests.test_transport import full_resource
+from recap.tests.transport_factories import full_resource
 
 EXECUTE_QUERY = (
     "query ExecuteQuery($schema_name: String!, $spec: JSON!) "
@@ -168,6 +168,29 @@ def test_graphql_adapter_rejects_http_200_graphql_errors(method):
 
     assert str(exc_info.value) == "GraphQL request failed: Invalid query specification"
     assert "locations" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "errors",
+    (
+        {"message": "Invalid query specification"},
+        "Invalid query specification",
+        ["Invalid query specification"],
+    ),
+)
+def test_graphql_adapter_rejects_malformed_graphql_errors(errors):
+    from recap.adapter.graphql import GraphQLAdapter
+
+    response = response_with({"data": None, "errors": errors})
+
+    with (
+        patch("httpx2.Client.post", return_value=response),
+        GraphQLAdapter("http://localhost:9999/graphql") as adapter,
+        pytest.raises(RuntimeError) as exc_info,
+    ):
+        adapter.query(ResourceSchema, QuerySpec())
+
+    assert str(exc_info.value) == "GraphQL request failed: malformed error response"
 
 
 @pytest.mark.parametrize(
