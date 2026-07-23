@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from uuid import UUID
 
 import strawberry
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from strawberry.scalars import JSON
 
 from recap.adapter.local import LocalBackend
@@ -35,20 +37,19 @@ from recap.server.strawberry_types import (
 _DEFAULT_LIMIT = 1000
 _MAX_LIMIT = 10_000
 
-_SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
-    schema.__name__: schema
-    for schema in (
-        ResourceSchema,
-        ResourceRef,
-        ResourceTemplateSchema,
-        ResourceTemplateRef,
-        ProcessRunSchema,
-        ProcessRunRef,
-        ProcessTemplateSchema,
-        ProcessTemplateRef,
-        CampaignSchema,
-    )
-}
+_SCHEMA_REGISTRY: Mapping[str, type[BaseModel]] = MappingProxyType(
+    {
+        "ResourceSchema": ResourceSchema,
+        "ResourceRef": ResourceRef,
+        "ResourceTemplateSchema": ResourceTemplateSchema,
+        "ResourceTemplateRef": ResourceTemplateRef,
+        "ProcessRunSchema": ProcessRunSchema,
+        "ProcessRunRef": ProcessRunRef,
+        "ProcessTemplateSchema": ProcessTemplateSchema,
+        "ProcessTemplateRef": ProcessTemplateRef,
+        "CampaignSchema": CampaignSchema,
+    }
+)
 
 
 def _resolve_schema(schema_name: str) -> type[BaseModel]:
@@ -56,7 +57,16 @@ def _resolve_schema(schema_name: str) -> type[BaseModel]:
         return _SCHEMA_REGISTRY[schema_name]
     except KeyError as exc:
         raise strawberry.exceptions.StrawberryGraphQLError(
-            f"Unknown schema: {schema_name}"
+            "Unknown query schema"
+        ) from exc
+
+
+def _validate_query_spec(spec: JSON) -> QuerySpec:
+    try:
+        return QuerySpec.model_validate(spec)
+    except ValidationError as exc:
+        raise strawberry.exceptions.StrawberryGraphQLError(
+            "Invalid query specification"
         ) from exc
 
 
@@ -65,7 +75,7 @@ def resolve_execute_query(
 ) -> JSON:
     backend: LocalBackend = info.context["backend"]
     schema = _resolve_schema(schema_name)
-    query_spec = QuerySpec.model_validate(spec)
+    query_spec = _validate_query_spec(spec)
     items = [serialize_model(item) for item in backend.query(schema, query_spec)]
     return QueryResult(schema_name=schema_name, items=items).model_dump(mode="json")
 
@@ -75,7 +85,7 @@ def resolve_execute_count(
 ) -> int:
     backend: LocalBackend = info.context["backend"]
     schema = _resolve_schema(schema_name)
-    return backend.count(schema, QuerySpec.model_validate(spec))
+    return backend.count(schema, _validate_query_spec(spec))
 
 
 def _resource_schema_to_type(r: ResourceSchema) -> ResourceType:

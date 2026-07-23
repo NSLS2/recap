@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from recap.client import RecapClient
@@ -169,14 +170,41 @@ def test_execute_query_rejects_unknown_schema(tmp_path):
         "/graphql",
         json={
             "query": EXECUTE_QUERY,
-            "variables": {"schema_name": "UnknownSchema", "spec": {}},
+            "variables": {"schema_name": "attacker-controlled", "spec": {}},
         },
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["data"] is None
-    assert body["errors"][0]["message"] == "Unknown schema: UnknownSchema"
+    assert body["errors"][0]["message"] == "Unknown query schema"
+    assert "attacker-controlled" not in str(body)
+
+
+@pytest.mark.parametrize(
+    "query",
+    (EXECUTE_QUERY, EXECUTE_COUNT),
+    ids=("query", "count"),
+)
+def test_execute_rejects_malformed_query_spec(tmp_path, query):
+    client = TestClient(make_test_app(tmp_path))
+
+    response = client.post(
+        "/graphql",
+        json={
+            "query": query,
+            "variables": {
+                "schema_name": "ResourceSchema",
+                "spec": {"load_mode": "attacker-controlled"},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"] is None
+    assert body["errors"][0]["message"] == "Invalid query specification"
+    assert "attacker-controlled" not in str(body)
 
 
 def test_execute_query_preserves_unlimited_spec():
