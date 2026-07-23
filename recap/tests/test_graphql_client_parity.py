@@ -1,4 +1,4 @@
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from urllib.parse import urlparse
 
 import httpx2
@@ -34,78 +34,74 @@ def _assert_query_parity(clients, query):
 @pytest.fixture
 def parity_clients(tmp_path, monkeypatch):
     db_path = tmp_path / "parity.db"
-    local = RecapClient.from_sqlite(db_path)
+    with ExitStack() as stack:
+        local = stack.enter_context(RecapClient.from_sqlite(db_path))
 
-    local.create_campaign(
-        "MX parity campaign",
-        "PROPOSAL-42",
-        saf="SAF-7",
-        metadata={"beamline": "AMX"},
-    )
-    with local.build_resource_template(
-        name="Parity plate", type_names=["container", "plate"]
-    ) as template:
-        template.add_properties(
-            {"metrics": [{"name": "rating", "type": "int", "default": 1}]}
+        local.create_campaign(
+            "MX parity campaign",
+            "PROPOSAL-42",
+            saf="SAF-7",
+            metadata={"beamline": "AMX"},
         )
-        (
-            template.add_child("sample", ["sample"])
-            .add_properties(
-                {"contents": [{"name": "mass", "type": "float", "default": 2.5}]}
+        with local.build_resource_template(
+            name="Parity plate", type_names=["container", "plate"]
+        ) as template:
+            template.add_properties(
+                {"metrics": [{"name": "rating", "type": "int", "default": 1}]}
             )
-            .close_child()
-        )
-
-    first_plate = local.create_resource("plate-1", "Parity plate")
-    second_plate = local.create_resource("plate-2", "Parity plate")
-    for plate, rating in ((first_plate, 12), (second_plate, 3)):
-        with local.build_resource(resource_id=plate.id) as builder:
-            model = builder.get_model()
-            model.properties.metrics.rating = rating
-            builder.set_model(model)
-
-    with local.build_process_template("Parity workflow", "1.0") as template:
-        template.add_resource_slot("plate", "container", Direction.input)
-        (
-            template.add_step("Collect")
-            .add_parameters(
-                {"exposure": [{"name": "dwell", "type": "int", "default": 1}]}
+            (
+                template.add_child("sample", ["sample"])
+                .add_properties(
+                    {"contents": [{"name": "mass", "type": "float", "default": 2.5}]}
+                )
+                .close_child()
             )
-            .bind_slot("source", "plate")
-            .close_step()
-        )
 
-    for name, plate, dwell in (
-        ("run-high", first_plate, 15),
-        ("run-low", second_plate, 5),
-    ):
-        with local.build_process_run(
-            name, "GraphQL parity run", "Parity workflow", "1.0"
-        ) as run:
-            run.assign_resource("plate", plate)
-            parameters = run.get_params("Collect")
-            parameters.exposure.dwell = dwell
-            run.set_params(parameters)
+        first_plate = local.create_resource("plate-1", "Parity plate")
+        second_plate = local.create_resource("plate-2", "Parity plate")
+        for plate, rating in ((first_plate, 12), (second_plate, 3)):
+            with local.build_resource(resource_id=plate.id) as builder:
+                model = builder.get_model()
+                model.properties.metrics.rating = rating
+                builder.set_model(model)
 
-    app_client = TestClient(create_app(db_path))
+        with local.build_process_template("Parity workflow", "1.0") as template:
+            template.add_resource_slot("plate", "container", Direction.input)
+            (
+                template.add_step("Collect")
+                .add_parameters(
+                    {"exposure": [{"name": "dwell", "type": "int", "default": 1}]}
+                )
+                .bind_slot("source", "plate")
+                .close_step()
+            )
 
-    def get(url, *args, **kwargs):
-        assert urlparse(url).path == "/db_path"
-        return app_client.get("/db_path", *args, **kwargs)
+        for name, plate, dwell in (
+            ("run-high", first_plate, 15),
+            ("run-low", second_plate, 5),
+        ):
+            with local.build_process_run(
+                name, "GraphQL parity run", "Parity workflow", "1.0"
+            ) as run:
+                run.assign_resource("plate", plate)
+                parameters = run.get_params("Collect")
+                parameters.exposure.dwell = dwell
+                run.set_params(parameters)
 
-    def post(_client, url, *, json, **kwargs):
-        assert urlparse(url).path == "/graphql"
-        return app_client.post("/graphql", json=json, **kwargs)
+        app_client = stack.enter_context(TestClient(create_app(db_path)))
 
-    monkeypatch.setattr(httpx2, "get", get)
-    monkeypatch.setattr(httpx2.Client, "post", post)
-    remote = RecapClient.from_url("http://recap.test")
-    try:
+        def get(url, *args, **kwargs):
+            assert urlparse(url).path == "/db_path"
+            return app_client.get("/db_path", *args, **kwargs)
+
+        def post(_client, url, *, json, **kwargs):
+            assert urlparse(url).path == "/graphql"
+            return app_client.post("/graphql", json=json, **kwargs)
+
+        monkeypatch.setattr(httpx2, "get", get)
+        monkeypatch.setattr(httpx2.Client, "post", post)
+        remote = stack.enter_context(RecapClient.from_url("http://recap.test"))
         yield local, remote
-    finally:
-        remote.close()
-        local.close()
-        app_client.close()
 
 
 @pytest.mark.parametrize(
@@ -181,7 +177,7 @@ def test_reference_shape_parity(parity_clients, query, expected_type):
 
 
 def test_filters_scopes_pagination_and_count_parity(parity_clients):
-    local, _ = parity_clients
+    local, remote = parity_clients
     parent = (
         local.query_maker(unscoped=True)
         .resources()
@@ -209,7 +205,7 @@ def test_filters_scopes_pagination_and_count_parity(parity_clients):
         _assert_query_parity(parity_clients, query)
 
     local_q = local.query_maker(unscoped=True)
-    remote_q = parity_clients[1].query_maker(unscoped=True)
+    remote_q = remote.query_maker(unscoped=True)
     count_queries = [
         lambda q: q.resources().count(),
         lambda q: q.resources().filter_property("rating", gt=10).count(),
