@@ -30,7 +30,7 @@ def _check_graphql_errors(body: Mapping[str, Any]) -> None:
         return
     if (
         not isinstance(errors, Sequence)
-        or isinstance(errors, (str, bytes))
+        or isinstance(errors, str | bytes)
         or not all(isinstance(error, Mapping) for error in errors)
     ):
         raise RuntimeError("GraphQL request failed: malformed error response")
