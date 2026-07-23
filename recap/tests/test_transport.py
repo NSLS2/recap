@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from recap.adapter.transport import (
     QueryRequest,
     QueryResult,
+    _restore_metadata,
     hydrate_result,
     serialize_model,
 )
@@ -225,6 +226,31 @@ def test_query_request_serializes_complete_supported_query_spec():
 def test_query_request_rejects_non_transportable_query_features(field, value, message):
     with pytest.raises(NotImplementedError, match=message):
         QueryRequest.from_query(ResourceSchema, QuerySpec(**{field: value}))
+
+
+def test_datetime_default_value_round_trips_as_datetime():
+    group = attribute_group()
+
+    payload = serialize_model(group)
+    [hydrated] = hydrate_result(
+        AttributeGroupTemplateSchema,
+        QueryResult(schema_name="AttributeGroupTemplateSchema", items=[payload]),
+    )
+
+    assert payload["attribute_templates"][0]["default_value"] == {
+        "__recap_transport_scalar_v1__": "datetime",
+        "value": STAMP.isoformat(),
+    }
+    assert hydrated.attribute_templates[0].default_value == STAMP
+    assert isinstance(hydrated.attribute_templates[0].default_value, datetime)
+
+
+def test_metadata_restoration_rejects_sequence_length_mismatch():
+    resource = minimal_resource()
+    payload = serialize_model(resource)
+
+    with pytest.raises(ValueError, match="zip"):
+        _restore_metadata([resource], [payload, payload])
 
 
 def test_resource_round_trip_preserves_full_graph_and_transport_state():

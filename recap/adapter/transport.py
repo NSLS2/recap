@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import date, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, get_args
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -13,6 +13,8 @@ from recap.dsl.query import QuerySpec
 from recap.schemas.attribute import AttributeGroupTemplateSchema
 from recap.schemas.process import ProcessRunSchema
 from recap.schemas.resource import ResourceSchema
+
+_SCALAR_TAG = "__recap_transport_scalar_v1__"
 
 
 class QueryRequest(BaseModel):
@@ -44,7 +46,9 @@ def serialize_model(model: BaseModel) -> dict[str, Any]:
         if name not in values:
             continue
         key = field.serialization_alias or field.alias or name
-        payload[key] = _serialize_value(values[name])
+        payload[key] = _serialize_value(
+            values[name], tag_scalars=_contains_any(field.annotation)
+        )
 
     if isinstance(model, ResourceSchema | ProcessRunSchema):
         private = model.__pydantic_private__ or {}
@@ -55,19 +59,30 @@ def serialize_model(model: BaseModel) -> dict[str, Any]:
     return payload
 
 
-def _serialize_value(value: Any) -> Any:
+def _contains_any(annotation: Any) -> bool:
+    return annotation is Any or any(_contains_any(arg) for arg in get_args(annotation))
+
+
+def _serialize_value(value: Any, *, tag_scalars: bool = False) -> Any:
     if isinstance(value, BaseModel):
         return serialize_model(value)
     if isinstance(value, Mapping):
-        return {str(key): _serialize_value(item) for key, item in value.items()}
+        return {
+            str(key): _serialize_value(item, tag_scalars=tag_scalars)
+            for key, item in value.items()
+        }
     if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return [_serialize_value(item) for item in value]
+        return [_serialize_value(item, tag_scalars=tag_scalars) for item in value]
     if isinstance(value, UUID):
         return str(value)
-    if isinstance(value, datetime | date):
+    if isinstance(value, datetime):
+        if tag_scalars:
+            return {_SCALAR_TAG: "datetime", "value": value.isoformat()}
+        return value.isoformat()
+    if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, Enum):
-        return _serialize_value(value.value)
+        return _serialize_value(value.value, tag_scalars=tag_scalars)
     return value
 
 
@@ -75,11 +90,26 @@ def hydrate_result(schema: type[BaseModel], result: QueryResult) -> list[BaseMod
     hydrated: list[BaseModel] = []
     for item in result.items:
         payload = deepcopy(item)
+        payload = _decode_tagged_scalars(payload)
         _prepare_dynamic_models(payload)
         model = schema.model_validate(payload)
         _restore_metadata(model, item)
         hydrated.append(model)
     return hydrated
+
+
+def _decode_tagged_scalars(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        if (
+            len(value) == 2
+            and value.get(_SCALAR_TAG) == "datetime"
+            and isinstance(value.get("value"), str)
+        ):
+            return datetime.fromisoformat(value["value"])
+        return {key: _decode_tagged_scalars(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return [_decode_tagged_scalars(item) for item in value]
+    return value
 
 
 def _prepare_dynamic_models(value: Any) -> None:
@@ -112,7 +142,7 @@ def _restore_metadata(value: Any, payload: Any) -> None:
     if isinstance(value, Sequence) and isinstance(payload, Sequence):
         if isinstance(value, str | bytes | bytearray):
             return
-        for item, item_payload in zip(value, payload, strict=False):
+        for item, item_payload in zip(value, payload, strict=True):
             _restore_metadata(item, item_payload)
 
 
