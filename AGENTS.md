@@ -4,11 +4,14 @@ RECAP — experiment provenance framework. SQLAlchemy 2.0 + Pydantic v2 + Alembi
 
 ## Commands (tooling is run via pixi, not bare PATH)
 
+**ALL Python execution must go through pixi. Never use bare `python`, `pytest`, `ruff`, or any other tool directly — the pixi-managed environment is the only valid runtime.**
+
 - Tests: `pixi run -e dev test` (= `pytest -s -ra recap/tests`). Tests live in `recap/tests/`, not a top-level `tests/`.
 - Single test: `pixi run -e dev pytest recap/tests/test_client.py::test_name`
 - Lint/format: `pixi run -e dev lint` (= `pre-commit run --all-files`; runs `ruff --fix` then `ruff-format`)
 - Docs: `pixi run -e docs docs-build` (mkdocs `--strict`)
 - Build: `pixi run -e build build` (hatch)
+- Arbitrary Python: `pixi run -e dev python -c "..."` or `pixi run -e dev python script.py`
 
 ## Package layout
 
