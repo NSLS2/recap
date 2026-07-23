@@ -1,21 +1,24 @@
 import os
 import tempfile
-from pathlib import Path
 
-from recap.adapter import Backend, ReadBackend, WriteBackend
+from recap.adapter import ReadBackend, WriteBackend
 from recap.adapter.local import LocalBackend
 
 
 def test_read_backend_is_protocol():
     from typing import Protocol
 
-    assert issubclass(ReadBackend, Protocol) or hasattr(ReadBackend, "__protocol_attrs__")
+    assert issubclass(ReadBackend, Protocol) or hasattr(
+        ReadBackend, "__protocol_attrs__"
+    )
 
 
 def test_write_backend_is_protocol():
     from typing import Protocol
 
-    assert issubclass(WriteBackend, Protocol) or hasattr(WriteBackend, "__protocol_attrs__")
+    assert issubclass(WriteBackend, Protocol) or hasattr(
+        WriteBackend, "__protocol_attrs__"
+    )
 
 
 def test_local_backend_satisfies_backend():

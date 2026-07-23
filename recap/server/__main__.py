@@ -5,6 +5,7 @@ Usage:
     python -m recap.server --config recap-server.yaml
     recap-server --db recap.db --port 8000
 """
+
 from __future__ import annotations
 
 import argparse
@@ -19,14 +20,21 @@ def main() -> None:
     parser.add_argument("--db", metavar="PATH", help="Path to SQLite database file")
     parser.add_argument("--config", metavar="PATH", help="Path to YAML config file")
     parser.add_argument("--host", default=None, help="Bind host (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=None, help="Bind port (default: 8000)")
-    parser.add_argument("--log-level", default=None, dest="log_level", help="Log level (default: info)")
+    parser.add_argument(
+        "--port", type=int, default=None, help="Bind port (default: 8000)"
+    )
+    parser.add_argument(
+        "--log-level", default=None, dest="log_level", help="Log level (default: info)"
+    )
     args = parser.parse_args()
 
     try:
         import uvicorn
     except ImportError:
-        print("uvicorn not installed. Install with: pip install 'pyrecap[server]'", file=sys.stderr)
+        print(
+            "uvicorn not installed. Install with: pip install 'pyrecap[server]'",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     from recap.server.config import ServerConfig

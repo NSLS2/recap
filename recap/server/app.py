@@ -1,4 +1,5 @@
 """FastAPI application factory for the recap GraphQL server."""
+
 from __future__ import annotations
 
 from pathlib import Path

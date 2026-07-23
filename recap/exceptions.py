@@ -63,7 +63,9 @@ class UnloadedFieldError(RuntimeError):
 class RecapConnectionError(Exception):
     """Raised when RecapClient cannot connect to a recap server."""
 
-    def __init__(self, url: str, status_code: int | None = None, message: str | None = None):
+    def __init__(
+        self, url: str, status_code: int | None = None, message: str | None = None
+    ):
         self.url = url
         self.status_code = status_code
         detail = f" (HTTP {status_code})" if status_code else ""

@@ -29,7 +29,7 @@ class ServerConfig(BaseSettings):
         return Path(str(v))
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "ServerConfig":
+    def from_yaml(cls, path: str | Path) -> ServerConfig:
         """Load ServerConfig from a YAML file.
 
         YAML must have a top-level 'server:' key. db_path is required.

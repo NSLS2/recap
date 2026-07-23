@@ -91,7 +91,11 @@ class RecapClient:
             backend.close()
         # Close read_backend separately when it differs from backend (e.g. GraphQLAdapter)
         read_backend = getattr(self, "_read_backend", None)
-        if read_backend and read_backend is not backend and hasattr(read_backend, "close"):
+        if (
+            read_backend
+            and read_backend is not backend
+            and hasattr(read_backend, "close")
+        ):
             read_backend.close()
         engine = getattr(self, "engine", None)
         if engine:
@@ -162,7 +166,9 @@ class RecapClient:
         except httpx2.TimeoutException as exc:
             raise RecapConnectionError(url, message=str(exc)) from exc
         except httpx2.HTTPStatusError as exc:
-            raise RecapConnectionError(url, status_code=exc.response.status_code) from exc
+            raise RecapConnectionError(
+                url, status_code=exc.response.status_code
+            ) from exc
 
         db_path = response.json()["db_path"]
 
@@ -179,7 +185,9 @@ class RecapClient:
         write_backend = LocalBackend(sm)
         read_backend = GraphQLAdapter(graphql_url=f"{base}/graphql")
 
-        instance = cls._from_backends(read_backend=read_backend, write_backend=write_backend)
+        instance = cls._from_backends(
+            read_backend=read_backend, write_backend=write_backend
+        )
         instance.database_path = None  # server-side path, not local
         instance.engine = engine
         return instance

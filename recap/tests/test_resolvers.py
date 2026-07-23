@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 
 def make_mock_info(backend):
@@ -44,6 +45,7 @@ def test_resolve_resources_count(tmp_path):
 
 def test_resolve_resources_enforces_max_limit(tmp_path):
     import strawberry
+
     from recap.server.resolvers import resolve_resources
 
     backend = make_backend(tmp_path)

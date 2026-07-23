@@ -1,4 +1,5 @@
 """Strawberry GraphQL types derived from recap Pydantic schemas."""
+
 from __future__ import annotations
 
 from datetime import datetime
