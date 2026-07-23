@@ -1,14 +1,29 @@
 """GraphQL resolver functions. Call LocalBackend directly — no RecapClient, no QueryDSL."""
+
 from __future__ import annotations
 
 from uuid import UUID
 
 import strawberry
+from pydantic import BaseModel
+from strawberry.scalars import JSON
 
 from recap.adapter.local import LocalBackend
+from recap.adapter.transport import QueryResult, serialize_model
 from recap.dsl.query import QuerySpec
-from recap.schemas.process import CampaignSchema, ProcessRunSchema, ProcessTemplateSchema
-from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
+from recap.schemas.process import (
+    CampaignSchema,
+    ProcessRunRef,
+    ProcessRunSchema,
+    ProcessTemplateRef,
+    ProcessTemplateSchema,
+)
+from recap.schemas.resource import (
+    ResourceRef,
+    ResourceSchema,
+    ResourceTemplateRef,
+    ResourceTemplateSchema,
+)
 from recap.server.strawberry_types import (
     CampaignType,
     ProcessRunType,
@@ -19,6 +34,48 @@ from recap.server.strawberry_types import (
 
 _DEFAULT_LIMIT = 1000
 _MAX_LIMIT = 10_000
+
+_SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
+    schema.__name__: schema
+    for schema in (
+        ResourceSchema,
+        ResourceRef,
+        ResourceTemplateSchema,
+        ResourceTemplateRef,
+        ProcessRunSchema,
+        ProcessRunRef,
+        ProcessTemplateSchema,
+        ProcessTemplateRef,
+        CampaignSchema,
+    )
+}
+
+
+def _resolve_schema(schema_name: str) -> type[BaseModel]:
+    try:
+        return _SCHEMA_REGISTRY[schema_name]
+    except KeyError as exc:
+        raise strawberry.exceptions.StrawberryGraphQLError(
+            f"Unknown schema: {schema_name}"
+        ) from exc
+
+
+def resolve_execute_query(
+    info: strawberry.types.Info, schema_name: str, spec: JSON
+) -> JSON:
+    backend: LocalBackend = info.context["backend"]
+    schema = _resolve_schema(schema_name)
+    query_spec = QuerySpec.model_validate(spec)
+    items = [serialize_model(item) for item in backend.query(schema, query_spec)]
+    return QueryResult(schema_name=schema_name, items=items).model_dump(mode="json")
+
+
+def resolve_execute_count(
+    info: strawberry.types.Info, schema_name: str, spec: JSON
+) -> int:
+    backend: LocalBackend = info.context["backend"]
+    schema = _resolve_schema(schema_name)
+    return backend.count(schema, QuerySpec.model_validate(spec))
 
 
 def _resource_schema_to_type(r: ResourceSchema) -> ResourceType:
@@ -60,7 +117,9 @@ def _process_template_schema_to_type(pt: ProcessTemplateSchema) -> ProcessTempla
     )
 
 
-def _resource_template_schema_to_type(r: ResourceTemplateSchema) -> ResourceTemplateType:
+def _resource_template_schema_to_type(
+    r: ResourceTemplateSchema,
+) -> ResourceTemplateType:
     return ResourceTemplateType(
         id=strawberry.ID(str(r.id)),
         name=r.name,
