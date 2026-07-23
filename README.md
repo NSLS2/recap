@@ -1142,7 +1142,22 @@ recap-server --db /path/to/recap.db --port 8000
 recap-server --config recap-server.yaml
 ```
 
-`RecapClient.from_url()` connects to a running server — reads go via GraphQL, writes go directly to the shared SQLite file (Phase 1 constraint: client and server must share a filesystem):
+`RecapClient.from_url()` connects to a running server. For reads, the Python
+client sends the complete `QuerySpec` through an internal GraphQL field. The
+server reconstructs the query and delegates it unchanged to `LocalBackend`, so
+load modes, includes, pagination, and unloaded-field policy match local queries.
+The client then uses Pydantic validators to reconstruct nested models and
+restores relation-load metadata, including warning or raising when an unloaded
+field is accessed.
+
+Callable predicates passed to `where()` and backend-specific orderings passed
+to `order_by()` cannot currently be serialized over HTTP; remote queries using
+them raise `NotImplementedError`.
+
+Writes do not travel through GraphQL. `from_url()` fetches the database path
+reported by the server and opens that SQLite file directly with `LocalBackend`.
+The client and server must therefore have shared filesystem access, and the
+server-reported path must resolve to the same database from both processes.
 
 ```python
 client = RecapClient.from_url("http://localhost:8000")
@@ -1155,4 +1170,3 @@ The recap GraphQL server disables Strawberry's default camelCase conversion (`au
 This is intentional for Phase 1 — it allows the Python client to deserialize GraphQL responses directly into Pydantic schemas without a translation layer.
 
 **Impact for external GraphQL clients** (GraphiQL, language clients, etc.): use snake_case field names in all queries. This behaviour may change in a future release when a dedicated response translation layer is added.
-
