@@ -1,10 +1,12 @@
 import json
 import warnings
+from collections.abc import Sequence
 from contextlib import contextmanager
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, Field, TypeAdapter, create_model
+from pydantic import ValidationError as PydanticError
 from sqlalchemy import Float, Integer, Select, String, cast, insert, select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session, aliased
@@ -37,7 +39,7 @@ from recap.db.resource import (
     resource_template_type_association,
 )
 from recap.db.step import Parameter, Step, StepTemplate, StepTemplateResourceSlotBinding
-from recap.dsl.query import QuerySpec, SchemaT
+from recap.dsl.query import FieldOrdering, FieldPredicate, QuerySpec, SchemaT
 from recap.exceptions import ExistingResourceError, ExistingResourceWarning
 from recap.schemas.attribute import (
     AttributeGroupRef,
@@ -79,6 +81,80 @@ SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
     ResourceRef: Resource,
     ProcessTemplateSchema: ProcessTemplate,
 }
+
+
+def _coerce_field_value(field_name: str, column, value):
+    try:
+        python_type = column.property.columns[0].type.python_type
+        return TypeAdapter(python_type).validate_python(value)
+    except (PydanticError, TypeError, ValueError) as err:
+        raise ValueError(f"Invalid value {value!r} for field '{field_name}'") from err
+
+
+def _translate_field_predicate(column, predicate: FieldPredicate):
+    string_operations = {"contains", "starts_with", "ends_with"}
+    python_type = column.property.columns[0].type.python_type
+
+    if predicate.op in string_operations:
+        if python_type is not str or not isinstance(predicate.value, str):
+            raise ValueError(
+                f"Field '{predicate.field}' requires a string column and string value "
+                f"for operator '{predicate.op}'"
+            )
+        value = predicate.value
+    elif predicate.op in {"in", "not_in"}:
+        if isinstance(predicate.value, str) or not isinstance(
+            predicate.value, Sequence
+        ):
+            raise ValueError(
+                f"Invalid membership value for field '{predicate.field}': "
+                "expected a non-string sequence"
+            )
+        value = [
+            _coerce_field_value(predicate.field, column, item)
+            for item in predicate.value
+        ]
+    elif predicate.value is None and predicate.op in {"eq", "ne"}:
+        value = None
+    else:
+        value = _coerce_field_value(predicate.field, column, predicate.value)
+
+    operations = {
+        "eq": lambda column, value: column == value,
+        "ne": lambda column, value: column != value,
+        "gt": lambda column, value: column > value,
+        "gte": lambda column, value: column >= value,
+        "lt": lambda column, value: column < value,
+        "lte": lambda column, value: column <= value,
+        "in": lambda column, value: column.in_(value),
+        "not_in": lambda column, value: column.not_in(value),
+        "contains": lambda column, value: column.contains(value, autoescape=True),
+        "starts_with": lambda column, value: column.startswith(value, autoescape=True),
+        "ends_with": lambda column, value: column.endswith(value, autoescape=True),
+    }
+    return operations[predicate.op](column, value)
+
+
+def _apply_field_expressions(model, stmt, spec, joined_paths):
+    for predicate in spec.predicates:
+        if isinstance(predicate, FieldPredicate):
+            stmt, column = resolve_path(
+                model, stmt, tuple(predicate.field.split(".")), joined_paths
+            )
+            predicate = _translate_field_predicate(column, predicate)
+        stmt = stmt.where(predicate)
+
+    orderings = []
+    for ordering in spec.orderings:
+        if isinstance(ordering, FieldOrdering):
+            stmt, column = resolve_path(
+                model, stmt, tuple(ordering.field.split(".")), joined_paths
+            )
+            ordering = column.asc() if ordering.direction == "asc" else column.desc()
+        orderings.append(ordering)
+    if orderings:
+        stmt = stmt.order_by(*orderings)
+    return stmt
 
 
 class SQLUnitOfWork(UnitOfWork):
@@ -1262,14 +1338,7 @@ class LocalBackend(Backend):
             stmt = self._build_select_process_run(model, stmt, spec)
 
         stmt = self._apply_campaign_scope(model, stmt, spec)
-
-        for pred in spec.predicates:
-            stmt = stmt.where(pred)
-
-        if spec.orderings:
-            stmt = stmt.order_by(*spec.orderings)
-
-        return stmt
+        return _apply_field_expressions(model, stmt, spec, joined_paths)
 
     def query(self, schema: type[SchemaT], spec: QuerySpec) -> list[SchemaT]:
         stmt = self._build_select(schema, spec)
