@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from uuid import uuid4
 
 import pytest
@@ -11,10 +12,20 @@ from recap.db.campaign import Campaign
 from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate, StepTemplateResourceSlotBinding
-from recap.dsl.query import QueryDSL
+from recap.dsl.query import QueryDSL, ResourceQuery
 from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
-from recap.schemas.process import ProcessRunRef, ProcessTemplateRef
-from recap.schemas.resource import ResourceRef, ResourceTemplateRef
+from recap.schemas.process import (
+    ProcessRunRef,
+    ProcessRunSchema,
+    ProcessTemplateRef,
+    ProcessTemplateSchema,
+)
+from recap.schemas.resource import (
+    ResourceRef,
+    ResourceSchema,
+    ResourceTemplateRef,
+    ResourceTemplateSchema,
+)
 from recap.utils.database import get_or_create
 from recap.utils.general import Direction
 
@@ -216,14 +227,101 @@ def test_include_steps_with_parameters_adds_nested_preload(db_session):
     assert query._spec.load_mode == "none"
 
 
-def test_process_run_include_rejects_ref_shape(db_session):
-    with pytest.raises(ValueError, match="shape='schema'"):
-        make_query(db_session).process_runs(shape="ref").include("steps")
+@pytest.mark.parametrize(
+    ("factory", "schema"),
+    [
+        ("process_runs", ProcessRunSchema),
+        ("process_templates", ProcessTemplateSchema),
+        ("resources", ResourceSchema),
+        ("resource_templates", ResourceTemplateSchema),
+    ],
+)
+def test_query_defaults_use_full_shape(factory, schema, db_session):
+    query = getattr(make_query(db_session), factory)()
+
+    assert query._shape == "full"
+    assert query.model is schema
+    assert query._spec.load_mode == "none"
 
 
-def test_process_run_include_rejects_full_load(db_session):
-    with pytest.raises(ValueError, match="load='full'"):
-        make_query(db_session).process_runs(load="full").include("steps")
+@pytest.mark.parametrize(
+    ("factory", "schema"),
+    [
+        ("process_runs", ProcessRunSchema),
+        ("process_templates", ProcessTemplateSchema),
+        ("resources", ResourceSchema),
+        ("resource_templates", ResourceTemplateSchema),
+    ],
+)
+def test_query_accepts_eager_load(factory, schema, db_session):
+    query = getattr(make_query(db_session), factory)(shape="full", load="eager")
+
+    assert query._shape == "full"
+    assert query._load == "eager"
+    assert query.model is schema
+    assert query._spec.load_mode == "eager"
+
+
+def test_deprecated_query_names_warn_and_normalize_immediately(db_session):
+    with pytest.warns(DeprecationWarning) as warnings_seen:
+        query = make_query(db_session).resources(shape="schema", load="full")
+
+    assert len(warnings_seen) == 2
+    assert query._shape == "full"
+    assert query._load == "eager"
+    assert query._spec.load_mode == "eager"
+
+
+def test_cloning_normalized_query_emits_no_deprecation_warning(db_session):
+    with pytest.warns(DeprecationWarning):
+        query = make_query(db_session).resources(shape="schema", load="full")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        cloned = query.filter(name="sample").limit(1)
+
+    assert cloned._shape == "full"
+    assert cloned._load == "eager"
+
+
+def test_direct_query_construction_normalizes_deprecated_names(db_session):
+    backend = make_query(db_session).backend
+    with pytest.warns(DeprecationWarning) as warnings_seen:
+        query = ResourceQuery(backend, shape="schema", load="full")
+
+    assert len(warnings_seen) == 2
+    assert query._shape == "full"
+    assert query._load == "eager"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"shape": "invalid"}, "shape must be one of"),
+        ({"load": "invalid"}, "load must be one of"),
+    ],
+)
+def test_query_rejects_unknown_shape_and_load(kwargs, message, db_session):
+    with pytest.raises(ValueError, match=message):
+        make_query(db_session).resources(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "factory",
+    ["process_runs", "process_templates", "resources", "resource_templates"],
+)
+def test_query_include_rejects_ref_shape(factory, db_session):
+    with pytest.raises(ValueError, match="shape='full'"):
+        getattr(make_query(db_session), factory)(shape="ref").include("relation")
+
+
+@pytest.mark.parametrize(
+    "factory",
+    ["process_runs", "process_templates", "resources", "resource_templates"],
+)
+def test_query_include_rejects_eager_load(factory, db_session):
+    with pytest.raises(ValueError, match="load='eager'"):
+        getattr(make_query(db_session), factory)(load="eager").include("relation")
 
 
 def test_process_runs_ref_shape_and_load_mode(db_session):
