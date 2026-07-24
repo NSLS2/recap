@@ -1,9 +1,11 @@
-from collections.abc import Sequence
+import warnings
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, field_validator
+from pydantic import Field as PydanticField
 
 from recap.schemas.resource import (
     ResourceRef,
@@ -31,6 +33,104 @@ except ModuleNotFoundError:
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 ModelT = TypeVar("ModelT")
 OnUnloadedPolicy = Literal["silent", "warn", "raise"]
+FieldOperator = Literal[
+    "eq",
+    "ne",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "in",
+    "not_in",
+    "contains",
+    "starts_with",
+    "ends_with",
+]
+
+
+def _validate_field_path(path: str) -> str:
+    if (
+        not isinstance(path, str)
+        or not path
+        or any(not part for part in path.split("."))
+    ):
+        raise ValueError("field path must contain non-empty dot-separated names")
+    return path
+
+
+class FieldPredicate(BaseModel):
+    field: str
+    op: FieldOperator
+    value: Any
+
+    _validate_field = field_validator("field")(_validate_field_path)
+
+    def __bool__(self) -> bool:
+        raise TypeError(
+            "Field predicates cannot use Python 'and' or 'or'; "
+            "chain where() calls to combine predicates with AND"
+        )
+
+
+class FieldOrdering(BaseModel):
+    field: str
+    direction: Literal["asc", "desc"] = "asc"
+
+    _validate_field = field_validator("field")(_validate_field_path)
+
+
+class Field:
+    def __init__(self, path: str):
+        self.path = _validate_field_path(path)
+
+    def _predicate(self, op: FieldOperator, value: Any) -> FieldPredicate:
+        return FieldPredicate(field=self.path, op=op, value=value)
+
+    def __eq__(self, value: Any) -> FieldPredicate:  # type: ignore[override]
+        return self._predicate("eq", value)
+
+    def __ne__(self, value: Any) -> FieldPredicate:  # type: ignore[override]
+        return self._predicate("ne", value)
+
+    def __lt__(self, value: Any) -> FieldPredicate:
+        return self._predicate("lt", value)
+
+    def __le__(self, value: Any) -> FieldPredicate:
+        return self._predicate("lte", value)
+
+    def __gt__(self, value: Any) -> FieldPredicate:
+        return self._predicate("gt", value)
+
+    def __ge__(self, value: Any) -> FieldPredicate:
+        return self._predicate("gte", value)
+
+    def in_(self, values: Sequence[Any]) -> FieldPredicate:
+        return self._membership_predicate("in", values)
+
+    def not_in(self, values: Sequence[Any]) -> FieldPredicate:
+        return self._membership_predicate("not_in", values)
+
+    def _membership_predicate(
+        self, op: Literal["in", "not_in"], values: Sequence[Any]
+    ) -> FieldPredicate:
+        if isinstance(values, str) or not isinstance(values, Sequence):
+            raise TypeError("membership values must be a non-string sequence")
+        return self._predicate(op, list(values))
+
+    def contains(self, value: str) -> FieldPredicate:
+        return self._predicate("contains", value)
+
+    def starts_with(self, value: str) -> FieldPredicate:
+        return self._predicate("starts_with", value)
+
+    def ends_with(self, value: str) -> FieldPredicate:
+        return self._predicate("ends_with", value)
+
+    def asc(self) -> FieldOrdering:
+        return FieldOrdering(field=self.path, direction="asc")
+
+    def desc(self) -> FieldOrdering:
+        return FieldOrdering(field=self.path, direction="desc")
 
 
 class PropertyFilter(BaseModel):
@@ -68,12 +168,36 @@ class QuerySpec(BaseModel):
     preloads: Sequence[str] = ()
     limit: int | None = None
     offset: int | None = None
-    property_filters: list[PropertyFilter] = Field(default_factory=list)
+    property_filters: list[PropertyFilter] = PydanticField(default_factory=list)
     parent_resource_id: UUID | None = None
-    parameter_filters: list[ParameterFilter] = Field(default_factory=list)
+    parameter_filters: list[ParameterFilter] = PydanticField(default_factory=list)
     campaign_id: UUID | None = None
     load_mode: Literal["none", "full"] | None = None
     on_unloaded: OnUnloadedPolicy | None = None
+
+    @field_validator("predicates", mode="before")
+    @classmethod
+    def _normalize_predicates(cls, values):
+        if isinstance(values, Sequence) and not isinstance(values, str):
+            return [
+                FieldPredicate.model_validate(value)
+                if isinstance(value, Mapping)
+                else value
+                for value in values
+            ]
+        return values
+
+    @field_validator("orderings", mode="before")
+    @classmethod
+    def _normalize_orderings(cls, values):
+        if isinstance(values, Sequence) and not isinstance(values, str):
+            return [
+                FieldOrdering.model_validate(value)
+                if isinstance(value, Mapping)
+                else value
+                for value in values
+            ]
+        return values
 
 
 class BaseQuery(Generic[SchemaT]):
@@ -155,10 +279,29 @@ class BaseQuery(Generic[SchemaT]):
         return self._clone(filters=new_filters)
 
     def where(self, *predicates) -> "Self":
+        for predicate in predicates:
+            if not isinstance(predicate, FieldPredicate):
+                warnings.warn(
+                    "Legacy query predicates are deprecated; use Field(...) instead",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
         return self._clone(predicates=self._predicates + list(predicates))
 
     def order_by(self, *orderings) -> "Self":
-        return self._clone(orderings=self._orderings + list(orderings))
+        normalized = []
+        for ordering in orderings:
+            if isinstance(ordering, Field):
+                normalized.append(ordering.asc())
+            else:
+                normalized.append(ordering)
+                if not isinstance(ordering, FieldOrdering):
+                    warnings.warn(
+                        "Legacy query orderings are deprecated; use Field(...) instead",
+                        DeprecationWarning,
+                        stacklevel=2,
+                    )
+        return self._clone(orderings=self._orderings + normalized)
 
     def limit(self, value: int) -> "Self":
         return self._clone(limit=value)
