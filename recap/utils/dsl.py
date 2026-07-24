@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from sqlalchemy.inspection import inspect
-from sqlalchemy.orm import InstrumentedAttribute
+from sqlalchemy.orm import InstrumentedAttribute, RelationshipProperty, aliased
 from sqlalchemy.sql import Select
 
 # Imported lazily-ish at module level to avoid circular imports — AttributeValueSchema
@@ -30,7 +30,7 @@ def resolve_path(
         raise ValueError("Empty path")
 
     current_entity = base_model
-    mapper = inspect(current_entity)
+    mapper = inspect(current_entity).mapper
 
     *rel_path, field_name = path
 
@@ -40,39 +40,46 @@ def resolve_path(
 
         if subpath in joined_paths:
             current_entity = joined_paths[subpath]
-            mapper = inspect(current_entity)
+            mapper = inspect(current_entity).mapper
             continue
 
         rel = mapper.relationships.get(rel_name)
         if rel is None:
             raise ValueError(
-                f"{current_entity.__name__} has no relationship '{rel_name}' "
+                f"{mapper.class_.__name__} has no relationship '{rel_name}' "
                 f"(path: {'__'.join(path)}). Valid relationships include: {mapper.relationships.keys()}"
             )
 
         rel_attr: InstrumentedAttribute = getattr(current_entity, rel.key)
-        target_entity = rel.mapper.class_
+        target_entity = aliased(
+            rel.mapper.class_, name="field_path_" + "_".join(subpath)
+        )
 
-        # Apply the join
-        stmt = stmt.join(rel_attr)
+        stmt = stmt.join(target_entity, rel_attr.of_type(target_entity))
 
         joined_paths[subpath] = target_entity
         current_entity = target_entity
-        mapper = inspect(current_entity)
+        mapper = inspect(current_entity).mapper
 
     # Now resolve the final field on the last entity
     try:
         attr = getattr(current_entity, field_name)
     except AttributeError as err:
         raise ValueError(
-            f"{current_entity.__name__} has no attribute '{field_name}' "
+            f"{mapper.class_.__name__} has no attribute '{field_name}' "
             f"(path: {'__'.join(path)})"
         ) from err
 
     if not isinstance(attr, InstrumentedAttribute):
         raise ValueError(
-            f"Attribute '{field_name}' on {current_entity.__name__} is not a column/relationship "
+            f"Attribute '{field_name}' on {mapper.class_.__name__} is not a column/relationship "
             f"(path: {'__'.join(path)})"
+        )
+
+    if isinstance(attr.property, RelationshipProperty):
+        raise ValueError(
+            f"Attribute '{field_name}' on {mapper.class_.__name__} is a relationship, "
+            "not a column"
         )
 
     return stmt, attr

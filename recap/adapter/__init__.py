@@ -1,4 +1,4 @@
-from typing import Any, Literal, Protocol, overload
+from typing import Any, Literal, Protocol, overload, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -29,34 +29,19 @@ class UnitOfWork(Protocol):
     def end_session(self) -> None: ...
 
 
-class Backend(Protocol):
-    def begin(self) -> UnitOfWork: ...
+@runtime_checkable
+class ReadBackend(Protocol):
+    """Read-only backend contract. Implemented by LocalBackend and GraphQLAdapter."""
 
-    ## Create campaign
-    def create_campaign(
-        self,
-        name: str,
-        proposal: str,
-        saf: str | None,
-        metadata: dict[str, Any] | None = None,
-    ) -> CampaignSchema: ...
-
-    def set_campaign(self, id: UUID) -> CampaignSchema: ...
-
-    def update_campaign(self, campaign: CampaignSchema) -> CampaignSchema: ...
-
-    # Process Template creation
-
-    def create_process_template(
-        self, name: str, version: str
-    ) -> ProcessTemplateRef: ...
+    def query(self, schema: type[SchemaT], spec: QuerySpec) -> list[SchemaT]: ...
+    def count(self, schema: type[SchemaT], spec: QuerySpec) -> int: ...
 
     @overload
     def get_process_template(
         self,
         name: str | None,
         version: str | None,
-        expand: Literal[False] = False,
+        expand: Literal[False],
         id: UUID | str | None = None,
     ) -> ProcessTemplateRef: ...
 
@@ -65,65 +50,9 @@ class Backend(Protocol):
         self,
         name: str | None,
         version: str | None,
-        expand: Literal[True] = True,
+        expand: Literal[True],
         id: UUID | str | None = None,
     ) -> ProcessTemplateSchema: ...
-
-    def add_resource_slot(
-        self,
-        name: str,
-        resource_type: str,
-        direction: Direction,
-        process_template_ref: ProcessTemplateRef,
-        create_resource_type=False,
-        required: bool = True,
-    ) -> ResourceSlotSchema: ...
-
-    def add_step(
-        self, name: str, process_template_ref: ProcessTemplateRef
-    ) -> StepTemplateRef: ...
-
-    def bind_slot(
-        self,
-        role: str,
-        slot_name: str,
-        process_template_ref: ProcessTemplateRef,
-        step_template_ref: StepTemplateRef,
-    ) -> ResourceSlotSchema: ...
-
-    def add_attr_group(
-        self, group_name: str, template: ResourceTemplateRef | StepTemplateRef
-    ) -> AttributeGroupRef: ...
-
-    def add_attribute(
-        self,
-        name: str,
-        value_type: str,
-        unit: str,
-        default: Any,
-        attribute_group_ref: AttributeGroupRef,
-        metadata: dict[str, Any] | None = None,
-    ) -> AttributeTemplateSchema: ...
-
-    def remove_attribute(self, name: str): ...
-
-    # def close_step(self, step_template_ref: StepTemplateRef) -> StepTemplateSchema: ...
-
-    # Resource template creation
-
-    def add_resource_types(self, type_names: list[str]) -> list[ResourceTypeSchema]: ...
-
-    def add_resource_template(
-        self, name: str, type_names: list[ResourceTypeSchema], version: str = "1.0"
-    ) -> ResourceTemplateRef: ...
-
-    def add_child_resource_template(
-        self,
-        name: str,
-        resource_types: list[ResourceTypeSchema],
-        parent_resource_template: ResourceTemplateRef | ResourceTemplateSchema,
-        version: str = "1.0",
-    ) -> ResourceTemplateRef: ...
 
     @overload
     def get_resource_template(
@@ -145,7 +74,98 @@ class Backend(Protocol):
         expand: Literal[True] = False,
     ) -> ResourceTemplateSchema: ...
 
-    # Resource creation
+    def get_resource(
+        self,
+        name: str,
+        template_name: str,
+        template_version: str | None = "1.0",
+        expand: bool = False,
+    ) -> ResourceSchema: ...
+
+    def find_resources_by_identity(
+        self,
+        name: str,
+        parent_id: UUID | None,
+        resource_template_id: UUID,
+    ) -> list: ...
+
+    def get_steps(self, process_run: ProcessRunSchema) -> list[StepSchema]: ...
+    def get_params(self, step_schema: StepSchema) -> type[BaseModel]: ...
+
+
+@runtime_checkable
+class WriteBackend(Protocol):
+    """Write-only backend contract. LocalBackend (Phase 1), RESTAdapter (Phase 2)."""
+
+    def begin(self) -> UnitOfWork: ...
+
+    def create_campaign(
+        self,
+        name: str,
+        proposal: str,
+        saf: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> CampaignSchema: ...
+
+    def set_campaign(self, id: UUID) -> CampaignSchema: ...
+    def update_campaign(self, campaign: CampaignSchema) -> CampaignSchema: ...
+
+    def create_process_template(
+        self, name: str, version: str
+    ) -> ProcessTemplateRef: ...
+
+    def add_resource_slot(
+        self,
+        name: str,
+        resource_type: str,
+        direction: Direction,
+        process_template_ref: ProcessTemplateRef,
+        create_resource_type: bool = False,
+        required: bool = True,
+    ) -> ResourceSlotSchema: ...
+
+    def add_step(
+        self, name: str, process_template_ref: ProcessTemplateRef
+    ) -> StepTemplateRef: ...
+
+    def bind_slot(
+        self,
+        role: str,
+        slot_name: str,
+        step_template_ref: StepTemplateRef,
+        process_template_ref: ProcessTemplateRef,
+    ) -> ResourceSlotSchema: ...
+
+    def add_attr_group(
+        self,
+        group_name: str,
+        template: ResourceTemplateRef | StepTemplateRef,
+    ) -> AttributeGroupRef: ...
+
+    def add_attribute(
+        self,
+        name: str,
+        value_type: str,
+        unit: str,
+        default: Any,
+        group: AttributeGroupRef,
+    ) -> AttributeTemplateSchema: ...
+
+    def remove_attribute(self, name: str) -> None: ...
+
+    def add_resource_types(self, type_names: list[str]) -> list[ResourceTypeSchema]: ...
+
+    def add_resource_template(
+        self, name: str, type_names: list[ResourceTypeSchema], version: str = "1.0"
+    ) -> ResourceTemplateRef: ...
+
+    def add_child_resource_template(
+        self,
+        name: str,
+        resource_types: list[ResourceTypeSchema],
+        parent_resource_template: ResourceTemplateRef | ResourceTemplateSchema,
+        version: str = "1.0",
+    ) -> ResourceTemplateRef: ...
 
     @overload
     def create_resource(
@@ -165,26 +185,13 @@ class Backend(Protocol):
         expand: Literal[True],
     ) -> ResourceSchema: ...
 
-    def get_resource(
-        self,
-        name: str,
-        template_name: str,
-        template_version: str | None = "1.0",
-        expand: bool = False,
-    ) -> ResourceSchema: ...
-
-    def find_resources_by_identity(
-        self,
-        name: str,
-        parent_id: UUID | None,
-        resource_template_id: UUID,
-    ) -> list: ...
-
     def add_child_resources(
         self,
         parent_resource: ResourceSchema | ResourceRef,
         child_resources: list[ResourceSchema | ResourceRef],
-    ): ...
+    ) -> None: ...
+
+    def update_resource(self, resource: ResourceSchema) -> ResourceSchema: ...
 
     def create_process_run(
         self,
@@ -200,23 +207,12 @@ class Backend(Protocol):
         resource: ResourceRef | ResourceSchema,
         process_run: ProcessRunSchema,
     ) -> ProcessRunSchema: ...
-    def update_resource(self, resource: ResourceSchema) -> ResourceSchema: ...
 
     def check_resource_assignment(
         self,
         process_template: ProcessTemplateRef | ProcessTemplateSchema,
         process_run: ProcessRunSchema,
-    ): ...
-
-    def get_steps(self, process_run: ProcessRunSchema) -> list[StepSchema]: ...
-
-    def get_params(self, step_schema: StepSchema) -> type[BaseModel]: ...
-
-    def set_params(self, filled_params: type[BaseModel]): ...
-
-    def query(self, schema: type[SchemaT], spec: QuerySpec) -> list[SchemaT]: ...
-
-    def count(self, schema: type[SchemaT], spec: QuerySpec) -> int: ...
+    ) -> None: ...
 
     def update_process_run(self, process_run: ProcessRunSchema) -> ProcessRunSchema: ...
 
@@ -225,3 +221,12 @@ class Backend(Protocol):
         process_run: ProcessRunSchema,
         child_step: StepSchema,
     ) -> StepSchema: ...
+
+    def set_params(self, filled_params: type[BaseModel]) -> None: ...
+
+
+@runtime_checkable
+class Backend(ReadBackend, WriteBackend, Protocol):
+    """Combined read+write protocol. Implemented by LocalBackend."""
+
+    pass

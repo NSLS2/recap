@@ -1,6 +1,6 @@
 """Performance + correctness tests for resource-tree hydration.
 
-A ``load="full"`` / ``include("children")`` resource query must hydrate the
+A ``load="eager"`` / ``include("children")`` resource query must hydrate the
 whole tree with a **bounded, depth-independent** number of SQL statements: the
 root and all descendants are bulk-fetched in one query and the schema tree is
 built from that flat result.
@@ -55,8 +55,8 @@ def _walk_depth(resource):
     return n
 
 
-def test_load_full_resource_tree_is_depth_independent(client):
-    """A ``load="full"`` resource query must issue a bounded, depth-independent
+def test_load_eager_resource_tree_is_depth_independent(client):
+    """A ``load="eager"`` resource query must issue a bounded, depth-independent
     number of SQL statements regardless of tree depth."""
     _make_template(client)
     _make_chain(client, depth=3, prefix="three")
@@ -65,11 +65,11 @@ def test_load_full_resource_tree_is_depth_independent(client):
     qm = client.query_maker(unscoped=True)
 
     with count_statements(client) as counter_3:
-        tree_3 = qm.resources(load="full").filter(name="three-0").first()
+        tree_3 = qm.resources(load="eager").filter(name="three-0").first()
     n_three = counter_3["n"]
 
     with count_statements(client) as counter_4:
-        tree_4 = qm.resources(load="full").filter(name="four-0").first()
+        tree_4 = qm.resources(load="eager").filter(name="four-0").first()
     n_four = counter_4["n"]
 
     # Correctness: the full depth must be hydrated.
@@ -83,7 +83,7 @@ def test_load_full_resource_tree_is_depth_independent(client):
     )
 
 
-def test_load_full_resource_tree_bounded_count(client):
+def test_load_eager_resource_tree_bounded_count(client):
     """The absolute statement count for a deep tree must be a small constant."""
     _make_template(client, name="TreePerfBounded")
     root = client.create_resource("bounded-0", "TreePerfBounded", on_existing="create")
@@ -98,7 +98,7 @@ def test_load_full_resource_tree_bounded_count(client):
 
     qm = client.query_maker(unscoped=True)
     with count_statements(client) as counter:
-        tree = qm.resources(load="full").filter(name="bounded-0").first()
+        tree = qm.resources(load="eager").filter(name="bounded-0").first()
 
     assert _walk_depth(tree) == 5
     # Bulk CTE + a fixed set of selectinload batches (one per distinct

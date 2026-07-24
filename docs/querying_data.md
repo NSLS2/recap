@@ -5,10 +5,10 @@ RECAP exposes a small Query DSL on top of the configured backend (SQLAlchemy or 
 The query builder lives on the client as `client.query_maker(on_unloaded=...)` and exposes type-specific entry points:
 
 - `campaigns()` -> `CampaignQuery`
-- `process_templates(shape="schema"|"ref", load="none"|"full")` -> `ProcessTemplateQuery`
-- `process_runs(shape="schema"|"ref", load="none"|"full")` -> `ProcessRunQuery`
-- `resources(shape="schema"|"ref", load="none"|"full")` -> `ResourceQuery`
-- `resource_templates(shape="schema"|"ref", load="none"|"full")` -> `ResourceTemplateQuery`
+- `process_templates(shape="full"|"ref", load="none"|"eager")` -> `ProcessTemplateQuery`
+- `process_runs(shape="full"|"ref", load="none"|"eager")` -> `ProcessRunQuery`
+- `resources(shape="full"|"ref", load="none"|"eager")` -> `ResourceQuery`
+- `resource_templates(shape="full"|"ref", load="none"|"eager")` -> `ResourceTemplateQuery`
 
 Under the hood, these all use a common `BaseQuery` and a backend-provided `.query(model, spec)` implementation. The `QuerySpec` object carries filters, predicates, ordering, preloads, and pagination options down to the backend. Query objects are immutable: every operation like `filter` or `include` returns a new query instance.
 
@@ -21,7 +21,7 @@ qm = client.query_maker(on_unloaded="warn")
 
 # Query entry points
 campaigns = qm.campaigns()
-runs = qm.process_runs()  # schema + load="none"
+runs = qm.process_runs()  # full models + load="none"
 resources = qm.resources()
 templates = qm.resource_templates()
 process_templates = qm.process_templates()
@@ -33,7 +33,7 @@ process_templates = qm.process_templates()
 > `process_runs()`, or leave it unset to query across campaigns.
 
 `on_unloaded` controls what happens when you access relationship fields that were
-not loaded by `include(...)` (or `load="full"`):
+not loaded by `include(...)` (or `load="eager"`):
 
 - `"warn"` (default): emit a warning with include hint.
 - `"raise"`: raise an exception immediately.
@@ -53,18 +53,27 @@ run = qm.process_runs(on_unloaded="warn").filter(name="Run-1").first()
 For process runs, choose the payload shape/load strategy directly:
 
 ```python
-qm.process_runs(shape="ref")             # lightweight refs
-qm.process_runs(shape="schema", load="none")  # schema without implicit relationship expansion
-qm.process_runs(shape="schema", load="full")  # schema with full relationship expansion
+qm.process_runs(shape="ref")                 # lightweight reference models
+qm.process_runs(shape="full", load="none")   # full schema models without relationships
+qm.process_runs(shape="full", load="eager")  # full schema models with eager relationships
 ```
 
-`include(...)` is only valid with `shape="schema", load="none"`.
+`shape="full"` selects existing schema models, while `shape="ref"` selects
+reference models. `load="eager"` eagerly loads relationships.
+
+`include(...)` requires `shape="full", load="none"`.
+
+> **Migration:** `shape="schema"` and `load="full"` are deprecated aliases for
+> `shape="full"` and `load="eager"`. They remain accepted temporarily and emit
+> `DeprecationWarning`.
 
 The same rule applies to `resources`, `process_templates`, and `resource_templates`.
 
 ### Basic Filtering
 
-The simplest way to filter is with `filter(**kwargs)`, which translates into backend-specific filter expressions.
+The simplest way to filter for equality is `filter(**kwargs)`, which translates
+keyword arguments into backend-specific filter expressions. It remains a
+convenient shorthand for queries such as `filter(name="Run-1")`.
 
 List all campaigns with a given proposal id:
 
@@ -333,7 +342,7 @@ for run in runs:
                 print(f"       {group.group_name}.{attr.name} = {attr.value}")
 ```
 
-### Pagination and Ordering
+### Field Predicates, Ordering, and Pagination
 
 All query types expose generic helpers:
 
@@ -342,21 +351,69 @@ All query types expose generic helpers:
 - `limit(value)`
 - `offset(value)`
 
-The exact predicate and ordering objects are backend-specific, but the chaining API is stable.
+Use `Field` to build backend-independent predicates and orderings. Structured
+`Field` expressions work through both local SQLite and remote GraphQL clients:
+
+```python
+from recap.dsl.query import Field
+
+runs = (
+    client.query_maker()
+    .process_runs()
+    .where(Field("name").starts_with("Run-batch"))
+    .where(Field("campaign.proposal") == "2026-1")
+    .order_by(Field("create_date").desc())
+    .all()
+)
+```
+
+Supported predicates are:
+
+- comparisons: `==`, `!=`, `>`, `>=`, `<`, and `<=`
+- membership: `.in_(values)` and `.not_in(values)`
+- strings: `.contains(value)`, `.starts_with(value)`, and `.ends_with(value)`
+
+Pass `Field("name")` to `order_by()` for ascending order, or use `.asc()` and
+`.desc()` explicitly. Multiple predicates passed to one `where()` call, and
+predicates added by chained `where()` calls, are combined with `AND`. Python
+`and`/`or` composition is unsupported; chain `where()` calls instead. Boolean
+`OR`, `NOT`, and predicate grouping are not supported.
+
+Field paths use dot notation and may traverse ORM relationships to arbitrary
+depth, for example `Field("campaign.proposal")` or
+`Field("template.parent.name")`. String operations match their argument
+literally, so `%` and `_` are not SQL wildcard characters. Regex and SQL
+`LIKE` pattern syntax are not supported.
+
+Raw SQLAlchemy predicates and orderings are deprecated. They remain available
+for local queries during migration, emit `DeprecationWarning`, and cannot be
+sent to a remote backend. Remote clients reject them before making an HTTP
+request. Migrate local expressions as follows:
+
+```python
+from recap.db import ProcessRun
+from recap.dsl.query import Field
+
+# Deprecated, local only
+legacy = client.query_maker().process_runs().where(ProcessRun.name == "Run-1")
+
+# Preferred, local and remote
+portable = client.query_maker().process_runs().where(Field("name") == "Run-1")
+```
 
 Example: fetch the 10 most recent runs:
 
 ```python
-from recap.db.models import ProcessRun  # or use backend-specific fields
+from recap.dsl.query import Field
 
 recent_runs = (
     client.query_maker()
     .process_runs()
-    .order_by(ProcessRun.created_at.desc())
+    .order_by(Field("create_date").desc())
     .limit(10)
     .all()
 )
 
 for run in recent_runs:
-    print(run.created_at, run.name)
+    print(run.create_date, run.name)
 ```

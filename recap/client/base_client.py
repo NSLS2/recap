@@ -89,6 +89,14 @@ class RecapClient:
         backend = getattr(self, "backend", None)
         if backend and hasattr(backend, "close"):
             backend.close()
+        # Close read_backend separately when it differs from backend (e.g. GraphQLAdapter)
+        read_backend = getattr(self, "_read_backend", None)
+        if (
+            read_backend
+            and read_backend is not backend
+            and hasattr(read_backend, "close")
+        ):
+            read_backend.close()
         engine = getattr(self, "engine", None)
         if engine:
             engine.dispose()
@@ -100,6 +108,89 @@ class RecapClient:
     def __exit__(self, exc_type, exc, tb):
         """Close the client when leaving the ``with`` block."""
         self.close()
+
+    @classmethod
+    def _from_backends(
+        cls,
+        read_backend: "Backend",
+        write_backend: "Backend",
+    ) -> "RecapClient":
+        """Construct a RecapClient with split read/write backends.
+
+        Internal classmethod used by :meth:`from_url` and :meth:`from_sqlite`.
+        The ``backend`` attribute is set to ``write_backend`` for backward
+        compatibility with builder methods that reference ``self.backend``.
+        ``read_backend`` is stored separately and used by :meth:`query_maker`.
+        """
+        instance = cls.__new__(cls)
+        instance._campaign = None
+        instance.database_path = None
+        instance.backend = write_backend
+        instance._read_backend = read_backend
+        return instance
+
+    @classmethod
+    def from_url(cls, url: str) -> "RecapClient":
+        """Connect to a recap GraphQL server.
+
+        Fetches ``/db_path`` from the server to obtain the SQLite file path,
+        then uses :class:`~recap.adapter.graphql.GraphQLAdapter` for reads and
+        :class:`~recap.adapter.local.LocalBackend` for direct writes.
+
+        Phase 1 constraint: requires a shared filesystem between client and
+        server — the server's ``db_path`` must be accessible from the client
+        machine.  This constraint is removed in Phase 2 when writes route
+        through REST.
+
+        Args:
+            url: Base URL of the recap server, e.g. ``"http://localhost:8000"``.
+
+        Returns:
+            A fully initialised :class:`RecapClient`.
+
+        Raises:
+            RecapConnectionError: If the server is unreachable or returns an
+                HTTP error response.
+        """
+        import httpx2
+
+        from recap.adapter.graphql import GraphQLAdapter
+        from recap.exceptions import RecapConnectionError
+
+        base = url.rstrip("/")
+        try:
+            response = httpx2.get(f"{base}/db_path")
+            response.raise_for_status()
+        except httpx2.ConnectError as exc:
+            raise RecapConnectionError(url, message=str(exc)) from exc
+        except httpx2.TimeoutException as exc:
+            raise RecapConnectionError(url, message=str(exc)) from exc
+        except httpx2.HTTPStatusError as exc:
+            raise RecapConnectionError(
+                url, status_code=exc.response.status_code
+            ) from exc
+
+        db_path = response.json()["db_path"]
+
+        from recap.utils.migrations import apply_migrations
+
+        db_url = f"sqlite:///{db_path}"
+        apply_migrations(db_url)
+
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        engine = create_engine(db_url, echo=False)
+        sm = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+        write_backend = LocalBackend(sm)
+        read_backend = GraphQLAdapter(graphql_url=f"{base}/graphql")
+
+        instance = cls._from_backends(
+            read_backend=read_backend, write_backend=write_backend
+        )
+        instance.database_path = None  # server-side path, not local
+        instance.engine = engine
+        return instance
 
     @classmethod
     def from_sqlite(
@@ -953,8 +1044,11 @@ class RecapClient:
         elif self._campaign is not None:
             campaign_id = self._campaign.id
 
+        read_backend = getattr(self, "_read_backend", self.backend) or self.backend
+        if read_backend is None:
+            raise RuntimeError("No read backend available")
         return QueryDSL(
-            self.backend,
+            read_backend,
             campaign_id=campaign_id,
             on_unloaded=on_unloaded,
         )

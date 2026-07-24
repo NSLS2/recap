@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from recap.db.attribute import AttributeGroupTemplate
+from recap.db.attribute import AttributeGroupTemplate, AttributeValue
 from recap.db.campaign import Campaign
 from recap.db.process import (
     ProcessRun,
@@ -96,8 +96,22 @@ PRELOAD_STATEMENTS = {
         chain_load(ResourceTemplate.attribute_group_templates)
     ],
     (ResourceTemplateSchema, "types"): [chain_load(ResourceTemplate.types)],
-    (ResourceSchema, "properties"): [chain_load(Resource.properties, Property._values)],
-    (ResourceRef, "properties"): [chain_load(Resource.properties, Property._values)],
+    (ResourceSchema, "properties"): [
+        chain_load(Resource.properties, Property._values, AttributeValue.template),
+        chain_load(
+            Resource.properties,
+            Property.template,
+            AttributeGroupTemplate.attribute_templates,
+        ),
+    ],
+    (ResourceRef, "properties"): [
+        chain_load(Resource.properties, Property._values, AttributeValue.template),
+        chain_load(
+            Resource.properties,
+            Property.template,
+            AttributeGroupTemplate.attribute_templates,
+        ),
+    ],
     (ResourceSchema, "children"): [chain_load(Resource.children)],
     (ResourceRef, "children"): [chain_load(Resource.children)],
     (ResourceSchema, "template"): [chain_load(Resource.template)],
@@ -160,7 +174,7 @@ def resolve_loader_options(
     requested_preloads = list(preloads)
     opts = list(BASE_SCHEMA_LOADERS.get(schema, []))
 
-    if load_mode == "full":
+    if load_mode == "eager":
         requested_preloads = FULL_PRELOAD_PATHS.get(schema, []) + requested_preloads
         opts.extend(EXTRA_FULL_LOADERS.get(schema, []))
 

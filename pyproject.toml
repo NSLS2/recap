@@ -15,6 +15,7 @@ dependencies = [
     "pydantic>=2.0",
     "python-slugify",
     "mcp[cli]>=1.26.0,<2",
+    "httpx2>=2.0",
 ]
 
 keywords = ["experiments", "provenance", "reproducibility"]
@@ -39,6 +40,15 @@ Issues = "https://github.com/NSLS2/recap/issues"
 dev = [
     "pytest"
 ]
+server = [
+    "strawberry-graphql[fastapi]>=0.220",
+    "uvicorn[standard]>=0.30",
+    "pydantic-settings>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+recap-server = "recap.server.__main__:main"
 
 [tool.hatch.version]
 source = "vcs"
@@ -100,12 +110,18 @@ platforms = ["osx-arm64", "linux-64", "win-64"]
 
 [tool.pixi.pypi-dependencies]
 pyrecap = { path = ".", editable = true }
+httpx2 = ">=2.0"
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
-dev = { features = ["lint", "test"], solve-group = "default" }
+dev = { features = ["lint", "test", "server"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
 build = { features = [ "build" ], solve-group = "default"}
+
+[tool.pixi.feature.server.pypi-dependencies]
+"strawberry-graphql" = {version = ">=0.220", extras = ["fastapi"]}
+uvicorn = {version = ">=0.30", extras = ["standard"]}
+pydantic-settings = ">=2.0"
 
 [tool.pixi.feature.test.dependencies]
 pytest = ">=8.4.2,<9"

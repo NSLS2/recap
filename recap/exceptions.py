@@ -58,3 +58,16 @@ class UnloadedFieldWarning(UserWarning):
 
 class UnloadedFieldError(RuntimeError):
     """Raised when unloaded relationship access policy is set to 'raise'."""
+
+
+class RecapConnectionError(Exception):
+    """Raised when RecapClient cannot connect to a recap server."""
+
+    def __init__(
+        self, url: str, status_code: int | None = None, message: str | None = None
+    ):
+        self.url = url
+        self.status_code = status_code
+        detail = f" (HTTP {status_code})" if status_code else ""
+        extra = f": {message}" if message else ""
+        super().__init__(f"Cannot connect to recap server at {url}{detail}{extra}")

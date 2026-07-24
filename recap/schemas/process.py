@@ -157,7 +157,7 @@ class ProcessRunSchema(CommonFields):
             return
         message = (
             f"'{field_name}' was not loaded for ProcessRunSchema; "
-            f"use {include_hint} or load='full'."
+            f"use {include_hint} or load='eager'."
         )
         if self._on_unloaded == "raise":
             raise UnloadedFieldError(message)
