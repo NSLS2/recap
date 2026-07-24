@@ -34,6 +34,13 @@ from recap.tests.transport_factories import (
 )
 
 
+def test_query_spec_normalizes_legacy_full_load_mode():
+    with pytest.warns(DeprecationWarning, match="load='eager'"):
+        spec = QuerySpec.model_validate({"load_mode": "full"})
+
+    assert spec.load_mode == "eager"
+
+
 def test_query_request_serializes_complete_supported_query_spec():
     campaign_id = uuid4()
     parent_id = uuid4()
@@ -45,7 +52,7 @@ def test_query_request_serializes_complete_supported_query_spec():
         property_filters=[PropertyFilter(name="temperature", value=20)],
         parent_resource_id=parent_id,
         campaign_id=campaign_id,
-        load_mode="full",
+        load_mode="eager",
         on_unloaded="raise",
     )
 
@@ -72,9 +79,11 @@ def test_query_request_serializes_complete_supported_query_spec():
         "parent_resource_id": str(parent_id),
         "parameter_filters": [],
         "campaign_id": str(campaign_id),
-        "load_mode": "full",
+        "load_mode": "eager",
         "on_unloaded": "raise",
     }
+    assert request.spec["load_mode"] == "eager"
+    assert "full" not in request.spec.values()
 
 
 def test_query_request_serializes_structured_predicates_and_orderings():

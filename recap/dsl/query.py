@@ -205,6 +205,13 @@ class QuerySpec(BaseModel):
     load_mode: LoadMode | None = None
     on_unloaded: OnUnloadedPolicy | None = None
 
+    @field_validator("load_mode", mode="before")
+    @classmethod
+    def _normalize_load_mode(cls, value):
+        if value is None:
+            return None
+        return _normalize_load(value)
+
     @field_validator("predicates", mode="before")
     @classmethod
     def _normalize_predicates(cls, values):

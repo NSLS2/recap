@@ -174,7 +174,7 @@ def resolve_loader_options(
     requested_preloads = list(preloads)
     opts = list(BASE_SCHEMA_LOADERS.get(schema, []))
 
-    if load_mode == "full":
+    if load_mode == "eager":
         requested_preloads = FULL_PRELOAD_PATHS.get(schema, []) + requested_preloads
         opts.extend(EXTRA_FULL_LOADERS.get(schema, []))
 

@@ -221,3 +221,21 @@ def test_execute_query_preserves_unlimited_spec():
 
     query_spec = backend.query.call_args.args[1]
     assert query_spec.limit is None
+
+
+def test_execute_query_normalizes_legacy_full_load_mode():
+    from recap.server.resolvers import resolve_execute_query
+
+    backend = Mock()
+    backend.query.return_value = []
+
+    with pytest.warns(DeprecationWarning, match="load='eager'"):
+        result = resolve_execute_query(
+            SimpleNamespace(context={"backend": backend}),
+            schema_name="ResourceSchema",
+            spec={"load_mode": "full"},
+        )
+
+    query_spec = backend.query.call_args.args[1]
+    assert query_spec.load_mode == "eager"
+    assert result == {"schema_name": "ResourceSchema", "items": []}

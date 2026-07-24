@@ -1347,7 +1347,7 @@ class LocalBackend(Backend):
         # below; the root query then only needs ids, so skip the (one-level,
         # redundant) relationship loaders for that case.
         resource_tree_path = schema is ResourceSchema and (
-            spec.load_mode == "full" or "children" in spec.preloads
+            spec.load_mode == "eager" or "children" in spec.preloads
         )
 
         if not resource_tree_path:
@@ -1366,13 +1366,13 @@ class LocalBackend(Backend):
             if schema is ProcessRunSchema:
                 process_run_hydrator = ProcessRunSchemaHydrator()
                 include_step_parameters = (
-                    spec.load_mode == "full" or "steps.parameters" in spec.preloads
+                    spec.load_mode == "eager" or "steps.parameters" in spec.preloads
                 )
                 include_resources = (
-                    spec.load_mode == "full" or "resources" in spec.preloads
+                    spec.load_mode == "eager" or "resources" in spec.preloads
                 )
                 include_steps = (
-                    spec.load_mode == "full"
+                    spec.load_mode == "eager"
                     or "steps" in spec.preloads
                     or include_step_parameters
                     or include_resources
@@ -1392,20 +1392,20 @@ class LocalBackend(Backend):
                     include_steps=include_steps,
                     include_step_parameters=include_step_parameters,
                     include_resources=include_resources,
-                    full=spec.load_mode == "full",
+                    full=spec.load_mode == "eager",
                     on_unloaded=spec.on_unloaded or "warn",
                     children_map=children_map,
                 )
             if schema is ResourceSchema:
                 resource_hydrator = ResourceSchemaHydrator()
                 include_template = (
-                    spec.load_mode == "full" or "template" in spec.preloads
+                    spec.load_mode == "eager" or "template" in spec.preloads
                 )
                 include_properties = (
-                    spec.load_mode == "full" or "properties" in spec.preloads
+                    spec.load_mode == "eager" or "properties" in spec.preloads
                 )
                 include_children = (
-                    spec.load_mode == "full" or "children" in spec.preloads
+                    spec.load_mode == "eager" or "children" in spec.preloads
                 )
                 if include_children:
                     # Bulk-load the whole subtree (roots + all descendants) in a
@@ -1420,7 +1420,7 @@ class LocalBackend(Backend):
                         root_ids,
                         include_template=include_template,
                         include_properties=include_properties,
-                        full=spec.load_mode == "full",
+                        full=spec.load_mode == "eager",
                         on_unloaded=spec.on_unloaded or "warn",
                     )
                 return resource_hydrator.construct_many(
@@ -1428,7 +1428,7 @@ class LocalBackend(Backend):
                     include_template=include_template,
                     include_properties=include_properties,
                     include_children=include_children,
-                    full=spec.load_mode == "full",
+                    full=spec.load_mode == "eager",
                     on_unloaded=spec.on_unloaded or "warn",
                 )
             return [
