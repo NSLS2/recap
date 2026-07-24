@@ -12,9 +12,7 @@ def test_field_builds_structured_predicates_and_orderings():
     assert (Field("template.name") == "Acquisition") == FieldPredicate(
         field="template.name", op="eq", value="Acquisition"
     )
-    assert (Field("version") != 1) == FieldPredicate(
-        field="version", op="ne", value=1
-    )
+    assert (Field("version") != 1) == FieldPredicate(field="version", op="ne", value=1)
     assert (Field("version") < 2).op == "lt"
     assert (Field("version") <= 2).op == "lte"
     assert (Field("version") > 0).op == "gt"
@@ -58,12 +56,8 @@ def test_query_spec_normalizes_transport_mappings():
             "orderings": [{"field": "create_date", "direction": "desc"}],
         }
     )
-    assert spec.predicates == [
-        FieldPredicate(field="name", op="eq", value="Run-1")
-    ]
-    assert spec.orderings == [
-        FieldOrdering(field="create_date", direction="desc")
-    ]
+    assert spec.predicates == [FieldPredicate(field="name", op="eq", value="Run-1")]
+    assert spec.orderings == [FieldOrdering(field="create_date", direction="desc")]
 
 
 @pytest.mark.parametrize(
