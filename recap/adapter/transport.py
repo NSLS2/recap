@@ -9,7 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from recap.dsl.query import QuerySpec
+from recap.dsl.query import FieldOrdering, FieldPredicate, QuerySpec
 from recap.schemas.attribute import AttributeGroupTemplateSchema
 from recap.schemas.process import ProcessRunSchema
 from recap.schemas.resource import ResourceSchema
@@ -23,15 +23,11 @@ class QueryRequest(BaseModel):
 
     @classmethod
     def from_query(cls, schema: type[BaseModel], spec: QuerySpec) -> QueryRequest:
-        if spec.predicates:
-            raise NotImplementedError(
-                "Query predicates are not supported by remote transports"
-            )
-        if spec.orderings:
-            raise NotImplementedError(
-                "Query orderings are not supported by remote transports"
-            )
-        return cls(schema_name=schema.__name__, spec=serialize_model(spec))
+        if not all(isinstance(item, FieldPredicate) for item in spec.predicates):
+            raise TypeError("Remote query predicates must use Field(...)")
+        if not all(isinstance(item, FieldOrdering) for item in spec.orderings):
+            raise TypeError("Remote query orderings must use Field(...)")
+        return cls(schema_name=schema.__name__, spec=spec.model_dump(mode="json"))
 
 
 class QueryResult(BaseModel):

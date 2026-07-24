@@ -4,7 +4,8 @@ from uuid import uuid4
 import pytest
 
 from recap.adapter.transport import serialize_model
-from recap.dsl.query import ParameterFilter, PropertyFilter, QuerySpec
+from recap.db.process import ProcessRun
+from recap.dsl.query import Field, ParameterFilter, PropertyFilter, QuerySpec
 from recap.schemas.resource import ResourceSchema
 from recap.tests.transport_factories import full_resource
 
@@ -194,19 +195,28 @@ def test_graphql_adapter_rejects_malformed_graphql_errors(errors):
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "message"),
+    ("field", "value"),
     [
-        ("predicates", (lambda item: True,), "predicates"),
-        ("orderings", (lambda item: item.name,), "orderings"),
+        ("predicates", (ProcessRun.name == "sample",)),
+        (
+            "predicates",
+            (Field("name") == "sample", ProcessRun.name == "sample"),
+        ),
+        ("orderings", (ProcessRun.name,)),
+        ("orderings", (Field("name").asc(), ProcessRun.name.desc())),
     ],
 )
-def test_graphql_adapter_rejects_non_transportable_query_features(
-    field, value, message
+@pytest.mark.parametrize("method", ("query", "count"))
+def test_graphql_adapter_rejects_legacy_query_features_before_http(
+    field, value, method
 ):
     from recap.adapter.graphql import GraphQLAdapter
 
     with (
+        patch("httpx2.Client.post") as post,
         GraphQLAdapter("http://localhost:9999/graphql") as adapter,
-        pytest.raises(NotImplementedError, match=message),
+        pytest.raises(TypeError, match="Field"),
     ):
-        adapter.query(ResourceSchema, QuerySpec(**{field: value}))
+        getattr(adapter, method)(ResourceSchema, QuerySpec(**{field: value}))
+
+    post.assert_not_called()

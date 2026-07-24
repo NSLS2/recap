@@ -11,7 +11,14 @@ from recap.adapter.transport import (
     hydrate_result,
     serialize_model,
 )
-from recap.dsl.query import PropertyFilter, QuerySpec
+from recap.db.process import ProcessRun
+from recap.dsl.query import (
+    Field,
+    FieldOrdering,
+    FieldPredicate,
+    PropertyFilter,
+    QuerySpec,
+)
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
 )
@@ -70,15 +77,48 @@ def test_query_request_serializes_complete_supported_query_spec():
     }
 
 
+def test_query_request_serializes_structured_predicates_and_orderings():
+    campaign_id = uuid4()
+    request = QueryRequest.from_query(
+        ProcessRunSchema,
+        QuerySpec(
+            predicates=[
+                Field("campaign_id") == campaign_id,
+                Field("create_date") >= STAMP,
+            ],
+            orderings=[Field("create_date").desc()],
+        ),
+    )
+
+    assert request.spec["predicates"] == [
+        {"field": "campaign_id", "op": "eq", "value": str(campaign_id)},
+        {
+            "field": "create_date",
+            "op": "gte",
+            "value": STAMP.isoformat().replace("+00:00", "Z"),
+        },
+    ]
+    reconstructed = QuerySpec.model_validate(request.spec)
+    assert all(
+        isinstance(predicate, FieldPredicate) for predicate in reconstructed.predicates
+    )
+    assert isinstance(reconstructed.orderings[0], FieldOrdering)
+
+
 @pytest.mark.parametrize(
-    ("field", "value", "message"),
+    ("field", "value"),
     [
-        ("predicates", (lambda item: True,), "predicates"),
-        ("orderings", (lambda item: item.name,), "orderings"),
+        ("predicates", (ProcessRun.name == "sample",)),
+        (
+            "predicates",
+            (Field("name") == "sample", ProcessRun.name == "sample"),
+        ),
+        ("orderings", (ProcessRun.name,)),
+        ("orderings", (Field("name").asc(), ProcessRun.name.desc())),
     ],
 )
-def test_query_request_rejects_non_transportable_query_features(field, value, message):
-    with pytest.raises(NotImplementedError, match=message):
+def test_query_request_rejects_every_legacy_query_feature(field, value):
+    with pytest.raises(TypeError, match="Field"):
         QueryRequest.from_query(ResourceSchema, QuerySpec(**{field: value}))
 
 

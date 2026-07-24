@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from recap.client import RecapClient
+from recap.dsl.query import Field
 from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
 from recap.schemas.process import ProcessRunRef, ProcessTemplateRef
 from recap.schemas.resource import ResourceRef, ResourceTemplateRef
@@ -215,6 +216,101 @@ def test_filters_scopes_pagination_and_count_parity(parity_clients):
     ]
     for query in count_queries:
         assert query(remote_q) == query(local_q)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param(
+            lambda q: q.process_runs().where(Field("name").starts_with("run-")).all(),
+            id="starts-with",
+        ),
+        pytest.param(
+            lambda q: q.process_runs()
+            .where(Field("campaign.proposal") == "PROPOSAL-42")
+            .all(),
+            id="relationship-equality",
+        ),
+        pytest.param(
+            lambda q: q.process_runs().where(Field("name") == "run-high").all(),
+            id="equal",
+        ),
+        pytest.param(
+            lambda q: q.process_runs().where(Field("name") != "run-high").all(),
+            id="not-equal",
+        ),
+        pytest.param(
+            lambda q: q.process_runs().where(Field("name") > "run-high").all(),
+            id="greater-than",
+        ),
+        pytest.param(
+            lambda q: q.process_runs().where(Field("name") >= "run-high").all(),
+            id="greater-than-or-equal",
+        ),
+        pytest.param(
+            lambda q: q.process_runs().where(Field("name") < "run-low").all(),
+            id="less-than",
+        ),
+        pytest.param(
+            lambda q: q.process_runs().where(Field("name") <= "run-high").all(),
+            id="less-than-or-equal",
+        ),
+        pytest.param(
+            lambda q: q.process_runs()
+            .where(Field("name").in_(["run-high", "run-low"]))
+            .all(),
+            id="in",
+        ),
+        pytest.param(
+            lambda q: q.process_runs().where(Field("name").not_in(["run-high"])).all(),
+            id="not-in",
+        ),
+        pytest.param(
+            lambda q: q.process_runs().where(Field("name").ends_with("high")).all(),
+            id="ends-with",
+        ),
+        pytest.param(
+            lambda q: q.process_runs()
+            .where(Field("name").starts_with("run-"))
+            .where(Field("name").contains("low"))
+            .all(),
+            id="chained",
+        ),
+    ],
+)
+def test_field_predicate_parity(parity_clients, query):
+    _assert_query_parity(parity_clients, query)
+
+
+@pytest.mark.parametrize(("value", "expected"), [("plate", 0), ("run", 2)])
+def test_field_predicate_count_parity(parity_clients, value, expected):
+    local, remote = _assert_query_parity(
+        parity_clients,
+        lambda q: q.process_runs().where(Field("name").contains(value)).count(),
+    )
+    assert remote == local == expected
+
+
+@pytest.mark.parametrize("ordering", [Field("name").asc(), Field("name").desc()])
+def test_field_ordering_parity(parity_clients, ordering):
+    local, remote = _assert_query_parity(
+        parity_clients,
+        lambda q: q.process_runs().order_by(ordering).all(),
+    )
+    assert [item.id for item in remote] == [item.id for item in local]
+
+
+@pytest.mark.parametrize("field", ["id", "create_date"])
+def test_transport_scalar_predicate_coercion_parity(parity_clients, field):
+    local, _ = parity_clients
+    target = local.query_maker(unscoped=True).process_runs().first()
+
+    local_result, remote_result = _assert_query_parity(
+        parity_clients,
+        lambda q: q.process_runs().where(Field(field) == getattr(target, field)).all(),
+    )
+
+    assert [item.id for item in remote_result] == [item.id for item in local_result]
 
 
 def _access_outcome(model, field, policy):
