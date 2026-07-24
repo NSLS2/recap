@@ -216,7 +216,7 @@ plate.children["A01"].properties.status.used.value  # False
 `template_version` defaults to `"1.0"`. `get_resource` raises if no matching
 active resource is found. With `expand=True` the whole child hierarchy is
 fetched with a bounded, depth-independent number of statements (see the
-[Performance Guide](#load-full-on-resource-queries-fetches-the-whole-subtree));
+[Performance Guide](#loadeager-on-resource-queries-fetches-the-whole-subtree));
 `build_property_model()` is called automatically on the returned tree.
 
 For loading **many** resources, or filtering by properties / parent / type, use
@@ -296,7 +296,7 @@ Resources returned from `create_resource()` have their property access model bui
 
 | Load strategy | `build_property_model()` called? |
 |---|---|
-| `load="full"` on a resource query | Yes — automatically |
+| `load="eager"` on a resource query | Yes — automatically |
 | `include(["properties"])` on a resource query | **No** — call `resource.build_property_model()` manually before accessing `resource.properties.group.attr.value` |
 | `include_resources()` on a process run query | Yes — automatically, including for child resources |
 
@@ -545,10 +545,10 @@ RECAP exposes a small Query DSL on top of the configured backend (SQLAlchemy or 
 The query builder lives on the client as `client.query_maker(on_unloaded=...)` and exposes type-specific entry points:
 
 - `campaigns()` -> `CampaignQuery`
-- `process_templates(shape="schema"|"ref", load="none"|"full")` -> `ProcessTemplateQuery`
-- `process_runs(shape="schema"|"ref", load="none"|"full")` -> `ProcessRunQuery`
-- `resources(shape="schema"|"ref", load="none"|"full")` -> `ResourceQuery`
-- `resource_templates(shape="schema"|"ref", load="none"|"full")` -> `ResourceTemplateQuery`
+- `process_templates(shape="full"|"ref", load="none"|"eager")` -> `ProcessTemplateQuery`
+- `process_runs(shape="full"|"ref", load="none"|"eager")` -> `ProcessRunQuery`
+- `resources(shape="full"|"ref", load="none"|"eager")` -> `ResourceQuery`
+- `resource_templates(shape="full"|"ref", load="none"|"eager")` -> `ResourceTemplateQuery`
 
 Under the hood, these all use a common `BaseQuery` and a backend-provided `.query(model, spec)` implementation. The `QuerySpec` object carries filters, predicates, ordering, preloads, and pagination options down to the backend. Query objects are immutable: every operation like `filter` or `include` returns a new query instance.
 
@@ -561,7 +561,7 @@ qm = client.query_maker(on_unloaded="warn")
 
 # Query entry points
 campaigns = qm.campaigns()
-runs = qm.process_runs()  # schema + load="none"
+runs = qm.process_runs()  # full models + load="none"
 resources = qm.resources()
 templates = qm.resource_templates()
 process_templates = qm.process_templates()
@@ -581,7 +581,7 @@ qm_all = client.query_maker(unscoped=True)
 ```
 
 `on_unloaded` controls what happens when you access relationship fields that were
-not loaded by `include(...)` (or `load="full"`):
+not loaded by `include(...)` (or `load="eager"`):
 
 - `"warn"` (default): emit a warning with include hint.
 - `"raise"`: raise an exception immediately.
@@ -601,23 +601,31 @@ run = qm.process_runs(on_unloaded="warn").filter(name="Run-1").first()
 For process runs, choose the payload shape/load strategy directly:
 
 ```python
-qm.process_runs(shape="ref")                       # lightweight refs
-qm.process_runs(shape="schema", load="none")       # schema without relationships
-qm.process_runs(shape="schema", load="full")       # schema with all relationships
+qm.process_runs(shape="ref")                 # lightweight reference models
+qm.process_runs(shape="full", load="none")   # full schema models without relationships
+qm.process_runs(shape="full", load="eager")  # full schema models with eager relationships
 ```
 
-`include(...)` is only valid with `shape="schema", load="none"` and raises a `ValueError` if combined with `load="full"`.
+`shape="full"` selects existing schema models, while `shape="ref"` selects
+reference models. `load="eager"` eagerly loads relationships.
+
+`include(...)` requires `shape="full", load="none"` and raises a `ValueError`
+with `load="eager"`.
+
+> **Migration:** `shape="schema"` and `load="full"` are deprecated aliases for
+> `shape="full"` and `load="eager"`. They remain accepted temporarily and emit
+> `DeprecationWarning`.
 
 The same rule applies to `resources`, `process_templates`, and `resource_templates`.
 
-> **Note — `load="full"` on resource queries**: `load="full"` eagerly loads the
+> **Note — `load="eager"` on resource queries**: `load="eager"` eagerly loads the
 > entire child-resource hierarchy. This is fetched in a single bulk query
 > (recursive CTE) with a bounded, depth-independent number of SELECTs — it is no
 > longer an N+1 pattern. It still materialises the whole subtree, so when you
 > only need specific descendants prefer `include(["template", "properties"])`
 > for direct resource queries and `descendants()` (or `under_parent()`) for
 > targeted descendant queries. See the
-> [Performance Guide](#load-full-on-resource-queries-fetches-the-whole-subtree)
+> [Performance Guide](#loadeager-on-resource-queries-fetches-the-whole-subtree)
 > for details.
 
 ### Basic Filtering
@@ -1079,7 +1087,7 @@ A quick checklist for fast, predictable queries:
 1. **Default to `shape="ref"` or `load="none"`** when you only need
    identity/scalar fields — this skips relationship hydration entirely.
 2. **Use `include([...])`** to load exactly the relations you touch; avoid
-   `load="full"` on deep resource trees.
+   `load="eager"` on deep resource trees.
 3. **Fetch deep hierarchies with `descendants()`** (or
    `under_parent()` + `filter(resource_template_id=...)`) — one bulk query, then
    call `build_property_model()` per row.
@@ -1087,12 +1095,12 @@ A quick checklist for fast, predictable queries:
    (`resource_id=` / `process_run_id=`) rather than `on_existing="silent"`, which
    costs extra round-trips (see below).
 5. **Group writes by campaign** and call `set_campaign()` once per group.
-6. **`include(...)` is only valid with `shape="schema", load="none"`** — it
-   raises `ValueError` when combined with `load="full"`.
+6. **`include(...)` requires `shape="full", load="none"`** — it raises
+   `ValueError` when combined with `load="eager"`.
 
-## `load="full"` on resource queries fetches the whole subtree
+## `load="eager"` on resource queries fetches the whole subtree
 
-When `load="full"` is used on a resource query (or `include(["children"])`),
+When `load="eager"` is used on a resource query (or `include(["children"])`),
 Recap sets `include_children=True` and hydrates the entire child-resource
 hierarchy. This is loaded in a single recursive-CTE bulk query — roots plus all
 descendants — with their templates and properties eagerly fetched. The number of

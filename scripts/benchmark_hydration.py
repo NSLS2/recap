@@ -74,8 +74,8 @@ def main() -> None:
             args.repeats,
         )
         benchmark(
-            "resources load=full",
-            lambda: query.resources(load="full").limit(args.limit),
+            "resources load=eager",
+            lambda: query.resources(load="eager").limit(args.limit),
             ResourceSchema,
             args.repeats,
         )
@@ -86,8 +86,8 @@ def main() -> None:
             args.repeats,
         )
         benchmark(
-            "process_runs load=full",
-            lambda: query.process_runs(load="full").limit(args.limit),
+            "process_runs load=eager",
+            lambda: query.process_runs(load="eager").limit(args.limit),
             ProcessRunSchema,
             args.repeats,
         )
