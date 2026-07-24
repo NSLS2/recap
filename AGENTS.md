@@ -25,6 +25,7 @@ RECAP — experiment provenance framework. SQLAlchemy 2.0 + Pydantic v2 + Alembi
 ## Gotchas
 
 - Version is VCS-driven via `hatch-vcs` and written to generated `recap/_version.py` — do not hand-edit it.
+- Do not commit Markdown files under `docs/superpowers/specs/` or `docs/superpowers/plans/` unless explicitly requested. Keep code comments self-contained: describe current or intended behavior directly, never refer to plan steps or planning documents.
 - `requirements.txt` / `requirements-dev.txt` are stale placeholders. Real dependencies live in `pyproject.toml` (`[project.dependencies]` + pixi features).
 - Lint config conflict: `[tool.black]` sets line-length 115 but ruff uses 88 with `E501` ignored. **ruff-format (via pre-commit) is the enforced formatter**; black is configured but not wired into pre-commit. Follow ruff.
 - `RecapClient.from_sqlite()` auto-applies Alembic migrations (`recap/utils/migrations.py`). The `sqlalchemy.url = sqlite:///recap.db` in `alembic.ini` is only for direct `alembic` CLI use.
