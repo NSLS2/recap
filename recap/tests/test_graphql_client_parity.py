@@ -114,7 +114,7 @@ def parity_clients(tmp_path, monkeypatch):
             lambda q: q.resources().include("properties").all(), id="properties"
         ),
         pytest.param(lambda q: q.resources().include("children").all(), id="children"),
-        pytest.param(lambda q: q.resources(load="full").all(), id="full"),
+        pytest.param(lambda q: q.resources(load="eager").all(), id="eager"),
     ],
 )
 def test_resource_loading_parity(parity_clients, query):
@@ -134,7 +134,7 @@ def test_resource_loading_parity(parity_clients, query):
         pytest.param(
             lambda q: q.process_runs().include("resources").all(), id="resources"
         ),
-        pytest.param(lambda q: q.process_runs(load="full").all(), id="full"),
+        pytest.param(lambda q: q.process_runs(load="eager").all(), id="eager"),
     ],
 )
 def test_process_run_loading_parity(parity_clients, query):
@@ -151,12 +151,12 @@ def test_campaign_and_template_loading_parity(parity_clients):
             .include(["children", "attribute_group_templates", "types"])
             .all()
         ),
-        lambda q: q.resource_templates(load="full").all(),
+        lambda q: q.resource_templates(load="eager").all(),
         lambda q: q.process_templates().all(),
         lambda q: (
             q.process_templates().include(["step_templates", "resource_slots"]).all()
         ),
-        lambda q: q.process_templates(load="full").all(),
+        lambda q: q.process_templates(load="eager").all(),
     ]
     for query in queries:
         _assert_query_parity(parity_clients, query)

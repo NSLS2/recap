@@ -59,14 +59,14 @@ def test_build_property_model_after_include_properties_no_lazy_loads(client):
     )
 
 
-def test_include_properties_matches_load_full_statement_count(client):
+def test_include_properties_matches_load_eager_statement_count(client):
     """include(['properties']) must load property templates as efficiently as
-    the load="full" path (which README documents as efficient). Both go through
+    the load="eager" path. Both go through
     the same eager-load chain for Property.template / _values, so a query +
     build_property_model() must issue the same number of statements either way.
 
     This guards against include(['properties']) regressing to lazy-load
-    Property.template per group while load="full" does not.
+    Property.template per group while load="eager" does not.
     """
     _make_template(client, name="IncPropParity")
     client.create_resource("parity-res", "IncPropParity", on_existing="create")
@@ -78,12 +78,12 @@ def test_include_properties_matches_load_full_statement_count(client):
         for r in inc:
             r.build_property_model()
 
-    with count_statements(client) as c_full:
-        full = qm.resources(load="full").filter(name="parity-res").all()
-        for r in full:
+    with count_statements(client) as c_eager:
+        eager = qm.resources(load="eager").filter(name="parity-res").all()
+        for r in eager:
             r.build_property_model()
 
-    assert c_include["n"] <= c_full["n"], (
-        f"include(['properties']) issues more statements than load='full': "
-        f"include={c_include['n']}, full={c_full['n']}"
+    assert c_include["n"] <= c_eager["n"], (
+        f"include(['properties']) issues more statements than load='eager': "
+        f"include={c_include['n']}, eager={c_eager['n']}"
     )

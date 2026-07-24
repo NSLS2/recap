@@ -2,7 +2,7 @@
 run queries.
 
 When a process run is queried with ``include("resources")`` (or
-``load="full"``), each assigned resource is hydrated together with its full
+``load="eager"``), each assigned resource is hydrated together with its full
 child hierarchy. That subtree must be fetched with a **bounded, depth-independent**
 number of SQL statements: the assigned resources and all their descendants are
 bulk-fetched in one query and the schema tree is built from that flat result.

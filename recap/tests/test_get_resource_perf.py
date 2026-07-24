@@ -78,16 +78,16 @@ def test_get_resource_expand_is_depth_independent(client):
     )
 
 
-def test_get_resource_expand_matches_query_full(client):
+def test_get_resource_expand_matches_query_eager(client):
     """``get_resource(expand=True)`` must return the same hydrated tree as a
-    ``load="full"`` query for the same root (behaviour-preserving refactor)."""
+    ``load="eager"`` query for the same root (behaviour-preserving refactor)."""
     _make_template(client, "GetResEqT")
     _make_chain(client, depth=4, template="GetResEqT", prefix="eq")
 
     got = client.get_resource("eq-0", "GetResEqT", expand=True)
 
     qm = client.query_maker(unscoped=True)
-    expected = qm.resources(load="full").filter(name="eq-0").first()
+    expected = qm.resources(load="eager").filter(name="eq-0").first()
 
     assert got.id == expected.id
     assert got.name == expected.name
