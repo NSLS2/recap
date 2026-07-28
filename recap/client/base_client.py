@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from recap.adapter import Backend
 from recap.adapter.local import LocalBackend
+from recap.client.permissions import ActorPermissions
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
@@ -130,7 +131,9 @@ class RecapClient:
         return instance
 
     @classmethod
-    def from_url(cls, url: str) -> "RecapClient":
+    def from_url(
+        cls, url: str, *, api_key: str, unscoped: bool = False
+    ) -> "RecapClient":
         """Connect to a recap GraphQL server.
 
         Fetches ``/db_path`` from the server to obtain the SQLite file path,
@@ -154,21 +157,29 @@ class RecapClient:
         """
         import httpx2
 
-        from recap.adapter.graphql import GraphQLAdapter
+        from recap.adapter.graphql import GraphQLAdapter, _RedactedAuthHeaders
         from recap.exceptions import RecapConnectionError
 
+        if unscoped:
+            raise ValueError("Remote clients do not support unscoped=True")
+
         base = url.rstrip("/")
+        header_provider = _RedactedAuthHeaders(api_key)
         try:
-            response = httpx2.get(f"{base}/db_path")
+            response = httpx2.get(f"{base}/db_path", headers=header_provider.as_dict())
             response.raise_for_status()
         except httpx2.ConnectError as exc:
-            raise RecapConnectionError(url, message=str(exc)) from exc
+            raise RecapConnectionError(
+                url, message=header_provider.redact(str(exc))
+            ) from None
         except httpx2.TimeoutException as exc:
-            raise RecapConnectionError(url, message=str(exc)) from exc
+            raise RecapConnectionError(
+                url, message=header_provider.redact(str(exc))
+            ) from None
         except httpx2.HTTPStatusError as exc:
             raise RecapConnectionError(
                 url, status_code=exc.response.status_code
-            ) from exc
+            ) from None
 
         db_path = response.json()["db_path"]
 
@@ -183,7 +194,9 @@ class RecapClient:
         engine = create_engine(db_url, echo=False)
         sm = sessionmaker(bind=engine, expire_on_commit=False, future=True)
         write_backend = LocalBackend(sm)
-        read_backend = GraphQLAdapter(graphql_url=f"{base}/graphql")
+        read_backend = GraphQLAdapter(
+            graphql_url=f"{base}/graphql", _header_provider=header_provider
+        )
 
         instance = cls._from_backends(
             read_backend=read_backend, write_backend=write_backend
@@ -191,6 +204,13 @@ class RecapClient:
         instance.database_path = None  # server-side path, not local
         instance.engine = engine
         return instance
+
+    def permissions(self, namespace_path: str) -> ActorPermissions:
+        """Return typed effective permissions for current remote actor."""
+        read_backend = getattr(self, "_read_backend", None)
+        if read_backend is None or not hasattr(read_backend, "permissions"):
+            raise RuntimeError("Permissions API requires a remote read backend")
+        return read_backend.permissions(namespace_path)
 
     @classmethod
     def from_sqlite(

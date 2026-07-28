@@ -52,9 +52,7 @@ def test_authentication_failure_uses_safe_stable_envelope(tmp_path):
         (SnapshotUnavailable("grant details: top-secret"), 503, "service_unavailable"),
     ],
 )
-def test_security_failures_map_to_safe_envelopes(
-    tmp_path, error, status_code, code
-):
+def test_security_failures_map_to_safe_envelopes(tmp_path, error, status_code, code):
     from recap.server.app import create_app
 
     app = create_app(tmp_path / "test.db")

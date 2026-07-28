@@ -3,6 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from recap.client.permissions import ActorPermissions
 from recap.dsl.query import QuerySpec, SchemaT
 from recap.schemas.attribute import AttributeGroupRef, AttributeTemplateSchema
 from recap.schemas.namespace import NamespaceContext
@@ -101,6 +102,11 @@ class ReadBackend(Protocol):
 
     def get_steps(self, process_run: ProcessRunSchema) -> list[StepSchema]: ...
     def get_params(self, step_schema: StepSchema) -> type[BaseModel]: ...
+
+
+@runtime_checkable
+class PermissionsBackend(Protocol):
+    def permissions(self, namespace_path: str) -> ActorPermissions: ...
 
 
 @runtime_checkable

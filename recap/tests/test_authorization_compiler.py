@@ -129,7 +129,7 @@ def test_compiles_exact_flattened_grants_with_provenance(tmp_path):
       - provider: pam
         subject: alice
 namespaces:
-"""
+""",
             ),
             "Duplicate identity",
         ),
@@ -160,7 +160,9 @@ def test_rejects_duplicate_yaml_mapping_keys(tmp_path):
 
 def test_rejects_unknown_fields(tmp_path):
     with pytest.raises(ValidationError, match="extra_forbidden"):
-        load_authorization_source(_write_source(tmp_path, _valid_source("extra: true\n")))
+        load_authorization_source(
+            _write_source(tmp_path, _valid_source("extra: true\n"))
+        )
 
 
 def test_failed_compile_preserves_existing_snapshot_and_removes_temp(tmp_path):

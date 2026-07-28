@@ -15,9 +15,7 @@ from recap.server.audit import AuditOutcome, AuditRecord, AuditSink
         (AuditOutcome.ERROR, "service_unavailable"),
     ],
 )
-def test_audit_records_serialize_only_sanitized_mutation_context(
-    outcome, reason_code
-):
+def test_audit_records_serialize_only_sanitized_mutation_context(outcome, reason_code):
     record = AuditRecord(
         request_id=uuid4(),
         actor_id="actor-1",

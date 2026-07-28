@@ -101,7 +101,10 @@ def parity_clients(tmp_path, monkeypatch):
             )
         uow.commit()
 
-        app_client = stack.enter_context(TestClient(create_app(db_path)))
+        api_key = "parity-secret"
+        app_client = stack.enter_context(
+            TestClient(create_app(db_path, api_key=api_key))
+        )
 
         def get(url, *args, **kwargs):
             assert urlparse(url).path == "/db_path"
@@ -113,7 +116,9 @@ def parity_clients(tmp_path, monkeypatch):
 
         monkeypatch.setattr(httpx2, "get", get)
         monkeypatch.setattr(httpx2.Client, "post", post)
-        remote = stack.enter_context(RecapClient.from_url("http://recap.test"))
+        remote = stack.enter_context(
+            RecapClient.from_url("http://recap.test", api_key=api_key)
+        )
         yield local, remote
 
 
@@ -172,6 +177,18 @@ def test_namespace_and_template_loading_parity(parity_clients):
     ]
     for query in queries:
         _assert_query_parity(parity_clients, query)
+
+
+def test_current_actor_permissions_are_typed(parity_clients):
+    from recap.authorization.scopes import Scope
+    from recap.client.permissions import ActorPermissions
+
+    local, remote = parity_clients
+    permissions = remote.permissions(local.namespace_context.path)
+
+    assert isinstance(permissions, ActorPermissions)
+    assert Scope.RESOURCE_READ in permissions.effective_scopes
+    assert permissions.identities[0].subject == "single-user"
 
 
 @pytest.mark.parametrize(

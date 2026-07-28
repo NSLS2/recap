@@ -24,6 +24,19 @@ class EffectivePermissions(BaseModel):
     grants: tuple[GrantProvenance, ...]
 
 
+class ActorPermissions(BaseModel):
+    """Current actor's effective permissions returned by remote APIs."""
+
+    model_config = ConfigDict(frozen=True)
+
+    identities: tuple[ProviderIdentity, ...]
+    snapshot_generation: str | None
+    effective_scopes: frozenset[Scope]
+    matched_namespace_paths: tuple[str, ...]
+    groups: tuple[str, ...]
+    roles: tuple[str, ...]
+
+
 class PermissionDecision(BaseModel):
     model_config = ConfigDict(frozen=True)
 
