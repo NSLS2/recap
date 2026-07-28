@@ -11,6 +11,7 @@ that grows with tree depth.
 """
 
 from recap.dsl.resource_builder import ResourceTemplateBuilder
+from recap.lifecycle import LifecycleStatus
 
 from .conftest import count_statements
 
@@ -18,7 +19,10 @@ from .conftest import count_statements
 def _make_template(client, name):
     """A minimal single-type template with one property group."""
     with ResourceTemplateBuilder(
-        name=name, type_names=["container"], backend=client.backend
+        name=name,
+        type_names=["container"],
+        backend=client.backend,
+        namespace_id=client.namespace_context.id,
     ) as rtb:
         rtb.prop_group("details").add_attribute(
             "serial", "str", "", "abc"
@@ -39,6 +43,9 @@ def _make_chain(client, depth, *, template, prefix):
             parent=parent,
             on_existing="create",
         )
+    uow = client.backend.begin()
+    client.backend.set_resource_status(root.id, LifecycleStatus.ACTIVE)
+    uow.commit()
     return root
 
 
@@ -86,7 +93,7 @@ def test_get_resource_expand_matches_query_eager(client):
 
     got = client.get_resource("eq-0", "GetResEqT", expand=True)
 
-    qm = client.query_maker(unscoped=True)
+    qm = client.query_maker(context=client.namespace_context)
     expected = qm.resources(load="eager").filter(name="eq-0").first()
 
     assert got.id == expected.id

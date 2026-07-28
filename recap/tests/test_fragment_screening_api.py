@@ -11,7 +11,7 @@ def test_fragment_screening_api(client):
     #     - Pin template
     #     - Process template
     # - Create instance
-    #     - Campaign
+    #     - Namespace
     #     - ProcessRun
     #     - Library plate
     #     - xtal plate
@@ -47,9 +47,10 @@ def test_fragment_screening_api(client):
                     ],
                 }
             ).close_child()
+        lp.activate()
 
     rt = (
-        client.query_maker()
+        client.query_maker(context=client.namespace_context)
         .resource_templates()
         .filter_by_types(["library_plate"])
         .first()
@@ -95,9 +96,10 @@ def test_fragment_screening_api(client):
                     ]
                 }
             ).close_child()
+        plate.activate()
 
     rt = (
-        client.query_maker()
+        client.query_maker(context=client.namespace_context)
         .resource_templates()
         .filter_by_types(["xtal_plate"])
         .first()
@@ -150,10 +152,8 @@ def test_fragment_screening_api(client):
             "source_container", "xtal_plate"
         ).bind_slot("dest_container", "puck_tray").close_step()
 
-    client.create_campaign("Test campaign", "123", "0")
-
     xtal_plate_template = (
-        client.query_maker()
+        client.query_maker(context=client.namespace_context)
         .resource_templates()
         .filter_by_types(["xtal_plate"])
         .first()
@@ -162,7 +162,7 @@ def test_fragment_screening_api(client):
         client.create_resource("Test Xtal plate", xtal_plate_template.name)
 
     library_plate_template = (
-        client.query_maker()
+        client.query_maker(context=client.namespace_context)
         .resource_templates()
         .filter_by_types(["library_plate"])
         .filter(name="Library Plate 1536")
@@ -178,20 +178,15 @@ def test_fragment_screening_api(client):
 
     with client.build_process_run(
         "Test run", "Test run for something", "Fragment Screening Sample Prep", "1.0"
-    ):
-        pass
+    ) as run:
+        run.finalize()
 
     ## Testing queries
 
-    qm = client.query_maker()
-
-    campaigns = qm.campaigns()
+    qm = client.query_maker(context=client.namespace_context)
     runs = qm.process_runs()
 
-    all_campaigns = campaigns.filter(proposal="123").all()
-    assert all_campaigns[0].name == "Test campaign"
-
-    assert runs.filter(campaign__proposal="123").count() == 1
+    assert runs.count() == 1
 
     # for run in runs.include_steps(include_parameters=True).all():
     #     # print(f"Run: {run.name}")

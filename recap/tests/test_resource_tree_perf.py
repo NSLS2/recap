@@ -14,6 +14,7 @@ issue the **same** number of statements.
 """
 
 from recap.dsl.resource_builder import ResourceTemplateBuilder
+from recap.lifecycle import LifecycleStatus
 
 from .conftest import count_statements
 
@@ -21,7 +22,10 @@ from .conftest import count_statements
 def _make_template(client, name="TreePerfT"):
     """A minimal single-type template with one property group."""
     with ResourceTemplateBuilder(
-        name=name, type_names=["container"], backend=client.backend
+        name=name,
+        type_names=["container"],
+        backend=client.backend,
+        namespace_id=client.namespace_context.id,
     ) as rtb:
         rtb.prop_group("details").add_attribute(
             "serial", "str", "", "abc"
@@ -42,6 +46,9 @@ def _make_chain(client, depth, *, prefix):
             parent=parent,
             on_existing="create",
         )
+    uow = client.backend.begin()
+    client.backend.set_resource_status(root.id, LifecycleStatus.ACTIVE)
+    uow.commit()
     return root
 
 
@@ -62,7 +69,7 @@ def test_load_eager_resource_tree_is_depth_independent(client):
     _make_chain(client, depth=3, prefix="three")
     _make_chain(client, depth=4, prefix="four")
 
-    qm = client.query_maker(unscoped=True)
+    qm = client.query_maker(context=client.namespace_context)
 
     with count_statements(client) as counter_3:
         tree_3 = qm.resources(load="eager").filter(name="three-0").first()
@@ -95,8 +102,11 @@ def test_load_eager_resource_tree_bounded_count(client):
             parent=parent,
             on_existing="create",
         )
+    uow = client.backend.begin()
+    client.backend.set_resource_status(root.id, LifecycleStatus.ACTIVE)
+    uow.commit()
 
-    qm = client.query_maker(unscoped=True)
+    qm = client.query_maker(context=client.namespace_context)
     with count_statements(client) as counter:
         tree = qm.resources(load="eager").filter(name="bounded-0").first()
 

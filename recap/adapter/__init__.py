@@ -5,8 +5,8 @@ from pydantic import BaseModel
 
 from recap.dsl.query import QuerySpec, SchemaT
 from recap.schemas.attribute import AttributeGroupRef, AttributeTemplateSchema
+from recap.schemas.namespace import NamespaceContext
 from recap.schemas.process import (
-    CampaignSchema,
     ProcessRunSchema,
     ProcessTemplateRef,
     ProcessTemplateSchema,
@@ -110,16 +110,10 @@ class WriteBackend(Protocol):
     def begin(self) -> UnitOfWork: ...
     def get_namespace_path(self, namespace_id: UUID) -> str: ...
 
-    def create_campaign(
-        self,
-        name: str,
-        proposal: str,
-        saf: str | None,
-        metadata: dict[str, Any] | None = None,
-    ) -> CampaignSchema: ...
-
-    def set_campaign(self, id: UUID) -> CampaignSchema: ...
-    def update_campaign(self, campaign: CampaignSchema) -> CampaignSchema: ...
+    def create_namespace(
+        self, path: str, metadata: dict[str, Any] | None = None
+    ) -> NamespaceContext: ...
+    def set_namespace(self, id: UUID) -> NamespaceContext: ...
 
     def create_process_template(
         self, namespace_id: UUID, name: str, version: str
@@ -223,7 +217,6 @@ class WriteBackend(Protocol):
         name: str,
         description: str,
         process_template: ProcessTemplateRef | ProcessTemplateSchema,
-        campaign: CampaignSchema,
     ) -> ProcessRunSchema: ...
 
     def assign_resource(

@@ -6,11 +6,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import update
 
 from recap.client import RecapClient
-from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate
 from recap.db.resource import Resource, ResourceTemplate
 from recap.lifecycle import LifecycleStatus
-from recap.schemas.namespace import NamespaceContext
 
 
 def make_test_app(tmp_path):
@@ -34,19 +32,7 @@ query ExecuteCount($schema_name: String!, $namespace_path: String!, $spec: JSON!
 
 def seed_resource_tree(db_path):
     client = RecapClient.from_sqlite(db_path)
-    campaign = client.create_campaign("test", "proposal")
-    context = NamespaceContext(id=campaign.id, path=f"test/{campaign.id}")
-    uow = client.backend.begin()
-    client.backend.session.add(
-        Namespace(
-            id=context.id,
-            path=context.path,
-            metadata_json={},
-            status=LifecycleStatus.ACTIVE,
-        )
-    )
-    uow.commit()
-    client._namespace_context = context
+    context = client.create_namespace("test/resource-tree")
     namespace_path = context.path
     with client.build_resource_template(
         name="Parent", type_names=["container"]
@@ -68,18 +54,7 @@ def seed_resource_tree(db_path):
 
 def seed_namespace(db_path):
     client = RecapClient.from_sqlite(db_path)
-    campaign = client.create_campaign("test", "proposal")
-    context = NamespaceContext(id=campaign.id, path=f"test/{campaign.id}")
-    uow = client.backend.begin()
-    client.backend.session.add(
-        Namespace(
-            id=context.id,
-            path=context.path,
-            metadata_json={},
-            status=LifecycleStatus.ACTIVE,
-        )
-    )
-    uow.commit()
+    context = client.create_namespace("test/namespace")
     path = context.path
     client.close()
     return path

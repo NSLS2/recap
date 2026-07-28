@@ -202,6 +202,7 @@ class QuerySpec(BaseModel):
     parent_resource_id: UUID | None = None
     parameter_filters: list[ParameterFilter] = PydanticField(default_factory=list)
     include_archived: bool = False
+    include_mutable: bool = PydanticField(default=False, exclude=True)
     local_metadata_filters: dict[str, Any] = PydanticField(default_factory=dict)
     effective_metadata_filters: dict[str, Any] = PydanticField(default_factory=dict)
     load_mode: LoadMode | None = None

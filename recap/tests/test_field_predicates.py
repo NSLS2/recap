@@ -6,7 +6,11 @@ from pydantic import ValidationError
 from recap.db.process import ProcessRun
 from recap.db.resource import Resource, ResourceTemplate
 from recap.dsl.query import Field, FieldOrdering, FieldPredicate, QuerySpec
-from recap.tests.test_query_dsl import make_query, seed_process_run
+from recap.tests.test_query_dsl import (  # noqa: F401
+    active_namespace,
+    make_query,
+    seed_process_run,
+)
 
 
 def test_field_builds_structured_predicates_and_orderings():
@@ -208,21 +212,22 @@ def test_structured_predicate_coerces_transport_uuid(db_session):
     )
 
     result = make_query(db_session).backend.query(
-        make_query(db_session).process_runs().model, spec
+        make_query(db_session).process_runs().model,
+        spec,
+        namespace_path=make_query(db_session).context.path,
     )
 
     assert [item.id for item in result] == [run.id]
 
 
 def test_structured_predicate_resolves_relationship_and_reuses_join(db_session):
-    campaign, run = seed_process_run(db_session, name="shared-join")
+    namespace, run = seed_process_run(db_session, name="shared-join")
 
     result = (
         make_query(db_session)
         .process_runs()
-        .where(Field("campaign.proposal") == campaign.proposal)
-        .where(Field("campaign.name") == campaign.name)
-        .order_by(Field("campaign.proposal"), Field("name"))
+        .where(Field("namespace.path") == namespace.path)
+        .order_by(Field("namespace.path"), Field("name"))
         .all()
     )
 
@@ -267,7 +272,7 @@ def test_structured_and_legacy_path_filters_share_joins(db_session):
     [
         ("missing", "has no attribute 'missing'"),
         ("missing.name", "has no relationship 'missing'"),
-        ("campaign", "is a relationship, not a column"),
+        ("namespace", "is a relationship, not a column"),
     ],
 )
 def test_structured_predicate_rejects_invalid_paths(db_session, field, message):

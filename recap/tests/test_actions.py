@@ -1,5 +1,5 @@
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
-from recap.db.campaign import Campaign
+from recap.db.namespace import Namespace
 from recap.utils.database import get_or_create
 
 
@@ -9,7 +9,10 @@ def test_container(db_session):
     from recap.db.step import StepTemplate
 
     # db_session.commit()
-    process_template = ProcessTemplate(name="TestProcessTemplate", version="1.0")
+    namespace = Namespace(path="actions", metadata_json={})
+    process_template = ProcessTemplate(
+        namespace=namespace, name="TestProcessTemplate", version="1.0"
+    )
     db_session.add(process_template)
     # container_type = ResourceType(name="container")
     container_type, _ = get_or_create(
@@ -57,6 +60,7 @@ def test_container(db_session):
     child_attr_template.attribute_templates.append(child_prop_type)
     db_session.add(child_prop_type)
     child_container_template = ResourceTemplate(
+        namespace=namespace,
         name="ChildTestContainerType",
         types=[container_type],
         attribute_group_templates=[child_attr_template],
@@ -64,14 +68,17 @@ def test_container(db_session):
     db_session.add(child_container_template)
     db_session.commit()
 
-    child_container_a1 = Resource(name="A1", template=child_container_template)
-    child_container_a2 = Resource(name="A2", template=child_container_template)
-    campaign = Campaign(name="Test campaign", proposal="123456")
+    child_container_a1 = Resource(
+        namespace=namespace, name="A1", template=child_container_template
+    )
+    child_container_a2 = Resource(
+        namespace=namespace, name="A2", template=child_container_template
+    )
     process_run = ProcessRun(
         name="Test Process Run",
         description="This is a test",
         template=process_template,
-        campaign=campaign,
+        namespace=namespace,
     )
     process_run.resources[container_1_resource_slot] = child_container_a1
     process_run.resources[container_2_resource_slot] = child_container_a2

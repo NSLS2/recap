@@ -4,16 +4,18 @@ from tempfile import gettempdir
 import pytest
 
 from recap.client.base_client import RecapClient
-from recap.schemas.process import CampaignSchema
+from recap.schemas.namespace import NamespaceContext
 
 
-def test_build_process_run_requires_campaign(client):
+def test_build_process_run_requires_namespace(client):
+    client._namespace_context = None
     with pytest.raises(ValueError):
         client.build_process_run("run", "desc", "tmpl", "1.0")
 
 
 def test_build_resource_template_validates_type_names(apply_migrations, db_url):
     with RecapClient(url=db_url) as client:
+        client.create_namespace("validation")
         with pytest.raises(TypeError):
             client.build_resource_template(name="Bad", type_names="not-a-list")
 
@@ -26,8 +28,8 @@ def test_from_sqlite_uses_temp_dir():
         assert client.database_path is not None
         assert client.database_path.exists()
         assert client.database_path.parent == Path(gettempdir())
-        client.create_campaign("name", "proposal")
-        assert isinstance(client._campaign, CampaignSchema)
+        client.create_namespace("name")
+        assert isinstance(client.namespace_context, NamespaceContext)
 
     if client.database_path and client.database_path.exists():
         client.database_path.unlink()
@@ -37,43 +39,39 @@ def test_from_sqlite_reuses_existing_file(tmp_path):
     db_file = tmp_path / "recap.db"
 
     with RecapClient.from_sqlite(db_file) as client:
-        client.create_campaign("name", "proposal")
-        existing_id = client._campaign.id
+        client.create_namespace("name")
+        existing_id = client.namespace_context.id
 
     with RecapClient.from_sqlite(db_file) as client:
-        client.set_campaign(existing_id)
-        assert client._campaign.id == existing_id
+        client.set_namespace(existing_id)
+        assert client.namespace_context.id == existing_id
         assert client.database_path == db_file
 
 
-def test_query_maker_defaults_to_client_campaign(apply_migrations, db_url):
+def test_query_maker_uses_explicit_namespace_context(apply_migrations, db_url):
     with RecapClient(url=db_url) as client:
-        client.create_campaign("name", "proposal")
-        qm = client.query_maker()
+        context = client.create_namespace("query-name")
+        qm = client.query_maker(context=context)
 
-        assert qm.process_runs()._spec.campaign_id == client._campaign.id
-        assert qm.resources()._spec.campaign_id == client._campaign.id
-        assert qm.process_templates()._spec.campaign_id is None
+        assert qm.process_runs()._context == context
+        assert qm.resources()._context == context
+        assert qm.process_templates()._context == context
         assert qm.process_runs()._spec.on_unloaded == "warn"
 
 
-def test_query_maker_can_override_campaign(apply_migrations, db_url):
+def test_query_maker_can_use_another_namespace(apply_migrations, db_url):
     with RecapClient(url=db_url) as client:
-        client.create_campaign("default", "p1")
-        default_id = client._campaign.id
-        client.create_campaign("other", "p2")
-        other_id = client._campaign.id
+        default = client.create_namespace("client-default")
+        other = client.create_namespace("client-other")
+        client.set_namespace(default.id)
+        qm = client.query_maker(context=other)
 
-        client.set_campaign(default_id)
-        qm = client.query_maker(campaign=other_id)
-
-        assert qm.process_runs()._spec.campaign_id == other_id
-        assert qm.resources()._spec.campaign_id == other_id
-        assert qm.process_runs()._spec.campaign_id != default_id
+        assert qm.process_runs()._context == other
+        assert qm.resources()._context == other
 
 
 def test_query_maker_can_set_on_unloaded_policy(apply_migrations, db_url):
     with RecapClient(url=db_url) as client:
-        client.create_campaign("name-policy", "proposal-policy")
-        qm = client.query_maker(on_unloaded="raise")
+        context = client.create_namespace("name-policy")
+        qm = client.query_maker(context=context, on_unloaded="raise")
         assert qm.process_runs()._spec.on_unloaded == "raise"

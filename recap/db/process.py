@@ -23,7 +23,6 @@ from sqlalchemy.orm import (
     validates,
 )
 
-from recap.db.campaign import Campaign
 from recap.db.namespace import Namespace
 from recap.db.step import Step, StepTemplate, StepTemplateEdge
 from recap.exceptions import DuplicateResourceError
@@ -148,9 +147,6 @@ class ProcessRun(RevisionedLifecycleMixin, TimestampMixin, Base):
         back_populates="process_run",
         collection_class=mapped_collection(lambda s: s.name),
     )
-    campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaign.id"), nullable=False)
-    campaign: Mapped[Campaign] = relationship("Campaign", back_populates="process_runs")
-
     __table_args__ = (
         UniqueConstraint("namespace_id", "name", name="uq_process_run_namespace_name"),
     )
@@ -275,11 +271,11 @@ class ResourceAssignment(TimestampMixin, Base):
     step: Mapped["Step | None"] = relationship("Step", back_populates="assignments")
 
     @validates("resource")
-    def _check_resource_campaign_uniqueness(self, key, resource: "Resource"):
-        if self.process_run and self.process_run.campaign:
+    def _check_resource_namespace_uniqueness(self, key, resource: "Resource"):
+        if self.process_run:
             if self.process_run_id is None or self.resource_slot_id is None:
                 return resource
-            campaign_id = self.process_run.campaign.id
+            namespace_id = self.process_run.namespace_id
             this_step_id = self.step_id or (
                 self.step.id if self.step is not None else None
             )
@@ -319,13 +315,13 @@ class ResourceAssignment(TimestampMixin, Base):
                     continue
                 if (
                     assignment.process_run
-                    and assignment.process_run.campaign_id == campaign_id
+                    and assignment.process_run.namespace_id == namespace_id
                     and assignment.resource.parent_id == resource.parent_id
                     and other_step_id == this_step_id
                 ):
                     raise DuplicateResourceError(
                         resource.name,
-                        assignment.process_run.campaign.name,
+                        assignment.process_run.namespace.path,
                         assignment.process_run.name,
                         assignment.step.name if assignment.step else None,
                     )

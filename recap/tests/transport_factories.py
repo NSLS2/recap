@@ -156,7 +156,6 @@ def full_process_run() -> ProcessRunSchema:
             id=run_id,
             name="run-1",
             description="transport round trip",
-            campaign_id=uuid4(),
             template=process_template,
             steps={"Acquire": step},
             assigned_resources={"input": assignment},

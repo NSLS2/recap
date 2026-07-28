@@ -17,7 +17,6 @@ from recap.exceptions import (
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.process import (
-    CampaignSchema,
     ProcessRunSchema,
     ProcessTemplateRef,
     ProcessTemplateSchema,
@@ -299,16 +298,16 @@ class ProcessRunBuilder:
         name: str | None,
         description: str | None,
         template_name: str | None,
-        campaign: CampaignSchema | None,
+        namespace_id: UUID | None,
         backend: Backend,
         version: str | None = None,
         process_run_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
     ):
         self.backend = backend
-        if campaign is None:
-            raise ValueError("Campaign is required to determine Namespace")
-        self.namespace_id = campaign.id
+        if namespace_id is None:
+            raise ValueError("Namespace context is required")
+        self.namespace_id = namespace_id
         self._uow = None
         self.name = name
         self.description = description
@@ -322,7 +321,7 @@ class ProcessRunBuilder:
         self._model_dirty: bool = False
         self._params_flushed: bool = False
         try:
-            self._initialize_process_run(process_run_id, campaign)
+            self._initialize_process_run(process_run_id)
             self._loaded_in_uow = True  # mark run as fresh in this UoW
             self._steps = list(self._process_run.steps.values())
             self._resources = {}
@@ -335,13 +334,12 @@ class ProcessRunBuilder:
     def _initialize_process_run(
         self,
         process_run_id: UUID | None,
-        campaign: CampaignSchema | None,
     ):
         self._ensure_uow()
         if process_run_id is not None:
             self._load_existing_process_run(process_run_id)
             return
-        self._validate_new_process_run_inputs(campaign)
+        self._validate_new_process_run_inputs()
         self._process_template = self.backend.get_process_template(
             self.namespace_id, self.template_name, self.version, expand=True
         )
@@ -351,7 +349,6 @@ class ProcessRunBuilder:
                 self.name,
                 self.description,
                 self._process_template,
-                campaign,
             )
         except Exception as exc:
             self._handle_existing_process_run(exc)
@@ -367,7 +364,7 @@ class ProcessRunBuilder:
         self.template_name = template.name
         self.version = template.version
 
-    def _validate_new_process_run_inputs(self, campaign: CampaignSchema | None):
+    def _validate_new_process_run_inputs(self):
         if (
             self.name is None
             or self.description is None
@@ -377,8 +374,6 @@ class ProcessRunBuilder:
             raise ValueError(
                 "name, description, template_name, and version are required to create a process run"
             )
-        if campaign is None:
-            raise ValueError("Campaign is required to create a process run")
 
     def _handle_existing_process_run(self, create_error: Exception):
         self._restart_uow()
@@ -387,6 +382,7 @@ class ProcessRunBuilder:
             QuerySpec(
                 filters={"name": self.name},
                 preloads=["steps", "steps.parameters", "resources"],
+                include_mutable=True,
             ),
             namespace_path=self.backend.get_namespace_path(self.namespace_id),
         )
@@ -590,6 +586,7 @@ class ProcessRunBuilder:
             QuerySpec(
                 filters={"id": process_run_id},
                 preloads=["steps", "steps.parameters", "resources"],
+                include_mutable=True,
             ),
             namespace_path=self.backend.get_namespace_path(self.namespace_id),
         )

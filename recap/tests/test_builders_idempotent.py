@@ -20,7 +20,10 @@ from recap.utils.general import Direction
 def test_resource_builder_reuse_same_resource(client):
     # create once
     with ResourceTemplateBuilder(
-        name="RB-Template", type_names=["container"], backend=client.backend
+        name="RB-Template",
+        type_names=["container"],
+        backend=client.backend,
+        namespace_id=client.namespace_context.id,
     ) as rtb:
         rtb.prop_group("details").add_attribute(
             "serial", "str", "", "abc"
@@ -31,32 +34,31 @@ def test_resource_builder_reuse_same_resource(client):
     with client.build_resource(resource_id=rb.resource.id) as rb2:
         rb2.resource.properties["details"].values["serial"] = "xyz2"
 
-    refreshed = (
-        client.query_maker()
-        .resources()
-        .filter(name="RB-1")
-        .include(["template", "properties"])
-        .first()
-    )
+    with client.build_resource(resource_id=rb.resource.id) as verifier:
+        refreshed = verifier.get_model(update=True)
     assert refreshed.properties.details.values.serial.value == "xyz2"
 
 
 def test_resource_template_builder_reuse_same_template(client):
     with ResourceTemplateBuilder(
-        name="RTB", type_names=["container"], backend=client.backend
+        name="RTB",
+        type_names=["container"],
+        backend=client.backend,
+        namespace_id=client.namespace_context.id,
     ) as rtb:
         rtb.prop_group("meta").add_attribute("foo", "str", "", "").close_group()
     # reopen same template by ref and add another attribute
-    existing = client.query_maker().resource_templates().filter(name="RTB").first()
+    existing = rtb.template
     with ResourceTemplateBuilder(
         name="RTB",
         type_names=["container"],
         backend=client.backend,
+        namespace_id=client.namespace_context.id,
         resource_template_id=existing.id,
     ) as rtb2:
         rtb2.prop_group("meta").add_attribute("bar", "str", "", "").close_group()
 
-    refreshed = client.query_maker().resource_templates().filter(name="RTB").first()
+    refreshed = rtb2.get_model(update=True)
     fields = {
         a.name for a in refreshed.attribute_group_templates[0].attribute_templates
     }
@@ -65,7 +67,10 @@ def test_resource_template_builder_reuse_same_template(client):
 
 def test_process_builder_reuse_same_run(client):
     with ProcessTemplateBuilder(
-        backend=client.backend, name="PTB", version="1.0"
+        backend=client.backend,
+        name="PTB",
+        version="1.0",
+        namespace_id=client.namespace_context.id,
     ) as ptb:
         ptb.add_resource_slot(
             "slot1", "container", Direction.input, create_resource_type=True
@@ -73,22 +78,13 @@ def test_process_builder_reuse_same_run(client):
             "v", "int", "", 1
         ).close_group().close_step()
 
-    client.create_campaign("C-reuse", "P-reuse")
     with client.build_process_run(
         name="run-reuse",
         description="desc",
         template_name="PTB",
         version="1.0",
-    ) as _:
-        pass
-
-    run = (
-        client.query_maker()
-        .process_runs()
-        .filter(name="run-reuse")
-        .include_steps(include_parameters=True)
-        .first()
-    )
+    ) as created:
+        run_id = created.process_run.id
     # Create a resource that satisfies the slot and assign it
     with client.build_resource_template(
         name="ContainerRT", type_names=["container"]
@@ -96,19 +92,14 @@ def test_process_builder_reuse_same_run(client):
         pass
     container_res = client.create_resource("SlotRes", "ContainerRT")
 
-    with client.build_process_run(process_run_id=run.id) as prb2:
+    with client.build_process_run(process_run_id=run_id) as prb2:
         prb2.assign_resource("slot1", container_res)
         params = prb2.get_params("S1")
         params.pg.v = 5
         prb2.set_params(params)
 
-    refreshed = (
-        client.query_maker()
-        .process_runs()
-        .filter(name="run-reuse")
-        .include_steps(include_parameters=True)
-        .first()
-    )
+    with client.build_process_run(process_run_id=run_id) as verifier:
+        refreshed = verifier.process_run
     assert refreshed.steps["S1"].parameters.pg.values.v.value == 5
 
 
@@ -123,7 +114,10 @@ def test_set_params_persists_after_reopen_by_id(client):
     5. Load in a fresh query — values must match what was set.
     """
     with ProcessTemplateBuilder(
-        backend=client.backend, name="PT-I4", version="1.0"
+        backend=client.backend,
+        name="PT-I4",
+        version="1.0",
+        namespace_id=client.namespace_context.id,
     ) as ptb:
         ptb.add_resource_slot(
             "src", "container", Direction.input, create_resource_type=True
@@ -131,24 +125,14 @@ def test_set_params_persists_after_reopen_by_id(client):
             "x", "int", "", 0
         ).add_attribute("y", "str", "", "init").close_group().close_step()
 
-    client.create_campaign("C-I4", "P-I4")
-
     # 1. Create process run by name
     with client.build_process_run(
         name="run-i4",
         description="issue4",
         template_name="PT-I4",
         version="1.0",
-    ) as _:
-        pass
-
-    run = (
-        client.query_maker()
-        .process_runs()
-        .filter(name="run-i4")
-        .include_steps(include_parameters=True)
-        .first()
-    )
+    ) as created:
+        run_id = created.process_run.id
 
     # Assign required resource
     with client.build_resource_template(
@@ -158,7 +142,7 @@ def test_set_params_persists_after_reopen_by_id(client):
     res = client.create_resource("Res-I4", "ContainerRT-I4")
 
     # 2-3. Re-open by ID, set_params
-    with client.build_process_run(process_run_id=run.id) as prb:
+    with client.build_process_run(process_run_id=run_id) as prb:
         prb.assign_resource("src", res)
         params = prb.get_params("Step-A")
         params.grp.x = 42
@@ -167,13 +151,8 @@ def test_set_params_persists_after_reopen_by_id(client):
     # 4. Context exited → committed
 
     # 5. Verify persistence in fresh query
-    fresh = (
-        client.query_maker()
-        .process_runs()
-        .filter(name="run-i4")
-        .include_steps(include_parameters=True)
-        .first()
-    )
+    with client.build_process_run(process_run_id=run_id) as verifier:
+        fresh = verifier.process_run
     assert fresh.steps["Step-A"].parameters.grp.values.x.value == 42
     assert fresh.steps["Step-A"].parameters.grp.values.y.value == "updated"
 
@@ -216,7 +195,8 @@ def test_process_template_builder_reuses_existing_with_warning(client):
     ):
         ptb.add_step("step-2")
 
-    refreshed = client.query_maker().process_templates().filter(name="ReusePT").first()
+    with client.build_process_template("ReusePT", "1.0", on_existing="silent") as ptb:
+        refreshed = ptb.get_model(update=True)
     assert refreshed is not None
 
 
@@ -277,7 +257,6 @@ def test_process_run_builder_reuses_existing_with_warning(client):
             "slot1", "container", Direction.input, create_resource_type=True
         ).add_step("S1")
 
-    client.create_campaign("ReuseCamp", "ReuseProposal")
     with client.build_process_run("ReuseRun", "desc", "ReuseRunPT", "1.0") as _:
         pass
 
@@ -292,7 +271,6 @@ def test_process_run_builder_on_existing_raise_raises(client):
     with client.build_process_template("StrictRunPT", "1.0") as ptb:
         ptb.add_step("S1")
 
-    client.create_campaign("StrictCamp", "StrictProposal")
     with client.build_process_run("StrictRun", "desc", "StrictRunPT", "1.0") as _:
         pass
 
@@ -347,9 +325,8 @@ def test_process_template_silent_reuse_same_steps_idempotent(client):
     # Second registration — must not raise
     register_template()
 
-    refreshed = (
-        client.query_maker().process_templates().filter(name="IdempotPT").first()
-    )
+    with client.build_process_template("IdempotPT", "1.0", on_existing="silent") as ptb:
+        refreshed = ptb.get_model(update=True)
     assert refreshed is not None
     step_names = list(refreshed.step_templates.keys())
     assert step_names == ["Collect"]
@@ -369,7 +346,8 @@ def test_process_template_silent_reuse_adds_new_step(client):
         ptb.add_step("Step1")  # existing — idempotent
         ptb.add_step("Step2")  # new step
 
-    refreshed = client.query_maker().process_templates().filter(name="GrowPT").first()
+    with client.build_process_template("GrowPT", "1.0", on_existing="silent") as ptb:
+        refreshed = ptb.get_model(update=True)
     step_names = sorted(refreshed.step_templates.keys())
     assert step_names == ["Step1", "Step2"]
 
@@ -391,7 +369,8 @@ def test_process_template_silent_reuse_bind_slot_idempotent(client):
         step = ptb.add_step("Process")
         step.bind_slot("input_data", "data")
 
-    refreshed = client.query_maker().process_templates().filter(name="BindPT").first()
+    with client.build_process_template("BindPT", "1.0", on_existing="silent") as ptb:
+        refreshed = ptb.get_model(update=True)
     assert refreshed is not None
 
 
@@ -424,7 +403,10 @@ def test_slot_conflict_or_predicate(client):
 def _make_simple_template(client, name="OnExist-T"):
     """Helper: create a minimal resource template for on_existing tests."""
     with ResourceTemplateBuilder(
-        name=name, type_names=["container"], backend=client.backend
+        name=name,
+        type_names=["container"],
+        backend=client.backend,
+        namespace_id=client.namespace_context.id,
     ) as rtb:
         rtb.prop_group("info").add_attribute("val", "str", "", "default").close_group()
     return rtb
@@ -524,13 +506,8 @@ def test_build_resource_with_parent_schema(client):
     ):
         pass
     # Verify child is linked
-    refreshed = (
-        client.query_maker()
-        .resources()
-        .filter(name="Parent-1")
-        .include(["children"])
-        .first()
-    )
+    with client.build_resource(resource_id=parent.id) as parent_builder:
+        refreshed = parent_builder.get_model(update=True)
     assert "Child-1" in refreshed.children
 
 
@@ -543,13 +520,8 @@ def test_build_resource_with_parent_uuid(client):
         "Child-2", "ChildT2", parent=parent.id, on_existing="create"
     ):
         pass
-    refreshed = (
-        client.query_maker()
-        .resources()
-        .filter(name="Parent-2")
-        .include(["children"])
-        .first()
-    )
+    with client.build_resource(resource_id=parent.id) as parent_builder:
+        refreshed = parent_builder.get_model(update=True)
     assert "Child-2" in refreshed.children
 
 
@@ -589,8 +561,6 @@ def test_optional_output_slot_does_not_block_get_params(client):
             .close_step()
         )
 
-    client.create_campaign("C-Opt", "P-Opt")
-
     with client.build_resource_template(
         name="ContainerRT-Opt", type_names=["container"]
     ) as _:
@@ -626,8 +596,6 @@ def test_all_required_slots_preserves_old_behavior(client):
             .bind_slot("in", "slot_a")
             .close_step()
         )
-
-    client.create_campaign("C-AllReq", "P-AllReq")
 
     with client.build_resource_template(
         name="ContainerRT-AllReq", type_names=["container"]
@@ -672,8 +640,6 @@ def test_optional_slot_can_be_assigned_later(client):
             .close_step()
         )
 
-    client.create_campaign("C-Late", "P-Late")
-
     with client.build_resource_template(
         name="ContainerRT-Late", type_names=["container"]
     ) as _:
@@ -691,62 +657,15 @@ def test_optional_slot_can_be_assigned_later(client):
         prb.assign_resource("src", src_res)
         params = prb.get_params("Move")
         assert params.mv.count.value == 0
+        run_id = prb.process_run.id
 
     # Re-open and assign optional slot too
-    run = (
-        client.query_maker()
-        .process_runs()
-        .filter(name="run-late")
-        .include_steps(include_parameters=True)
-        .first()
-    )
-    with client.build_process_run(process_run_id=run.id) as prb2:
+    with client.build_process_run(process_run_id=run_id) as prb2:
         prb2.assign_resource("dest", dest_res)
         params = prb2.get_params("Move")
         params.mv.count = 42
         prb2.set_params(params)
 
-    fresh = (
-        client.query_maker()
-        .process_runs()
-        .filter(name="run-late")
-        .include_steps(include_parameters=True)
-        .first()
-    )
+    with client.build_process_run(process_run_id=run_id) as verifier:
+        fresh = verifier.process_run
     assert fresh.steps["Move"].parameters.mv.values.count.value == 42
-
-
-# ---------------------------------------------------------------------------
-# Issue #6: unscoped query_maker
-# ---------------------------------------------------------------------------
-
-
-def test_query_maker_unscoped_returns_cross_campaign(client):
-    """unscoped=True bypasses the active campaign filter."""
-    # Create template
-    with client.build_resource_template(
-        name="UnscopedT", type_names=["container"]
-    ) as _:
-        pass
-
-    # Campaign 1
-    client.create_campaign("Camp-A", "PA")
-    client.create_resource("Res-Camp-A", "UnscopedT", on_existing="create")
-
-    # Campaign 2
-    client.create_campaign("Camp-B", "PB")
-    client.create_resource("Res-Camp-B", "UnscopedT", on_existing="create")
-
-    # Unscoped should find both resources
-    unscoped_results = client.query_maker(unscoped=True).resources().all()
-    unscoped_names = {r.name for r in unscoped_results}
-    assert "Res-Camp-A" in unscoped_names
-    assert "Res-Camp-B" in unscoped_names
-
-
-def test_query_maker_unscoped_with_campaign_raises(client):
-    """Combining campaign with unscoped=True raises ValueError."""
-    from uuid import uuid4
-
-    with pytest.raises(ValueError, match="Cannot combine"):
-        client.query_maker(campaign=uuid4(), unscoped=True)

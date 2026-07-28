@@ -91,12 +91,12 @@ def test_query_request_serializes_complete_supported_query_spec():
 
 
 def test_query_request_serializes_structured_predicates_and_orderings():
-    campaign_id = uuid4()
+    namespace_id = uuid4()
     request = QueryRequest.from_query(
         ProcessRunSchema,
         QuerySpec(
             predicates=[
-                Field("campaign_id") == campaign_id,
+                Field("namespace_id") == namespace_id,
                 Field("create_date") >= STAMP,
             ],
             orderings=[Field("create_date").desc()],
@@ -105,7 +105,7 @@ def test_query_request_serializes_structured_predicates_and_orderings():
     )
 
     assert request.spec["predicates"] == [
-        {"field": "campaign_id", "op": "eq", "value": str(campaign_id)},
+        {"field": "namespace_id", "op": "eq", "value": str(namespace_id)},
         {
             "field": "create_date",
             "op": "gte",
@@ -250,7 +250,7 @@ def test_process_run_round_trip_restores_enums_dynamic_parameters_and_nested_sta
     )
 
     assert hydrated.id == run.id
-    assert hydrated.campaign_id == run.campaign_id
+    assert hydrated.namespace_id == run.namespace_id
     assert hydrated.create_date == STAMP
     assert hydrated.steps["Acquire"].state is StepStatus.COMPLETE
     assert isinstance(hydrated.steps["Acquire"].parameters, BaseModel)

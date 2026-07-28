@@ -1,14 +1,15 @@
 import pytest
 
-from recap.db.attribute import AttributeTemplate
+from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.process import ProcessTemplate
 from recap.db.resource import Resource, ResourceTemplate
+from recap.db.step import StepTemplate
 from recap.lifecycle import LifecycleStatus
 from recap.utils.general import Direction
 
 
 def test_resource_template_guard_prevents_updates_when_resources_exist(client):
-    client.create_campaign("Resource Guard", "P0", None)
+    client.create_namespace("resource-guard")
     with client.build_resource_template(
         name="GuardedTemplate", type_names=["sample"], version="1.0"
     ):
@@ -39,7 +40,7 @@ def test_resource_template_guard_prevents_updates_when_resources_exist(client):
 
 
 def test_process_template_guard_prevents_updates_when_runs_exist(client):
-    client.create_campaign("Camp", "P1", "SAF1")
+    client.create_namespace("camp")
     with client.build_resource_template(
         name="ProcRes", type_names=["container"], version="1.0"
     ):
@@ -83,7 +84,7 @@ def test_process_template_guard_prevents_updates_when_runs_exist(client):
 
 
 def test_active_process_template_rejects_nested_attribute_mutation(client):
-    client.create_campaign("Nested Guard", "P2", None)
+    client.create_namespace("nested-guard")
     with client.build_process_template(name="Nested PT", version="1.0") as builder:
         builder.add_step("step").param_group("params").add_attribute(
             "temperature", "float", "C", 20
@@ -100,7 +101,10 @@ def test_active_process_template_rejects_nested_attribute_mutation(client):
         client.backend.session.flush()
         attribute = (
             client.backend.session.query(AttributeTemplate)
-            .filter_by(name="temperature")
+            .join(AttributeTemplate.attribute_group_template)
+            .join(AttributeGroupTemplate.step_template)
+            .filter(AttributeTemplate.name == "temperature")
+            .filter(StepTemplate.process_template_id == template.id)
             .one()
         )
         attribute.unit = "K"
@@ -111,7 +115,7 @@ def test_active_process_template_rejects_nested_attribute_mutation(client):
 
 
 def test_active_resource_template_rejects_nested_child_mutation(client):
-    client.create_campaign("Nested Resource Guard", "P3", None)
+    client.create_namespace("nested-resource-guard")
     with client.build_resource_template(
         name="Nested RT", type_names=["plate"], version="1.0"
     ) as builder:
@@ -137,7 +141,7 @@ def test_active_resource_template_rejects_nested_child_mutation(client):
 
 
 def test_first_resource_instance_activates_template(client):
-    client.create_campaign("Instance Guard", "P4", None)
+    client.create_namespace("instance-guard")
     with client.build_resource_template(
         name="Instance RT", type_names=["sample"], version="1.0"
     ):

@@ -4,7 +4,6 @@ from sqlalchemy.orm import sessionmaker
 
 from recap.adapter.local import LocalBackend
 from recap.adapter.transport import QueryRequest
-from recap.db.campaign import Campaign
 from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate
 from recap.db.resource import Resource, ResourceTemplate
@@ -39,17 +38,12 @@ def test_namespace_context_is_transport_context_not_query_spec():
 
     assert request.namespace_path == "beamline/amx/proposal/312345"
     assert "namespace_path" not in request.spec
-    assert "campaign_id" not in request.spec
 
 
 def test_process_runs_are_visible_only_in_exact_namespace(db_session):
     parent = _namespace("beamline/amx")
     own = _namespace("beamline/amx/proposal/1", parent=parent)
     sibling = _namespace("beamline/amx/proposal/2", parent=parent)
-    campaigns = [
-        Campaign(id=namespace.id, name=namespace.path, proposal=namespace.path)
-        for namespace in (parent, own, sibling)
-    ]
     templates = [
         ProcessTemplate(
             namespace=namespace,
@@ -65,14 +59,13 @@ def test_process_runs_are_visible_only_in_exact_namespace(db_session):
             name=f"run-{index}",
             description="run",
             template=template,
-            campaign=campaign,
             status=LifecycleStatus.ACTIVE,
         )
-        for index, (namespace, template, campaign) in enumerate(
-            zip((parent, own, sibling), templates, campaigns, strict=True)
+        for index, (namespace, template) in enumerate(
+            zip((parent, own, sibling), templates, strict=True)
         )
     ]
-    db_session.add_all([parent, own, sibling, *campaigns, *templates, *runs])
+    db_session.add_all([parent, own, sibling, *templates, *runs])
     db_session.commit()
 
     result = _query(db_session, own).process_runs(shape="ref").all()

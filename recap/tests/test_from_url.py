@@ -88,6 +88,6 @@ def test_from_url_query_maker_uses_read_backend(tmp_path):
     with patch("httpx2.get", return_value=mock_resp):
         client = RecapClient.from_url("http://localhost:8000")
 
-    qm = client.query_maker(unscoped=True)
+    qm = client.query_maker(context=client.create_namespace("test"))
     # QueryDSL stores backend as _backend
     assert isinstance(qm.backend, GraphQLAdapter)

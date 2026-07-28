@@ -2,7 +2,6 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
-from recap.db.campaign import Campaign
 from recap.db.namespace import Namespace
 from recap.db.process import (
     Direction,
@@ -94,7 +93,12 @@ def test_process_run_validates_resource_assignments(db_session, namespace):
         resource_type=resource_type,
         direction=Direction.input,
     )
-    campaign = Campaign(name="Campaign", proposal="P1", saf=None, meta_data=None)
+    slot_two = ResourceSlot(
+        name="instrument-2",
+        process_template=process_template,
+        resource_type=resource_type,
+        direction=Direction.input,
+    )
 
     matching_template = ResourceTemplate(
         namespace=namespace, name="MicroscopeTemplate", types=[resource_type]
@@ -116,7 +120,6 @@ def test_process_run_validates_resource_assignments(db_session, namespace):
         name="run-1",
         description="desc",
         template=process_template,
-        campaign=campaign,
     )
 
     db_session.add_all(
@@ -124,7 +127,7 @@ def test_process_run_validates_resource_assignments(db_session, namespace):
             resource_type,
             process_template,
             slot,
-            campaign,
+            slot_two,
             matching_template,
             matching_resource,
             wrong_type,
@@ -139,13 +142,6 @@ def test_process_run_validates_resource_assignments(db_session, namespace):
     db_session.flush()
     assert run.assignments[slot].resource is matching_resource
 
-    slot_two = ResourceSlot(
-        name="instrument-2",
-        process_template=process_template,
-        resource_type=resource_type,
-        direction=Direction.input,
-    )
-    db_session.add(slot_two)
     with pytest.raises(ValueError):
         run.resources[slot_two] = wrong_resource
 
@@ -169,16 +165,14 @@ def test_step_initializes_parameters_from_template(db_session, namespace):
         default_value=30,
         attribute_group_template=attr_group,
     )
-    campaign = Campaign(name="C1", proposal="P1", saf=None, meta_data=None)
 
     run = ProcessRun(
         namespace=namespace,
         name="run-001",
         description="desc",
         template=process_template,
-        campaign=campaign,
     )
-    db_session.add_all([process_template, step_template, attr_group, campaign, run])
+    db_session.add_all([process_template, step_template, attr_group, run])
     db_session.flush()
 
     step = run.steps["Incubate"]
@@ -265,15 +259,13 @@ def test_resource_slot_name_unique_per_process_template(db_session, namespace):
 def test_step_uses_template_name_when_missing(db_session, namespace):
     pt = ProcessTemplate(namespace=namespace, name="PT2", version="1")
     st = StepTemplate(name="T1", process_template=pt)
-    campaign = Campaign(name="C2", proposal="p", saf=None, meta_data=None)
     run = ProcessRun(
         namespace=namespace,
         name="run-step",
         description="",
         template=pt,
-        campaign=campaign,
     )
-    db_session.add_all([pt, st, campaign, run])
+    db_session.add_all([pt, st, run])
     db_session.flush()
 
     # ProcessRun __init__ auto-creates steps; ensure the default naming uses the template

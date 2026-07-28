@@ -33,7 +33,6 @@ from recap.adapter.query_loaders import (
 from recap.adapter.resource_construct import ResourceSchemaHydrator
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate, AttributeValue
 from recap.db.base import Base
-from recap.db.campaign import Campaign
 from recap.db.exceptions import ValidationError
 from recap.db.namespace import Namespace, NamespaceRepository
 from recap.db.process import (
@@ -58,9 +57,8 @@ from recap.schemas.attribute import (
     AttributeGroupRef,
     AttributeTemplateSchema,
 )
-from recap.schemas.namespace import NamespaceSchema
+from recap.schemas.namespace import NamespaceContext, NamespaceSchema
 from recap.schemas.process import (
-    CampaignSchema,
     ProcessRunRef,
     ProcessRunSchema,
     ProcessTemplateRef,
@@ -239,58 +237,19 @@ class LocalBackend(Backend):
         self._session = session
         return SQLUnitOfWork(self, session, tx)
 
-    def create_campaign(
-        self,
-        name: str,
-        proposal: str,
-        saf: str | None,
-        metadata: dict[str, Any] | None = None,
-    ) -> CampaignSchema:
-        campaign_id = uuid4()
-        self._campaign = Campaign(
-            id=campaign_id,
-            name=name,
-            proposal=str(proposal),
-            saf=saf,
-            meta_data=metadata,
-        )
-        namespace = Namespace(
-            id=campaign_id,
-            path=f"/recap/campaign/{campaign_id}",
-            metadata_json={
-                "recap.campaign.name": name,
-                "nsls2.proposal": str(proposal),
-                "nsls2.saf": saf,
-                "recap.campaign.metadata": metadata,
-            },
-            status=LifecycleStatus.ACTIVE,
-        )
-        self.session.add_all([namespace, self._campaign])
+    def create_namespace(
+        self, path: str, metadata: dict[str, Any] | None = None
+    ) -> NamespaceContext:
+        namespace = NamespaceRepository(self.session).create(path, metadata)
+        namespace.status = LifecycleStatus.ACTIVE
         self.session.flush()
-        return CampaignSchema.model_validate(self._campaign)
+        return NamespaceContext.model_validate(namespace)
 
-    def set_campaign(self, id: UUID) -> CampaignSchema:
-        # The backend never short-circuits: a REST backend's campaign endpoint
-        # always returns fresh data per request, so caching is a client-side
-        # concern. ``RecapClient.set_campaign`` owns the cache + ``force`` flag.
-        statement = select(Campaign).filter_by(id=id)
-        self._campaign = self.session.execute(statement).scalar_one_or_none()
-        if self._campaign is None:
-            raise ValueError(f"Campaign with ID {id} not found")
-        return CampaignSchema.model_validate(self._campaign)
-
-    def update_campaign(self, campaign: CampaignSchema) -> CampaignSchema:
-        statement = select(Campaign).filter_by(id=campaign.id)
-        model = self.session.execute(statement).scalar_one_or_none()
-        if model is None:
-            raise ValueError(f"Campaign with ID {campaign.id} not found")
-        model.name = campaign.name
-        model.proposal = str(campaign.proposal)
-        model.saf = campaign.saf
-        model.meta_data = campaign.meta_data
-        self._campaign = model
-        self.session.flush()
-        return CampaignSchema.model_validate(model)
+    def set_namespace(self, id: UUID) -> NamespaceContext:
+        namespace = self.session.get(Namespace, id)
+        if namespace is None:
+            raise ValueError(f"Namespace with ID {id} not found")
+        return NamespaceContext.model_validate(namespace)
 
     def create_process_template(
         self, namespace_id: UUID, name: str, version: str
@@ -845,10 +804,7 @@ class LocalBackend(Backend):
         name: str,
         description: str,
         process_template: ProcessTemplateRef | ProcessTemplateSchema,
-        campaign: CampaignSchema,
     ) -> ProcessRunSchema:
-        if namespace_id != campaign.id:
-            raise ValueError("ProcessRun namespace_id must match campaign id")
         statement = select(ProcessTemplate).where(
             ProcessTemplate.id == process_template.id
         )
@@ -860,7 +816,6 @@ class LocalBackend(Backend):
             name=name,
             description=description,
             template=process_template_model,
-            campaign_id=campaign.id,
         )
         self.session.add(process_run)
         self.session.flush()
@@ -1491,6 +1446,8 @@ class LocalBackend(Backend):
     ):
         context_id, ancestor_ids = self._namespace_visibility(namespace_path)
         statuses = [LifecycleStatus.ACTIVE]
+        if spec.include_mutable:
+            statuses.append(LifecycleStatus.MUTABLE)
         if spec.include_archived:
             statuses.append(LifecycleStatus.ARCHIVED)
 

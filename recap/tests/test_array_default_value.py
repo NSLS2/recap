@@ -22,10 +22,11 @@ class TestArrayDefaultViaLocalBackend:
             name="ArrayTest-T1", type_names=["sample"]
         ) as rtb:
             rtb.prop_group("data").add_attribute("tags", "array", "", []).close_group()
+            rtb.activate()
 
         # Verify template was persisted and is queryable
         tmpl = (
-            client.query_maker()
+            client.query_maker(context=client.namespace_context)
             .resource_templates()
             .filter(name="ArrayTest-T1")
             .first()
@@ -40,9 +41,10 @@ class TestArrayDefaultViaLocalBackend:
             rtb.prop_group("meta").add_attribute(
                 "labels", "array", "", ["a", "b", "c"]
             ).close_group()
+            rtb.activate()
 
         tmpl = (
-            client.query_maker()
+            client.query_maker(context=client.namespace_context)
             .resource_templates()
             .filter(name="ArrayTest-T2")
             .first()
@@ -53,15 +55,25 @@ class TestArrayDefaultViaLocalBackend:
         """Reopening a template with an array attribute doesn't create duplicates."""
         for _ in range(2):
             with ResourceTemplateBuilder(
-                name="ArrayTest-T3", type_names=["container"], backend=client.backend
+                name="ArrayTest-T3",
+                type_names=["container"],
+                backend=client.backend,
+                namespace_id=client.namespace_context.id,
             ) as rtb:
                 rtb.prop_group("info").add_attribute(
                     "items", "array", "", []
                 ).close_group()
+        with ResourceTemplateBuilder(
+            name="ArrayTest-T3",
+            type_names=["container"],
+            backend=client.backend,
+            namespace_id=client.namespace_context.id,
+        ) as rtb:
+            rtb.activate()
 
         # Should still have exactly one attribute template named "items"
         tmpl = (
-            client.query_maker()
+            client.query_maker(context=client.namespace_context)
             .resource_templates()
             .filter(name="ArrayTest-T3")
             .include_attribute_groups()
@@ -122,15 +134,9 @@ class TestArrayDefaultRoundTrip:
                 "measurements", "array", "mm", [1, 2, 3]
             ).close_group()
 
-        with client.build_resource("ArrayE2E-R", "ArrayE2E-T") as _:
-            pass  # just create with defaults
-
-        res = (
-            client.query_maker()
-            .resources()
-            .filter(name="ArrayE2E-R")
-            .include(["template", "properties"])
-            .first()
-        )
+        with client.build_resource("ArrayE2E-R", "ArrayE2E-T") as builder:
+            resource_id = builder.resource.id
+        with client.build_resource(resource_id=resource_id) as builder:
+            res = builder.get_model(update=True)
         assert res is not None
         assert res.properties.data.values.measurements.value == [1, 2, 3]

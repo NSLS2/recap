@@ -1,7 +1,6 @@
 import pytest
 
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
-from recap.db.campaign import Campaign
 from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
@@ -36,9 +35,6 @@ def test_aggregate_lifecycle_operations(model, db_session):
 
 def test_first_process_run_activates_template_and_finalize_freezes_run(db_session):
     namespace = _namespace(db_session, "process-run")
-    campaign = Campaign(
-        id=namespace.id, name="campaign", proposal="p", saf=None, meta_data=None
-    )
     template = ProcessTemplate(name="process", version="1", namespace=namespace)
     template.step_templates["step"] = StepTemplate(
         name="step",
@@ -51,14 +47,13 @@ def test_first_process_run_activates_template_and_finalize_freezes_run(db_sessio
             )
         ],
     )
-    db_session.add_all([campaign, template])
+    db_session.add(template)
     db_session.flush()
 
     run = ProcessRun(
         name="run",
         description="description",
         template=template,
-        campaign=campaign,
         namespace=namespace,
     )
     db_session.add(run)
@@ -81,9 +76,6 @@ def test_assignment_activates_nested_resource_root_in_same_flush(db_session):
     from recap.utils.general import Direction
 
     namespace = _namespace(db_session, "assignment")
-    campaign = Campaign(
-        id=namespace.id, name="campaign", proposal="p", saf=None, meta_data=None
-    )
     resource_type = ResourceType(name="assignment-sample")
     process_template = ProcessTemplate(name="process", version="1", namespace=namespace)
     slot = ResourceSlot(
@@ -103,10 +95,9 @@ def test_assignment_activates_nested_resource_root_in_same_flush(db_session):
         name="run",
         description="description",
         template=process_template,
-        campaign=campaign,
         namespace=namespace,
     )
-    db_session.add_all([campaign, slot, resource_template, root, run])
+    db_session.add_all([slot, resource_template, root, run])
     db_session.flush()
 
     assignment = ResourceAssignment(process_run=run, resource_slot=slot, resource=child)
@@ -119,18 +110,14 @@ def test_assignment_activates_nested_resource_root_in_same_flush(db_session):
 
 def test_process_run_rejects_illegal_finalize_transition(db_session):
     namespace = _namespace(db_session, "archived-run")
-    campaign = Campaign(
-        id=namespace.id, name="campaign", proposal="p", saf=None, meta_data=None
-    )
     template = ProcessTemplate(name="process", version="1", namespace=namespace)
     run = ProcessRun(
         name="run",
         description="description",
         template=template,
-        campaign=campaign,
         namespace=namespace,
     )
-    db_session.add_all([campaign, template, run])
+    db_session.add_all([template, run])
     db_session.flush()
     run.archive()
 

@@ -8,13 +8,6 @@ from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext, NamespaceRef, NamespaceSchema
 
 
-@pytest.fixture(scope="module", autouse=True)
-def namespace_table(apply_migrations, engine):
-    Namespace.__table__.create(engine, checkfirst=True)
-    yield
-    Namespace.__table__.drop(engine, checkfirst=True)
-
-
 @pytest.fixture
 def namespace_repository(db_session):
     return NamespaceRepository(db_session)

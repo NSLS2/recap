@@ -4,7 +4,6 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from recap.adapter.local import LocalBackend
-from recap.db.campaign import Campaign
 from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate
 from recap.db.resource import Resource, ResourceTemplate
@@ -58,35 +57,29 @@ def test_template_identity_is_scoped_by_namespace(db_session):
         db_session.flush()
 
 
-def test_process_run_names_are_scoped_by_namespace_and_campaign_remains(db_session):
+def test_process_run_names_are_scoped_by_namespace(db_session):
     amx = _namespace("run/amx")
     fmx = _namespace("run/fmx")
     template_a = ProcessTemplate(namespace=amx, name="collect", version="1")
     template_b = ProcessTemplate(namespace=fmx, name="collect", version="1")
-    campaign_a = Campaign(id=amx.id, name="AMX", proposal="1", saf=None, meta_data=None)
-    campaign_b = Campaign(id=fmx.id, name="FMX", proposal="2", saf=None, meta_data=None)
     run_a = ProcessRun(
         namespace=amx,
         name="run-1",
         description="",
         template=template_a,
-        campaign=campaign_a,
     )
     run_b = ProcessRun(
         namespace=fmx,
         name="run-1",
         description="",
         template=template_b,
-        campaign=campaign_b,
     )
-    db_session.add_all(
-        [amx, fmx, template_a, template_b, campaign_a, campaign_b, run_a, run_b]
-    )
+    db_session.add_all([amx, fmx, template_a, template_b, run_a, run_b])
     db_session.flush()
 
     assert run_a.name == run_b.name
     assert run_a.namespace_id != run_b.namespace_id
-    assert run_a.campaign is campaign_a
+    assert run_a.namespace is amx
 
     run_a.namespace_id = fmx.id
     with pytest.raises(ValueError, match="namespace_id is immutable"):
@@ -175,15 +168,11 @@ def test_aggregate_schemas_expose_namespace_lifecycle_and_copy_identity(db_sessi
     process_template = ProcessTemplate(
         namespace=namespace, name="collect", version="1", labels=["MX Collect"]
     )
-    campaign = Campaign(
-        id=namespace.id, name="Schema", proposal="1", saf=None, meta_data=None
-    )
     process_run = ProcessRun(
         namespace=namespace,
         name="run",
         description="",
         template=process_template,
-        campaign=campaign,
     )
     resource_template = ResourceTemplate(
         namespace=namespace, name="sample", version="1", labels=["MX Sample"]
@@ -199,7 +188,6 @@ def test_aggregate_schemas_expose_namespace_lifecycle_and_copy_identity(db_sessi
         [
             namespace,
             process_template,
-            campaign,
             process_run,
             resource_template,
             source,
@@ -208,15 +196,21 @@ def test_aggregate_schemas_expose_namespace_lifecycle_and_copy_identity(db_sessi
     )
     db_session.flush()
 
-    for schema in (
+    schemas = (
         ProcessTemplateSchema.model_validate(process_template),
         ProcessRunSchema.model_validate(process_run),
         ResourceTemplateSchema.model_validate(resource_template),
         ResourceSchema.model_validate(copy),
-    ):
+    )
+    for schema in schemas:
         assert schema.namespace_id == namespace.id
-        assert schema.status is LifecycleStatus.MUTABLE
         assert schema.revision == 1
+    assert [schema.status for schema in schemas] == [
+        LifecycleStatus.ACTIVE,
+        LifecycleStatus.MUTABLE,
+        LifecycleStatus.ACTIVE,
+        LifecycleStatus.MUTABLE,
+    ]
     assert ResourceSchema.model_validate(copy).copied_from_id == source.id
 
 

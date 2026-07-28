@@ -16,6 +16,7 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
     resource_slot_id = uuid4()
     assigned_resource_id = uuid4()
     unassigned_resource_id = uuid4()
+    resource_assignment_id = uuid4()
 
     apply_migrations(db_url, revision="f11ecd5c55cf")
     engine = create_engine(db_url)
@@ -104,7 +105,7 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
                 """
             ),
             {
-                "id": uuid4().hex,
+                "id": resource_assignment_id.hex,
                 "run_id": process_run_id.hex,
                 "slot_id": resource_slot_id.hex,
                 "resource_id": assigned_resource_id.hex,
@@ -119,35 +120,69 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
     )
 
     with engine.connect() as connection:
-        namespace = connection.execute(
-            text("SELECT id, path, metadata_json FROM namespace WHERE id = :id"),
-            {"id": campaign_id.hex},
-        ).mappings().one()
-        process_run = connection.execute(
-            text("SELECT namespace_id FROM process_run WHERE id = :id"),
-            {"id": process_run_id.hex},
-        ).mappings().one()
+        namespace = (
+            connection.execute(
+                text("SELECT id, path, metadata_json FROM namespace WHERE id = :id"),
+                {"id": campaign_id.hex},
+            )
+            .mappings()
+            .one()
+        )
+        process_run = (
+            connection.execute(
+                text("SELECT namespace_id FROM process_run WHERE id = :id"),
+                {"id": process_run_id.hex},
+            )
+            .mappings()
+            .one()
+        )
         resources = {
             row["id"]: row
             for row in connection.execute(
                 text("SELECT id, namespace_id, status, revision FROM resource")
             ).mappings()
         }
-        templates = connection.execute(
-            text(
-                """
+        templates = (
+            connection.execute(
+                text(
+                    """
                 SELECT
                     (SELECT namespace_id FROM process_template WHERE id = :process_id)
                         AS process_namespace_id,
                     (SELECT namespace_id FROM resource_template WHERE id = :resource_id)
                         AS resource_namespace_id
                 """
-            ),
-            {
-                "process_id": process_template_id.hex,
-                "resource_id": resource_template_id.hex,
-            },
-        ).mappings().one()
+                ),
+                {
+                    "process_id": process_template_id.hex,
+                    "resource_id": resource_template_id.hex,
+                },
+            )
+            .mappings()
+            .one()
+        )
+        assignment = (
+            connection.execute(
+                text(
+                    "SELECT id, process_run_id, resource_id FROM resource_assignment "
+                    "WHERE id = :id"
+                ),
+                {"id": resource_assignment_id.hex},
+            )
+            .mappings()
+            .one()
+        )
+        missing_owners = {
+            table_name: connection.scalar(
+                text(f"SELECT count(*) FROM {table_name} WHERE namespace_id IS NULL")
+            )
+            for table_name in (
+                "process_run",
+                "process_template",
+                "resource_template",
+                "resource",
+            )
+        }
 
     metadata = json.loads(namespace["metadata_json"])
     assert namespace["path"] == campaign_path
@@ -155,6 +190,12 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
     assert process_run["namespace_id"] == namespace["id"]
     assert resources[assigned_resource_id.hex]["status"] == "ACTIVE"
     assert resources[unassigned_resource_id.hex]["status"] == "MUTABLE"
+    assert assignment == {
+        "id": resource_assignment_id.hex,
+        "process_run_id": process_run_id.hex,
+        "resource_id": assigned_resource_id.hex,
+    }
+    assert not any(missing_owners.values())
     assert metadata["recap.campaign.name"] == "Run 2026-1"
     assert metadata["nsls2.proposal"] == "312345"
     assert metadata["nsls2.saf"] == "310000"
@@ -162,5 +203,8 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
     assert templates["process_namespace_id"] == templates["resource_namespace_id"]
     assert resources[assigned_resource_id.hex]["revision"] == 1
 
-    campaign_columns = {column["name"] for column in inspect(engine).get_columns("campaign")}
-    assert {"name", "proposal", "saf", "meta_data"} <= campaign_columns
+    inspector = inspect(engine)
+    assert "campaign" not in inspector.get_table_names()
+    assert "campaign_id" not in {
+        column["name"] for column in inspector.get_columns("process_run")
+    }

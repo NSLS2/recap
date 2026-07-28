@@ -220,7 +220,11 @@ class ResourceBuilder:
     def _reload_resource(self, resource_id: UUID) -> ResourceSchema:
         resources = self.backend.query(
             ResourceSchema,
-            QuerySpec(filters={"id": resource_id}, preloads=["children", "properties"]),
+            QuerySpec(
+                filters={"id": resource_id},
+                preloads=["children", "properties"],
+                include_mutable=True,
+            ),
             namespace_path=self.backend.get_namespace_path(self.namespace_id),
         )
         if not resources:

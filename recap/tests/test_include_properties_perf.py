@@ -13,6 +13,7 @@ statements.
 """
 
 from recap.dsl.resource_builder import ResourceTemplateBuilder
+from recap.lifecycle import LifecycleStatus
 
 from .conftest import count_statements
 
@@ -20,7 +21,10 @@ from .conftest import count_statements
 def _make_template(client, name="IncPropT"):
     """A template with three property groups, each with one attribute."""
     with ResourceTemplateBuilder(
-        name=name, type_names=["container"], backend=client.backend
+        name=name,
+        type_names=["container"],
+        backend=client.backend,
+        namespace_id=client.namespace_context.id,
     ) as rtb:
         rtb.prop_group("details").add_attribute(
             "serial", "str", "", "abc"
@@ -35,10 +39,14 @@ def test_build_property_model_after_include_properties_no_lazy_loads(client):
     """build_property_model() on a resource fetched with include(["properties"])
     must not trigger any additional SQL (no per-group template lazy load)."""
     _make_template(client)
-    client.create_resource("incprop-a", "IncPropT", on_existing="create")
-    client.create_resource("incprop-b", "IncPropT", on_existing="create")
+    first = client.create_resource("incprop-a", "IncPropT", on_existing="create")
+    second = client.create_resource("incprop-b", "IncPropT", on_existing="create")
+    for resource in (first, second):
+        uow = client.backend.begin()
+        client.backend.set_resource_status(resource.id, LifecycleStatus.ACTIVE)
+        uow.commit()
 
-    qm = client.query_maker(unscoped=True)
+    qm = client.query_maker(context=client.namespace_context)
     resources = qm.resources().include(["properties"]).filter(name="incprop-a").all()
 
     # All hydration SQL should have run during .all(); building the dynamic
@@ -69,9 +77,14 @@ def test_include_properties_matches_load_eager_statement_count(client):
     Property.template per group while load="eager" does not.
     """
     _make_template(client, name="IncPropParity")
-    client.create_resource("parity-res", "IncPropParity", on_existing="create")
+    resource = client.create_resource(
+        "parity-res", "IncPropParity", on_existing="create"
+    )
+    uow = client.backend.begin()
+    client.backend.set_resource_status(resource.id, LifecycleStatus.ACTIVE)
+    uow.commit()
 
-    qm = client.query_maker(unscoped=True)
+    qm = client.query_maker(context=client.namespace_context)
 
     with count_statements(client) as c_include:
         inc = qm.resources().include(["properties"]).filter(name="parity-res").all()

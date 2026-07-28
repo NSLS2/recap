@@ -7,13 +7,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import update
 
 from recap.client import RecapClient
-from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate
 from recap.db.resource import Resource, ResourceTemplate
 from recap.dsl.query import Field
 from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
 from recap.lifecycle import LifecycleStatus
-from recap.schemas.namespace import NamespaceContext
 from recap.schemas.process import ProcessRunRef, ProcessTemplateRef
 from recap.schemas.resource import ResourceRef, ResourceTemplateRef
 from recap.server.app import create_app
@@ -45,24 +43,7 @@ def parity_clients(tmp_path, monkeypatch):
     with ExitStack() as stack:
         local = stack.enter_context(RecapClient.from_sqlite(db_path))
 
-        campaign = local.create_campaign(
-            "MX parity campaign",
-            "PROPOSAL-42",
-            saf="SAF-7",
-            metadata={"beamline": "AMX"},
-        )
-        context = NamespaceContext(id=campaign.id, path=f"test/{campaign.id}")
-        uow = local.backend.begin()
-        local.backend.session.add(
-            Namespace(
-                id=context.id,
-                path=context.path,
-                metadata_json={},
-                status=LifecycleStatus.ACTIVE,
-            )
-        )
-        uow.commit()
-        local._namespace_context = context
+        local.create_namespace("test/mx-parity", metadata={"beamline": "AMX"})
         with local.build_resource_template(
             name="Parity plate", type_names=["container", "plate"]
         ) as template:
@@ -79,16 +60,16 @@ def parity_clients(tmp_path, monkeypatch):
 
         first_plate = local.create_resource("plate-1", "Parity plate")
         second_plate = local.create_resource("plate-2", "Parity plate")
-        uow = local.backend.begin()
-        local.backend.session.execute(
-            update(Resource).values(status=LifecycleStatus.ACTIVE)
-        )
-        uow.commit()
         for plate, rating in ((first_plate, 12), (second_plate, 3)):
             with local.build_resource(resource_id=plate.id) as builder:
                 model = builder.get_model()
                 model.properties.metrics.rating = rating
                 builder.set_model(model)
+        uow = local.backend.begin()
+        local.backend.session.execute(
+            update(Resource).values(status=LifecycleStatus.ACTIVE)
+        )
+        uow.commit()
 
         with local.build_process_template("Parity workflow", "1.0") as template:
             template.add_resource_slot("plate", "container", Direction.input)
@@ -112,11 +93,6 @@ def parity_clients(tmp_path, monkeypatch):
                 parameters = run.get_params("Collect")
                 parameters.exposure.dwell = dwell
                 run.set_params(parameters)
-                local.backend.session.execute(
-                    update(ProcessRun)
-                    .where(ProcessRun.id == run.process_run.id)
-                    .values(status=LifecycleStatus.ACTIVE)
-                )
 
         uow = local.backend.begin()
         for model in (ProcessTemplate, ProcessRun, ResourceTemplate, Resource):
@@ -263,7 +239,7 @@ def test_filters_scopes_pagination_and_count_parity(parity_clients):
         ),
         pytest.param(
             lambda q: q.process_runs()
-            .where(Field("campaign.proposal") == "PROPOSAL-42")
+            .where(Field("namespace.path") == "test/mx-parity")
             .all(),
             id="relationship-equality",
         ),
