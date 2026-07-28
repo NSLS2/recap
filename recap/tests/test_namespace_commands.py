@@ -75,7 +75,9 @@ def command_setup(tmp_path):
     return CommandService(factory), factory, context, policy, audit
 
 
-def test_create_canonicalizes_path_authorizes_parent_and_persists_metadata(command_setup):
+def test_create_canonicalizes_path_authorizes_parent_and_persists_metadata(
+    command_setup,
+):
     service, factory, context, policy, audit = command_setup
 
     created = service.create_namespace(

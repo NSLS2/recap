@@ -6,7 +6,19 @@ from pydantic import BaseModel
 from sqlalchemy.exc import NoResultFound
 
 from recap.adapter import Backend
+from recap.commands.models import (
+    CommandContext,
+    CreateProcessTemplate,
+    UpdateProcessTemplate,
+)
 from recap.dsl.attribute_builder import AttributeGroupBuilder
+from recap.dsl.drafts import (
+    AttributeDraft,
+    AttributeGroupDraft,
+    ProcessTemplateDraft,
+    ResourceSlotDraft,
+    StepTemplateDraft,
+)
 from recap.dsl.query import QuerySpec
 from recap.exceptions import (
     ExistingProcessRunError,
@@ -36,13 +48,40 @@ class ProcessTemplateBuilder:
         version: str | None,
         process_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
+        namespace_path: str | None = None,
+        command_context: CommandContext | None = None,
     ):
         self.backend = backend
         self.namespace_id = namespace_id
+        self.namespace_path = namespace_path
+        self._command_context = command_context
+        self._command_mode = command_context is not None
+        self._submitted = False
+        self._expected_revision = 1
+        self._draft_labels: list[str] = []
+        self._draft_resource_slots: list[ResourceSlotDraft] = []
+        self._draft_steps: list[StepTemplateBuilder] = []
         self._uow = None
         if on_existing not in {"silent", "warn", "raise"}:
             raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
         self.on_existing = on_existing
+        if self._command_mode:
+            if namespace_path is None:
+                raise ValueError(
+                    "namespace_path is required for command-backed builders"
+                )
+            self.name = name
+            self.version = version
+            self._template: ProcessTemplateRef | None = None
+            self._resource_slots = {}
+            self._current_step_builder = None
+            if process_template_id is not None:
+                self._initialize_command_update(process_template_id)
+            elif name is None or version is None:
+                raise ValueError(
+                    "name and version are required to create a process template"
+                )
+            return
         try:
             self._ensure_uow()
             self.name = name
@@ -76,6 +115,8 @@ class ProcessTemplateBuilder:
             )
 
     def __enter__(self):
+        if self._command_mode:
+            return self
         self._ensure_uow()
         if self._template is not None:
             self._reload_template()
@@ -84,6 +125,10 @@ class ProcessTemplateBuilder:
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        if self._command_mode:
+            if exc_type is None:
+                self.save()
+            return
         if exc_type is None:
             self.save()
         else:
@@ -92,6 +137,25 @@ class ProcessTemplateBuilder:
             self._uow = None
 
     def save(self):
+        if self._command_mode:
+            if self._submitted:
+                return self
+            draft = self._build_draft()
+            if self._template is None:
+                command = CreateProcessTemplate(
+                    namespace_path=self.namespace_path, draft=draft
+                )
+            else:
+                command = UpdateProcessTemplate(
+                    template_id=self._template.id,
+                    expected_revision=self._expected_revision,
+                    draft=draft,
+                )
+            result = self.backend.execute(command, self._command_context)
+            if result is not None:
+                self._template = result
+            self._submitted = True
+            return self
         self._ensure_uow()
         self._uow.commit()
         self._uow = None
@@ -168,6 +232,17 @@ class ProcessTemplateBuilder:
         create_resource_type=False,
         required: bool = True,
     ) -> "ProcessTemplateBuilder":
+        if self._command_mode:
+            self._draft_resource_slots.append(
+                ResourceSlotDraft(
+                    name=name,
+                    resource_type=resource_type,
+                    direction=direction,
+                    create_resource_type=create_resource_type,
+                    required=required,
+                )
+            )
+            return self
         self._ensure_uow()
         self._ensure_template()
         self._resource_slots[name] = self.backend.add_resource_slot(
@@ -184,6 +259,10 @@ class ProcessTemplateBuilder:
         self,
         name: str,
     ):
+        if self._command_mode:
+            builder = StepTemplateBuilder(parent=self, draft_name=name)
+            self._draft_steps.append(builder)
+            return builder
         self._ensure_uow()
         self._ensure_template()
         step_template = self.backend.add_step(name, self.template)
@@ -223,6 +302,57 @@ class ProcessTemplateBuilder:
             self._uow = self.backend.begin()
         return self._uow
 
+    def _build_draft(self) -> ProcessTemplateDraft:
+        return ProcessTemplateDraft(
+            name=self.name,
+            version=self.version,
+            labels=self._draft_labels,
+            resource_slots=self._draft_resource_slots,
+            steps=[step._build_draft() for step in self._draft_steps],
+        )
+
+    def _initialize_command_update(self, process_template_id: UUID) -> None:
+        template = self.backend.get_process_template(
+            self.namespace_id,
+            name=None,
+            version=None,
+            id=process_template_id,
+            expand=True,
+        )
+        self._template = template
+        self.name = template.name
+        self.version = template.version
+        self._expected_revision = template.revision
+        self._draft_labels = list(template.labels)
+        self._draft_resource_slots = [
+            ResourceSlotDraft(
+                name=slot.name,
+                resource_type=slot.resource_type.name,
+                direction=slot.direction,
+                required=slot.required,
+            )
+            for slot in template.resource_slots
+        ]
+        for step in template.step_templates.values():
+            step_builder = StepTemplateBuilder(parent=self, draft_name=step.name)
+            step_builder._draft_role_bindings.update(
+                {role: slot.name for role, slot in step.resource_slots.items()}
+            )
+            for group in step.attribute_group_templates:
+                group_builder = DraftAttributeGroupBuilder(group.name, step_builder)
+                group_builder._attributes.extend(
+                    AttributeDraft(
+                        name=attribute.name,
+                        type=attribute.value_type,
+                        unit=attribute.unit or "",
+                        default=attribute.default_value,
+                        metadata=attribute.metadata or {},
+                    )
+                    for attribute in group.attribute_templates
+                )
+                step_builder._draft_parameter_groups.append(group_builder)
+            self._draft_steps.append(step_builder)
+
     def _restart_uow(self):
         if self._uow:
             self._uow.rollback()
@@ -233,10 +363,18 @@ class ProcessTemplateBuilder:
 class StepTemplateBuilder:
     """Scoped editor for a single step"""
 
-    def __init__(self, parent: ProcessTemplateBuilder, step_template: StepTemplateRef):
+    def __init__(
+        self,
+        parent: ProcessTemplateBuilder,
+        step_template: StepTemplateRef | None = None,
+        draft_name: str | None = None,
+    ):
         self.parent: ProcessTemplateBuilder = parent
         self.backend: Backend = parent.backend
-        self.process_template = parent.template
+        self._draft_name = draft_name
+        self._draft_role_bindings: dict[str, str] = {}
+        self._draft_parameter_groups: list[DraftAttributeGroupBuilder] = []
+        self.process_template = None if parent._command_mode else parent.template
         self._template = step_template
         self._bound_slots = {}
 
@@ -246,50 +384,80 @@ class StepTemplateBuilder:
     def param_group(
         self, group_name: str
     ) -> "AttributeGroupBuilder[StepTemplateBuilder]":
+        if self.parent._command_mode:
+            builder = DraftAttributeGroupBuilder(group_name, self)
+            self._draft_parameter_groups.append(builder)
+            return builder
         attr_group_builder: AttributeGroupBuilder[StepTemplateBuilder] = (
             AttributeGroupBuilder(group_name=group_name, parent=self)
         )
         return attr_group_builder
 
     def bind_slot(self, role: str, slot_name: str):
+        if self.parent._command_mode:
+            self._draft_role_bindings[role] = slot_name
+            return self
         slot = self.backend.bind_slot(
             role, slot_name, self.process_template, self._template
         )
         self._bound_slots[slot.name] = slot
         return self
 
+    def _build_draft(self) -> StepTemplateDraft:
+        return StepTemplateDraft(
+            name=self._draft_name,
+            role_bindings=self._draft_role_bindings,
+            parameter_groups=[
+                group._build_draft() for group in self._draft_parameter_groups
+            ],
+        )
+
     def add_parameters(self, param_def: dict[str, list[dict[str, Any]]]):
-        """Add parameter groups and their attributes to this step template.
-
-        Args:
-            param_def: A mapping of group name → list of attribute dicts.  Each
-                attribute dict accepts the keys ``name``, ``type``,
-                ``default``, ``unit`` (optional), and ``metadata`` (optional).
-
-        Example::
-
-            step_builder.add_parameters({
-                "harvest": [
-                    {"name": "arrival", "type": "datetime", "default": None},
-                ]
-            })
-
-        Returns:
-            ``self``, to allow method chaining.
-        """
         for group_key, params in param_def.items():
-            agb = AttributeGroupBuilder(group_name=group_key, parent=self)
+            group = self.param_group(group_key)
             for param in params:
-                attr = AttributeTemplateValidator.model_validate(param)
-                agb.add_attribute(
-                    attr.name,
-                    attr.type,
-                    attr.unit,
-                    attr.default,
-                    metadata=attr.metadata,
+                attribute = AttributeTemplateValidator.model_validate(param)
+                group.add_attribute(
+                    attribute.name,
+                    attribute.type,
+                    attribute.unit,
+                    attribute.default,
+                    metadata=attribute.metadata,
                 )
-            agb.close_group()
+            group.close_group()
         return self
+
+
+class DraftAttributeGroupBuilder:
+    def __init__(self, group_name: str, parent: StepTemplateBuilder):
+        self.group_name = group_name
+        self.parent = parent
+        self._attributes: list[AttributeDraft] = []
+
+    def add_attribute(
+        self,
+        attr_name: str,
+        value_type: str,
+        unit: str,
+        default: Any,
+        metadata: dict[str, Any] | None = None,
+    ) -> "DraftAttributeGroupBuilder":
+        self._attributes.append(
+            AttributeDraft(
+                name=attr_name,
+                type=value_type,
+                unit=unit,
+                default=default,
+                metadata=metadata or {},
+            )
+        )
+        return self
+
+    def close_group(self) -> StepTemplateBuilder:
+        return self.parent
+
+    def _build_draft(self) -> AttributeGroupDraft:
+        return AttributeGroupDraft(name=self.group_name, attributes=self._attributes)
 
 
 class ProcessRunBuilder:

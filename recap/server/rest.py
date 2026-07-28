@@ -13,7 +13,9 @@ from recap.authorization.policy import (
 )
 from recap.commands.models import CommandContext
 from recap.commands.service import CommandService
+from recap.dsl.drafts import ProcessTemplateDraft
 from recap.schemas.namespace import NamespaceSchema
+from recap.schemas.process import ProcessTemplateSchema
 from recap.server.audit import AuditRecord
 from recap.server.errors import request_id_from
 from recap.server.rest_models import CreateNamespaceRequest, UpdateNamespaceRequest
@@ -47,9 +49,9 @@ def _context(request: Request, actor: RequestActor, idempotency_key: str):
     )
 
 
-def _set_etag(response: Response, namespace: NamespaceSchema) -> NamespaceSchema:
-    response.headers["ETag"] = f'"{namespace.revision}"'
-    return namespace
+def _set_etag(response: Response, entity):
+    response.headers["ETag"] = f'"{entity.revision}"'
+    return entity
 
 
 def _parse_if_match(value: str) -> int:
@@ -98,5 +100,45 @@ def update_namespace(
         expected_revision=_parse_if_match(if_match),
         metadata=body.metadata,
         status=body.status,
+    )
+    return _set_etag(response, result)
+
+
+@router.post(
+    "/namespaces/{namespace_path:path}/process-templates",
+    response_model=ProcessTemplateSchema,
+    status_code=201,
+)
+def create_process_template(
+    namespace_path: str,
+    body: ProcessTemplateDraft,
+    request: Request,
+    response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+) -> ProcessTemplateSchema:
+    result = CommandService(request.app.state.session_factory).create_process_template(
+        _context(request, actor, idempotency_key),
+        namespace_path=namespace_path,
+        draft=body,
+    )
+    return _set_etag(response, result)
+
+
+@router.patch("/process-templates/{template_id}", response_model=ProcessTemplateSchema)
+def update_process_template(
+    template_id: UUID,
+    body: ProcessTemplateDraft,
+    request: Request,
+    response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    if_match: Annotated[str, Header(alias="If-Match")],
+) -> ProcessTemplateSchema:
+    result = CommandService(request.app.state.session_factory).update_process_template(
+        _context(request, actor, idempotency_key),
+        template_id=template_id,
+        expected_revision=_parse_if_match(if_match),
+        draft=body,
     )
     return _set_etag(response, result)

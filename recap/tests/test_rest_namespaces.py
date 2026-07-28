@@ -89,7 +89,9 @@ def test_stale_if_match_maps_to_safe_conflict(client, auth_header):
     assert "revision" not in response.text.lower()
 
 
-def test_missing_idempotency_key_and_if_match_are_validation_errors(client, auth_header):
+def test_missing_idempotency_key_and_if_match_are_validation_errors(
+    client, auth_header
+):
     put = client.put(
         "/api/v1/namespaces/beamline/amx",
         headers=auth_header,
