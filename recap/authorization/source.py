@@ -58,7 +58,7 @@ class IdentityGroupConfig(_SourceModel):
         if not isinstance(value, Mapping):
             return value
         identities = value.get("identities")
-        if not isinstance(identities, (list, tuple)):
+        if not isinstance(identities, list | tuple):
             return value
         for identity in identities:
             if not isinstance(identity, Mapping):
