@@ -17,6 +17,7 @@ class ErrorCode(str, Enum):
     NOT_FOUND = "not_found"
     SERVICE_UNAVAILABLE = "service_unavailable"
     VALIDATION_ERROR = "validation_error"
+    CONFLICT = "conflict"
     INTERNAL_ERROR = "internal_error"
     REQUEST_ERROR = "request_error"
 

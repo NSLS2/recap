@@ -17,6 +17,7 @@ from starlette.responses import Response
 from recap.authentication.api_key import ApiKeyRequestAuthenticator
 from recap.authorization.snapshot import SnapshotUnavailable
 from recap.db.engine import create_engine_and_session_factory
+from recap.server.error_handlers import register_command_error_handlers
 from recap.server.errors import (
     AuthorizationDenied,
     ErrorCode,
@@ -24,6 +25,7 @@ from recap.server.errors import (
     safe_error_response,
     safe_http_error,
 )
+from recap.server.rest import router as rest_router
 from recap.server.security import authenticate_request
 from recap.server.strawberry_schema import build_router
 from recap.utils.migrations import apply_migrations
@@ -97,6 +99,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.session_factory = session_factory
+    register_command_error_handlers(app)
 
     if api_key is not None:
         app.state.request_authenticator = ApiKeyRequestAuthenticator(api_key)
@@ -165,6 +168,7 @@ def create_app(
         )
 
     app.include_router(graphql_router, prefix="/graphql")
+    app.include_router(rest_router)
 
     _register_db_path_endpoint(app, path)
 
