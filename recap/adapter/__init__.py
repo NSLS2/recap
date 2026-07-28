@@ -1,28 +1,22 @@
-from typing import Any, Literal, Protocol, overload, runtime_checkable
+from typing import Literal, Protocol, overload, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel
 
 from recap.client.permissions import ActorPermissions
+from recap.commands.models import CommandContext, CommandModel
 from recap.dsl.query import QuerySpec, SchemaT
-from recap.schemas.attribute import AttributeGroupRef, AttributeTemplateSchema
-from recap.schemas.namespace import NamespaceContext
 from recap.schemas.process import (
     ProcessRunSchema,
     ProcessTemplateRef,
     ProcessTemplateSchema,
 )
 from recap.schemas.resource import (
-    ResourceCopyOptions,
-    ResourceRef,
     ResourceSchema,
-    ResourceSlotSchema,
     ResourceTemplateRef,
     ResourceTemplateSchema,
-    ResourceTypeSchema,
 )
-from recap.schemas.step import StepSchema, StepTemplateRef
-from recap.utils.general import Direction
+from recap.schemas.step import StepSchema
 
 
 class UnitOfWork(Protocol):
@@ -111,142 +105,9 @@ class PermissionsBackend(Protocol):
 
 @runtime_checkable
 class WriteBackend(Protocol):
-    """Write-only backend contract. LocalBackend (Phase 1), RESTAdapter (Phase 2)."""
+    """Write contract accepting closed commands plus trusted request context."""
 
-    def begin(self) -> UnitOfWork: ...
-    def get_namespace_path(self, namespace_id: UUID) -> str: ...
-
-    def create_namespace(
-        self, path: str, metadata: dict[str, Any] | None = None
-    ) -> NamespaceContext: ...
-    def set_namespace(self, id: UUID) -> NamespaceContext: ...
-
-    def create_process_template(
-        self, namespace_id: UUID, name: str, version: str
-    ) -> ProcessTemplateRef: ...
-
-    def add_resource_slot(
-        self,
-        name: str,
-        resource_type: str,
-        direction: Direction,
-        process_template_ref: ProcessTemplateRef,
-        create_resource_type: bool = False,
-        required: bool = True,
-    ) -> ResourceSlotSchema: ...
-
-    def add_step(
-        self, name: str, process_template_ref: ProcessTemplateRef
-    ) -> StepTemplateRef: ...
-
-    def bind_slot(
-        self,
-        role: str,
-        slot_name: str,
-        step_template_ref: StepTemplateRef,
-        process_template_ref: ProcessTemplateRef,
-    ) -> ResourceSlotSchema: ...
-
-    def add_attr_group(
-        self,
-        group_name: str,
-        template: ResourceTemplateRef | StepTemplateRef,
-    ) -> AttributeGroupRef: ...
-
-    def add_attribute(
-        self,
-        name: str,
-        value_type: str,
-        unit: str,
-        default: Any,
-        group: AttributeGroupRef,
-    ) -> AttributeTemplateSchema: ...
-
-    def remove_attribute(self, name: str) -> None: ...
-
-    def add_resource_types(self, type_names: list[str]) -> list[ResourceTypeSchema]: ...
-
-    def add_resource_template(
-        self,
-        namespace_id: UUID,
-        name: str,
-        type_names: list[ResourceTypeSchema],
-        version: str = "1.0",
-    ) -> ResourceTemplateRef: ...
-
-    def add_child_resource_template(
-        self,
-        name: str,
-        resource_types: list[ResourceTypeSchema],
-        parent_resource_template: ResourceTemplateRef | ResourceTemplateSchema,
-        version: str = "1.0",
-    ) -> ResourceTemplateRef: ...
-
-    @overload
-    def create_resource(
-        self,
-        namespace_id: UUID,
-        name: str,
-        resource_template: ResourceTemplateRef | ResourceTemplateSchema,
-        parent_resource: ResourceRef | ResourceSchema | None,
-        expand: Literal[False],
-    ) -> ResourceRef: ...
-
-    @overload
-    def create_resource(
-        self,
-        namespace_id: UUID,
-        name: str,
-        resource_template: ResourceTemplateRef | ResourceTemplateSchema,
-        parent_resource: ResourceRef | ResourceSchema | None,
-        expand: Literal[True],
-    ) -> ResourceSchema: ...
-
-    def add_child_resources(
-        self,
-        parent_resource: ResourceSchema | ResourceRef,
-        child_resources: list[ResourceSchema | ResourceRef],
-    ) -> None: ...
-
-    def update_resource(self, resource: ResourceSchema) -> ResourceSchema: ...
-
-    def copy_resource(
-        self,
-        source_resource_id: UUID,
-        destination_namespace_id: UUID,
-        options: ResourceCopyOptions,
-    ) -> ResourceSchema: ...
-
-    def create_process_run(
-        self,
-        namespace_id: UUID,
-        name: str,
-        description: str,
-        process_template: ProcessTemplateRef | ProcessTemplateSchema,
-    ) -> ProcessRunSchema: ...
-
-    def assign_resource(
-        self,
-        resource_slot: ResourceSlotSchema,
-        resource: ResourceRef | ResourceSchema,
-        process_run: ProcessRunSchema,
-    ) -> ProcessRunSchema: ...
-
-    def check_resource_assignment(
-        self,
-        process_template: ProcessTemplateRef | ProcessTemplateSchema,
-        process_run: ProcessRunSchema,
-    ) -> None: ...
-
-    def update_process_run(self, process_run: ProcessRunSchema) -> ProcessRunSchema: ...
-
-    def add_child_step(
-        self,
-        process_run: ProcessRunSchema,
-        child_step: StepSchema,
-    ) -> StepSchema: ...
-
-    def set_params(self, filled_params: type[BaseModel]) -> None: ...
+    def execute(self, command: CommandModel, context: CommandContext) -> object: ...
 
 
 @runtime_checkable

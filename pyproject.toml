@@ -43,6 +43,7 @@ dev = [
     "pytest"
 ]
 server = [
+    "psycopg[binary]>=3.2,<4",
     "strawberry-graphql[fastapi]>=0.220",
     "uvicorn[standard]>=0.30",
     "pydantic-settings>=2.0",
@@ -122,6 +123,7 @@ docs = { features = ["docs"], solve-group = "default" }
 build = { features = [ "build" ], solve-group = "default"}
 
 [tool.pixi.feature.server.pypi-dependencies]
+psycopg = {version = ">=3.2,<4", extras = ["binary"]}
 "strawberry-graphql" = {version = ">=0.220", extras = ["fastapi"]}
 uvicorn = {version = ">=0.30", extras = ["standard"]}
 pydantic-settings = ">=2.0"

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,7 +16,7 @@ from starlette.responses import Response
 
 from recap.authentication.api_key import ApiKeyRequestAuthenticator
 from recap.authorization.snapshot import SnapshotUnavailable
-from recap.client import RecapClient
+from recap.db.engine import create_engine_and_session_factory
 from recap.server.errors import (
     AuthorizationDenied,
     ErrorCode,
@@ -23,31 +26,77 @@ from recap.server.errors import (
 )
 from recap.server.security import authenticate_request
 from recap.server.strawberry_schema import build_router
+from recap.utils.migrations import apply_migrations
+
+
+@dataclass(frozen=True, slots=True)
+class _DatabaseConfiguration:
+    database_url: str
+
+
+def _select_database(
+    db_path: str | Path | None, database_uri: str | SecretStr | None
+) -> tuple[Path | None, str]:
+    if (db_path is None) == (database_uri is None):
+        raise ValueError("exactly one of db_path or database_uri is required")
+    if db_path is not None:
+        path = Path(db_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path, f"sqlite:///{path}"
+    if isinstance(database_uri, SecretStr):
+        return None, database_uri.get_secret_value()
+    assert database_uri is not None
+    return None, database_uri
+
+
+def _register_db_path_endpoint(app: FastAPI, path: Path | None) -> None:
+    if path is None:
+        return
+
+    @app.get("/db_path", summary="Get database path")
+    def get_db_path() -> dict[str, str]:
+        """Return path used for legacy direct SQLite clients."""
+
+        return {"db_path": str(path.resolve())}
 
 
 def create_app(
-    db_path: str | Path, *, api_key: str | SecretStr | None = None
+    db_path: str | Path | None = None,
+    *,
+    database_uri: str | SecretStr | None = None,
+    api_key: str | SecretStr | None = None,
 ) -> FastAPI:
     """Create the recap FastAPI application.
 
     Args:
         db_path: Path to the SQLite database file. Created if it doesn't exist.
+        database_uri: PostgreSQL SQLAlchemy URL. Mutually exclusive with db_path.
         api_key: Optional key that enables authentication on every route.
 
     Returns:
         Configured FastAPI application with /graphql and /db_path endpoints.
     """
-    db_path = Path(db_path)
-    client = RecapClient.from_sqlite(db_path)
-    backend = client.backend
-    graphql_router = build_router(backend)
+    path, database_url = _select_database(db_path, database_uri)
+    database_config = _DatabaseConfiguration(database_url)
+    apply_migrations(database_url)
+    engine, session_factory = create_engine_and_session_factory(database_config)
+    graphql_router = build_router()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            engine.dispose()
 
     app = FastAPI(
         title="recap GraphQL server",
         description="Read-only GraphQL API for recap experiment provenance data.",
         version="1.0.0",
         dependencies=[Depends(authenticate_request)] if api_key is not None else None,
+        lifespan=lifespan,
     )
+    app.state.session_factory = session_factory
 
     if api_key is not None:
         app.state.request_authenticator = ApiKeyRequestAuthenticator(api_key)
@@ -117,13 +166,6 @@ def create_app(
 
     app.include_router(graphql_router, prefix="/graphql")
 
-    @app.get("/db_path", summary="Get database path")
-    def get_db_path() -> dict[str, str]:
-        """Return the path to the SQLite database file used by this server.
-
-        Used by RecapClient.from_url() to wire direct SQLite writes in Phase 1.
-        Requires shared filesystem between client and server.
-        """
-        return {"db_path": str(db_path.resolve())}
+    _register_db_path_endpoint(app, path)
 
     return app
