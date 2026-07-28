@@ -1,4 +1,5 @@
 from .attribute import AttributeGroupTemplate, AttributeTemplate, AttributeValue
+from .namespace import Namespace
 from .process import ProcessRun, ProcessTemplate
 from .resource import Property, Resource, ResourceTemplate, ResourceType
 from .step import (
@@ -15,6 +16,7 @@ __all__ = [
     "AttributeTemplate",
     "AttributeGroupTemplate",
     "AttributeValue",
+    "Namespace",
     "Step",
     "StepTemplate",
     "StepTemplateEdge",
