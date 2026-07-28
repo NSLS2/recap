@@ -14,6 +14,7 @@ from recap.exceptions import (
     ExistingProcessTemplateError,
     ExistingProcessTemplateWarning,
 )
+from recap.lifecycle import LifecycleStatus
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.process import (
     CampaignSchema,
@@ -95,6 +96,20 @@ class ProcessTemplateBuilder:
         self._ensure_uow()
         self._uow.commit()
         self._uow = None
+        return self
+
+    def activate(self):
+        self._ensure_template()
+        self.backend.set_process_template_status(
+            self.template.id, LifecycleStatus.ACTIVE
+        )
+        return self
+
+    def archive(self):
+        self._ensure_template()
+        self.backend.set_process_template_status(
+            self.template.id, LifecycleStatus.ARCHIVED
+        )
         return self
 
     @property
@@ -433,6 +448,20 @@ class ProcessRunBuilder:
         self._model_dirty = False
         self._params_flushed = False
         self._uow = None
+        return self
+
+    def finalize(self):
+        self._ensure_uow()
+        self.backend.set_process_run_status(
+            self._process_run.id, LifecycleStatus.ACTIVE
+        )
+        return self
+
+    def archive(self):
+        self._ensure_uow()
+        self.backend.set_process_run_status(
+            self._process_run.id, LifecycleStatus.ARCHIVED
+        )
         return self
 
     def persist(self):

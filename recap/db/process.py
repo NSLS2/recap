@@ -8,14 +8,13 @@ from sqlalchemy import (
     ForeignKey,
     UniqueConstraint,
     event,
-    func,
     inspect,
-    select,
 )
 from sqlalchemy.ext import associationproxy
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import (
     Mapped,
+    Session,
     attribute_mapped_collection,
     mapped_collection,
     mapped_column,
@@ -28,6 +27,7 @@ from recap.db.campaign import Campaign
 from recap.db.namespace import Namespace
 from recap.db.step import Step, StepTemplate, StepTemplateEdge
 from recap.exceptions import DuplicateResourceError
+from recap.lifecycle import LifecycleStatus, validate_transition
 from recap.utils.general import Direction, make_slug
 
 from .base import Base, RevisionedLifecycleMixin, TimestampMixin
@@ -74,6 +74,18 @@ class ProcessTemplate(RevisionedLifecycleMixin, TimestampMixin, Base):
     @validates("labels")
     def _normalize_labels(self, key, labels):
         return [make_slug(label) for label in labels]
+
+    def activate(self):
+        validate_transition(
+            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ACTIVE
+        )
+        self.status = LifecycleStatus.ACTIVE
+
+    def archive(self):
+        validate_transition(
+            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ARCHIVED
+        )
+        self.status = LifecycleStatus.ARCHIVED
 
 
 class ResourceSlot(TimestampMixin, Base):
@@ -144,11 +156,12 @@ class ProcessRun(RevisionedLifecycleMixin, TimestampMixin, Base):
     )
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         template: ProcessTemplate | None = kwargs.get("template")
         if template is None:
             raise ValueError("Missing template for ProcessRun")
-        for step_template in template.step_templates.values():
+        step_templates = list(template.step_templates.values())
+        super().__init__(*args, **kwargs)
+        for step_template in step_templates:
             step = Step(template=step_template, name=step_template.name)
             # Attach via the mapped collection to ensure the dict key is derived
             # from the final name instead of a default/None during construction.
@@ -222,37 +235,24 @@ class ProcessRun(RevisionedLifecycleMixin, TimestampMixin, Base):
             ar.append(AssignedResource(slot=resource_slot, resource=resource))
         return ar
 
+    def finalize(self):
+        validate_transition(
+            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ACTIVE
+        )
+        self.status = LifecycleStatus.ACTIVE
+
+    def archive(self):
+        validate_transition(
+            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ARCHIVED
+        )
+        self.status = LifecycleStatus.ARCHIVED
+
 
 @event.listens_for(ProcessTemplate, "before_update", propagate=True)
 @event.listens_for(ProcessRun, "before_update", propagate=True)
 def _guard_process_namespace_id(mapper, connection, target):
     if inspect(target).attrs.namespace_id.history.has_changes():
         raise ValueError("namespace_id is immutable")
-
-
-@event.listens_for(ProcessTemplate, "before_update", propagate=True)
-@event.listens_for(ProcessTemplate, "before_delete", propagate=True)
-def _guard_process_template(mapper, connection, target: ProcessTemplate):
-    state = inspect(target)
-    column_changes = [
-        col.key
-        for col in mapper.column_attrs
-        if state.attrs[col.key].history.has_changes()
-        and col.key not in {"modified_date"}
-    ]
-    if not column_changes:
-        return
-    count_stmt = (
-        select(func.count())
-        .select_from(ProcessRun)
-        .where(ProcessRun.process_template_id == target.id)
-    )
-    cnt = connection.scalar(count_stmt)
-    if cnt and cnt > 0:
-        raise ValueError(
-            "Cannot modify or delete a process template with existing runs. "
-            "Create a new template version instead."
-        )
 
 
 class ResourceAssignment(TimestampMixin, Base):
@@ -336,3 +336,148 @@ class ResourceAssignment(TimestampMixin, Base):
             "process_run_id", "resource_slot_id", "step_id", name="uq_run_slot_step"
         ),
     )
+
+
+def _relationship_value(obj, name):
+    value = getattr(obj, name, None)
+    if value is not None:
+        return value
+    state = inspect(obj)
+    if name not in state.attrs:
+        return None
+    deleted = state.attrs[name].history.deleted
+    return deleted[0] if deleted else None
+
+
+def _resource_root(resource):
+    current = resource
+    while (parent := _relationship_value(current, "parent")) is not None:
+        current = parent
+    return current
+
+
+def _resource_template_root(template):
+    from recap.db.resource import ROOT_RESOURCE_TEMPLATE_ID
+
+    current = template
+    while (
+        parent := _relationship_value(current, "parent")
+    ) is not None and parent.id != ROOT_RESOURCE_TEMPLATE_ID:
+        current = parent
+    return current
+
+
+def _aggregate_root(session, obj):  # noqa: C901
+    from recap.db.attribute import (
+        AttributeGroupTemplate,
+        AttributeTemplate,
+        AttributeValue,
+    )
+    from recap.db.resource import Property, Resource, ResourceTemplate
+    from recap.db.step import (
+        Parameter,
+        Step,
+        StepTemplateResourceSlotBinding,
+    )
+
+    if isinstance(obj, ProcessTemplate | ProcessRun):
+        return obj
+    if isinstance(obj, StepTemplate):
+        return _relationship_value(obj, "process_template")
+    if isinstance(obj, ResourceSlot):
+        return _relationship_value(obj, "process_template")
+    if isinstance(obj, StepTemplateResourceSlotBinding):
+        step_template = _relationship_value(obj, "step_template")
+        return _aggregate_root(session, step_template) if step_template else None
+    if isinstance(obj, ResourceTemplate):
+        return _resource_template_root(obj)
+    if isinstance(obj, AttributeGroupTemplate):
+        owner = _relationship_value(obj, "resource_template") or _relationship_value(
+            obj, "step_template"
+        )
+        return _aggregate_root(session, owner) if owner else None
+    if isinstance(obj, AttributeTemplate):
+        group = _relationship_value(obj, "attribute_group_template")
+        return _aggregate_root(session, group) if group else None
+    if isinstance(obj, Resource):
+        return _resource_root(obj)
+    if isinstance(obj, Property):
+        resource = _relationship_value(obj, "resource")
+        return _resource_root(resource) if resource else None
+    if isinstance(obj, AttributeValue):
+        prop = _relationship_value(obj, "property")
+        if prop is not None:
+            return _aggregate_root(session, prop)
+        parameter = _relationship_value(obj, "parameter")
+        return _aggregate_root(session, parameter) if parameter else None
+    if isinstance(obj, Parameter):
+        step = _relationship_value(obj, "step")
+        return _aggregate_root(session, step) if step else None
+    if isinstance(obj, Step):
+        return _relationship_value(obj, "process_run")
+    return None
+
+
+def _source_status(root):
+    history = inspect(root).attrs.status.history
+    return history.deleted[0] if history.deleted else root.status
+
+
+def _validate_status_change(root):
+    history = inspect(root).attrs.status.history
+    if history.has_changes() and history.deleted:
+        validate_transition(history.deleted[0], root.status)
+
+
+@event.listens_for(Session, "before_flush")
+def _enforce_provenance_lifecycle(session, flush_context, instances):  # noqa: C901
+    from recap.db.resource import Resource
+
+    # Stable references activate their provenance definitions/instances in the
+    # same unit of work. Freeze checks below use the persisted source status.
+    for obj in tuple(session.new):
+        if isinstance(obj, ProcessRun) and obj.template is not None:
+            obj.template.activate()
+        elif isinstance(obj, Resource) and obj.template is not None:
+            _resource_template_root(obj.template).activate()
+        elif isinstance(obj, ResourceAssignment) and obj.resource is not None:
+            _resource_root(obj.resource).activate()
+
+    lifecycle_roots = {
+        obj
+        for obj in session.dirty
+        if isinstance(obj, ProcessTemplate | ProcessRun | Resource)
+    }
+    from recap.db.resource import ResourceTemplate
+
+    lifecycle_roots.update(
+        obj for obj in session.dirty if isinstance(obj, ResourceTemplate)
+    )
+    for root in lifecycle_roots:
+        _validate_status_change(root)
+
+    changed = set(session.new) | set(session.dirty) | set(session.deleted)
+    for obj in changed:
+        root = _aggregate_root(session, obj)
+        if root is None or root in session.new:
+            continue
+        source_status = _source_status(root)
+        if source_status is LifecycleStatus.MUTABLE:
+            continue
+        if obj is root:
+            state = inspect(obj)
+            changed_keys = {
+                attr.key
+                for attr in state.attrs
+                if attr.history.has_changes()
+                and attr.key not in {"assignments", "status", "modified_date"}
+            }
+            if not changed_keys and obj not in session.deleted:
+                continue
+        if isinstance(root, ProcessTemplate):
+            raise ValueError("Cannot mutate an active process template aggregate")
+        if isinstance(root, ProcessRun):
+            raise ValueError("Cannot mutate a finalized process run aggregate")
+        if isinstance(root, ResourceTemplate):
+            raise ValueError("Cannot mutate an active resource template aggregate")
+        raise ValueError("Cannot mutate an active resource aggregate")

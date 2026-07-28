@@ -3,7 +3,7 @@ import warnings
 from collections.abc import Sequence
 from contextlib import contextmanager
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, TypeAdapter, create_model
 from pydantic import ValidationError as PydanticError
@@ -244,13 +244,26 @@ class LocalBackend(Backend):
         saf: str | None,
         metadata: dict[str, Any] | None = None,
     ) -> CampaignSchema:
+        campaign_id = uuid4()
         self._campaign = Campaign(
+            id=campaign_id,
             name=name,
             proposal=str(proposal),
             saf=saf,
             meta_data=metadata,
         )
-        self.session.add(self._campaign)
+        namespace = Namespace(
+            id=campaign_id,
+            path=f"/recap/campaign/{campaign_id}",
+            metadata_json={
+                "recap.campaign.name": name,
+                "nsls2.proposal": str(proposal),
+                "nsls2.saf": saf,
+                "recap.campaign.metadata": metadata,
+            },
+            status=LifecycleStatus.ACTIVE,
+        )
+        self.session.add_all([namespace, self._campaign])
         self.session.flush()
         return CampaignSchema.model_validate(self._campaign)
 
@@ -523,6 +536,7 @@ class LocalBackend(Backend):
             name=name,
             version=version,
             types=resource_type_results,
+            namespace_id=parent_resource_template.namespace_id,
         )
         parent_template = self.session.get(
             ResourceTemplate, parent_resource_template.id
@@ -813,6 +827,31 @@ class LocalBackend(Backend):
             ) from exc
 
         return ProcessRunSchema.model_validate(process_run_model)
+
+    def set_process_template_status(self, template_id: UUID, status: LifecycleStatus):
+        self._set_lifecycle_status(ProcessTemplate, template_id, status)
+
+    def set_process_run_status(self, run_id: UUID, status: LifecycleStatus):
+        self._set_lifecycle_status(ProcessRun, run_id, status)
+
+    def set_resource_template_status(self, template_id: UUID, status: LifecycleStatus):
+        self._set_lifecycle_status(ResourceTemplate, template_id, status)
+
+    def set_resource_status(self, resource_id: UUID, status: LifecycleStatus):
+        self._set_lifecycle_status(Resource, resource_id, status)
+
+    def _set_lifecycle_status(self, model, object_id: UUID, status: LifecycleStatus):
+        obj = self.session.get(model, object_id)
+        if obj is None:
+            raise LookupError(f"{model.__name__} does not exist: {object_id}")
+        if status is LifecycleStatus.ACTIVE:
+            if isinstance(obj, ProcessRun):
+                obj.finalize()
+            else:
+                obj.activate()
+        else:
+            obj.archive()
+        self.session.flush()
 
     def check_resource_assignment(
         self,

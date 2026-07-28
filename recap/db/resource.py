@@ -8,7 +8,6 @@ from sqlalchemy import (
     Table,
     UniqueConstraint,
     event,
-    func,
     inspect,
     select,
 )
@@ -24,6 +23,7 @@ from sqlalchemy.orm import (
 
 from recap.db.namespace import Namespace
 from recap.db.process import ResourceAssignment
+from recap.lifecycle import LifecycleStatus, validate_transition
 from recap.utils.general import make_slug
 
 if TYPE_CHECKING:
@@ -142,6 +142,18 @@ class ResourceTemplate(RevisionedLifecycleMixin, TimestampMixin, Base):
     def _inherit_child_namespace(self, key, child):
         child.namespace = self.namespace
         return child
+
+    def activate(self):
+        validate_transition(
+            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ACTIVE
+        )
+        self.status = LifecycleStatus.ACTIVE
+
+    def archive(self):
+        validate_transition(
+            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ARCHIVED
+        )
+        self.status = LifecycleStatus.ARCHIVED
 
 
 # --- Keep slug always in sync with name ---
@@ -290,6 +302,18 @@ class Resource(RevisionedLifecycleMixin, TimestampMixin, Base):
         ),
     )
 
+    def activate(self):
+        validate_transition(
+            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ACTIVE
+        )
+        self.status = LifecycleStatus.ACTIVE
+
+    def archive(self):
+        validate_transition(
+            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ARCHIVED
+        )
+        self.status = LifecycleStatus.ARCHIVED
+
 
 # --- Keep slug always in sync with name ---
 @event.listens_for(Resource, "before_insert", propagate=True)
@@ -302,33 +326,6 @@ def _descendant_templates_cte(template_id):
     base = select(rt.c.id).where(rt.c.id == template_id).cte(recursive=True)
     descendants = select(rt.c.id).where(rt.c.parent_id == base.c.id)
     return base.union_all(descendants)
-
-
-@event.listens_for(ResourceTemplate, "before_update", propagate=True)
-@event.listens_for(ResourceTemplate, "before_delete", propagate=True)
-def _guard_resource_template(mapper, connection, target: ResourceTemplate):
-    state = inspect(target)
-    column_changes = [
-        col.key
-        for col in mapper.column_attrs
-        if state.attrs[col.key].history.has_changes()
-        and col.key not in {"modified_date"}
-    ]
-    if not column_changes:
-        return
-    cte = _descendant_templates_cte(target.id)
-    res_tbl = Resource.__table__
-    count_stmt = (
-        select(func.count())
-        .select_from(res_tbl)
-        .where(res_tbl.c.resource_template_id.in_(select(cte.c.id)))
-    )
-    cnt = connection.scalar(count_stmt)
-    if cnt and cnt > 0:
-        raise ValueError(
-            "Cannot modify or delete a resource template that already has resources. "
-            "Create a new template version instead."
-        )
 
 
 @event.listens_for(Resource, "before_update", propagate=True)

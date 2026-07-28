@@ -14,6 +14,7 @@ from recap.exceptions import (
     ExistingResourceTemplateWarning,
     ExistingResourceWarning,
 )
+from recap.lifecycle import LifecycleStatus
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.resource import (
     ResourceSchema,
@@ -198,6 +199,16 @@ class ResourceBuilder:
         self._uow.commit()
         self._loaded_in_uow = False  # stale after commit; reload on next __enter__
         self._uow = None
+        return self
+
+    def activate(self):
+        self._ensure_uow()
+        self.backend.set_resource_status(self.resource.id, LifecycleStatus.ACTIVE)
+        return self
+
+    def archive(self):
+        self._ensure_uow()
+        self.backend.set_resource_status(self.resource.id, LifecycleStatus.ARCHIVED)
         return self
 
     def persist(self):
@@ -452,6 +463,20 @@ class ResourceTemplateBuilder:
         self._ensure_uow()
         self._uow.commit()
         self._uow = None
+        return self
+
+    def activate(self):
+        self._ensure_uow()
+        self.backend.set_resource_template_status(
+            self.template.id, LifecycleStatus.ACTIVE
+        )
+        return self
+
+    def archive(self):
+        self._ensure_uow()
+        self.backend.set_resource_template_status(
+            self.template.id, LifecycleStatus.ARCHIVED
+        )
         return self
 
     @property
