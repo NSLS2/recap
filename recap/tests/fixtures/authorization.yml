@@ -1,0 +1,30 @@
+source_revision: revision-42
+roles:
+  reader:
+    scopes:
+      - namespace:read
+      - resource:read
+  operator:
+    scopes:
+      - namespace:read
+      - process-run:write
+groups:
+  scientists:
+    identities:
+      - provider: pam
+        subject: alice
+      - provider: oidc
+        subject: bob@example.com
+  operators:
+    identities:
+      - provider: pam
+        subject: carol
+namespaces:
+  beamline/amx:
+    groups:
+      - name: scientists
+        role: reader
+  beamline/amx/proposal/312345:
+    groups:
+      - name: operators
+        role: operator

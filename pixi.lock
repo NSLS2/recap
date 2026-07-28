@@ -6507,10 +6507,12 @@ packages:
 - pypi: ./
   name: pyrecap
   requires_dist:
+  - alembic>=1.17.2,<2
   - httpx2>=2.0
   - mcp[cli]>=1.26.0,<2
   - pydantic>=2.0
   - python-slugify
+  - pyyaml>=6.0
   - sqlalchemy>=2.0
   - pytest ; extra == 'dev'
   - pydantic-settings>=2.0 ; extra == 'server'
