@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Protocol
 
 from sqlalchemy import Engine, create_engine, event

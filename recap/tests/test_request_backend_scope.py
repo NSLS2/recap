@@ -32,14 +32,16 @@ def test_each_request_gets_one_backend_and_session_and_closes_both():
     observed_lock = Lock()
 
     @app.get("/scope")
-    def scope(backend: LocalBackend = Depends(get_local_backend)):
+    def scope(backend: LocalBackend = Depends(get_local_backend)):  # noqa: B008
         with observed_lock:
             observed.append((backend, backend.session))
         return {"backend": id(backend), "session": id(backend.session)}
 
-    with TestClient(app) as client:
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            responses = list(executor.map(lambda _: client.get("/scope"), range(2)))
+    with (
+        TestClient(app) as client,
+        ThreadPoolExecutor(max_workers=2) as executor,
+    ):
+        responses = list(executor.map(lambda _: client.get("/scope"), range(2)))
 
     assert all(response.status_code == 200 for response in responses)
     assert len({response.json()["backend"] for response in responses}) == 2
@@ -57,7 +59,7 @@ def test_request_backend_closes_session_when_handler_raises():
     observed = []
 
     @app.get("/failure")
-    def failure(backend: LocalBackend = Depends(get_local_backend)):
+    def failure(backend: LocalBackend = Depends(get_local_backend)):  # noqa: B008
         observed.append((backend, backend.session))
         raise RuntimeError("boom")
 
