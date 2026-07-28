@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import DateTime, String, Uuid, func
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from recap.server.audit import AuditOutcome, AuditRecord
+from recap.server.audit import AuditRecord
 
 from .base import Base
 

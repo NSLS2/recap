@@ -17,9 +17,7 @@ from recap.server.errors import ErrorCode
 from recap.utils.migrations import apply_migrations
 
 
-def audit_record(
-    *, outcome: AuditOutcome = AuditOutcome.SUCCESS
-) -> AuditRecord:
+def audit_record(*, outcome: AuditOutcome = AuditOutcome.SUCCESS) -> AuditRecord:
     return AuditRecord(
         request_id=uuid4(),
         actor_id="actor-1",
@@ -27,9 +25,7 @@ def audit_record(
         resource_type="resource",
         resource_id="resource-1",
         outcome=outcome,
-        reason_code=ErrorCode.INTERNAL_ERROR
-        if outcome is AuditOutcome.ERROR
-        else None,
+        reason_code=ErrorCode.INTERNAL_ERROR if outcome is AuditOutcome.ERROR else None,
     )
 
 
@@ -70,10 +66,12 @@ def test_success_audit_rolls_back_with_owning_mutation():
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(engine)
 
-    with pytest.raises(RuntimeError, match="domain failure"):
-        with session_factory.begin() as session:
-            DurableAuditSink(MutationAuditRepository(session)).emit(audit_record())
-            raise RuntimeError("domain failure")
+    with (
+        pytest.raises(RuntimeError, match="domain failure"),
+        session_factory.begin() as session,
+    ):
+        DurableAuditSink(MutationAuditRepository(session)).emit(audit_record())
+        raise RuntimeError("domain failure")
 
     with session_factory() as session:
         assert session.scalar(select(MutationAudit)) is None
@@ -85,9 +83,11 @@ def test_failure_audit_uses_short_transaction_after_mutation_rollback():
     session_factory = sessionmaker(engine)
     failure = audit_record(outcome=AuditOutcome.ERROR)
 
-    with pytest.raises(RuntimeError, match="domain failure"):
-        with session_factory.begin():
-            raise RuntimeError("domain failure")
+    with (
+        pytest.raises(RuntimeError, match="domain failure"),
+        session_factory.begin(),
+    ):
+        raise RuntimeError("domain failure")
 
     record_failure_after_rollback(session_factory, failure)
 
@@ -112,18 +112,18 @@ def test_mutation_success_audit_and_idempotency_result_are_one_transaction():
         ),
     )
 
-    with pytest.raises(RuntimeError, match="force rollback"):
-        with session_factory.begin() as session:
-            session.add(Namespace(id=source_id, path="beamline/endstation"))
-            repository = IdempotencyRepository(session)
-            decision = repository.claim(
-                "actor-1", "command-1", fingerprint, lambda _: None
-            )
-            DurableAuditSink(MutationAuditRepository(session)).emit(audit_record())
-            repository.complete(
-                decision, target_id=str(source_id), response={"revision": 1}
-            )
-            raise RuntimeError("force rollback")
+    with (
+        pytest.raises(RuntimeError, match="force rollback"),
+        session_factory.begin() as session,
+    ):
+        session.add(Namespace(id=source_id, path="beamline/endstation"))
+        repository = IdempotencyRepository(session)
+        decision = repository.claim("actor-1", "command-1", fingerprint, lambda _: None)
+        DurableAuditSink(MutationAuditRepository(session)).emit(audit_record())
+        repository.complete(
+            decision, target_id=str(source_id), response={"revision": 1}
+        )
+        raise RuntimeError("force rollback")
 
     with session_factory() as session:
         assert session.get(Namespace, source_id) is None

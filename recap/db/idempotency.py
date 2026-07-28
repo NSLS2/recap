@@ -108,7 +108,9 @@ class IdempotencyRepository:
         response: Mapping[str, Any],
     ) -> None:
         if decision.replayed:
-            raise CommandConflictError("Replayed idempotency command is already complete")
+            raise CommandConflictError(
+                "Replayed idempotency command is already complete"
+            )
         result = self._session.execute(
             update(IdempotencyRecord)
             .where(

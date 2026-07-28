@@ -86,16 +86,18 @@ def test_revoked_authority_denies_replay_before_result_is_returned():
     with session_factory.begin() as session:
         repository = IdempotencyRepository(session)
         decision = repository.claim("actor-1", "command-1", command, lambda _: None)
-        repository.complete(decision, target_id="resource-1", response={"secret": False})
+        repository.complete(
+            decision, target_id="resource-1", response={"secret": False}
+        )
 
     def deny(_target_id):
         raise PermissionError("authority revoked")
 
-    with session_factory.begin() as session:
-        with pytest.raises(PermissionError, match="authority revoked"):
-            IdempotencyRepository(session).claim(
-                "actor-1", "command-1", command, deny
-            )
+    with (
+        pytest.raises(PermissionError, match="authority revoked"),
+        session_factory.begin() as session,
+    ):
+        IdempotencyRepository(session).claim("actor-1", "command-1", command, deny)
 
 
 def test_actor_and_key_are_unique_and_changed_fingerprint_conflicts():
@@ -109,11 +111,13 @@ def test_actor_and_key_are_unique_and_changed_fingerprint_conflicts():
         first = repository.claim("actor-1", "command-1", original, lambda _: None)
         repository.complete(first, target_id="resource-1", response={"revision": 1})
 
-    with session_factory.begin() as session:
-        with pytest.raises(CommandConflictError, match="different command"):
-            IdempotencyRepository(session).claim(
-                "actor-1", "command-1", fingerprint(), lambda _: None
-            )
+    with (
+        pytest.raises(CommandConflictError, match="different command"),
+        session_factory.begin() as session,
+    ):
+        IdempotencyRepository(session).claim(
+            "actor-1", "command-1", fingerprint(), lambda _: None
+        )
 
     with session_factory.begin() as session:
         other_actor = IdempotencyRepository(session).claim(

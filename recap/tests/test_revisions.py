@@ -73,16 +73,18 @@ def test_rollback_leaves_revision_and_values_unchanged():
         session.flush()
         namespace_id = namespace.id
 
-    with pytest.raises(RuntimeError, match="later failure"):
-        with session_factory.begin() as session:
-            compare_and_swap_revision(
-                session,
-                Namespace,
-                namespace_id,
-                expected_revision=1,
-                values={"metadata_json": {"owner": "rolled-back"}},
-            )
-            raise RuntimeError("later failure")
+    with (
+        pytest.raises(RuntimeError, match="later failure"),
+        session_factory.begin() as session,
+    ):
+        compare_and_swap_revision(
+            session,
+            Namespace,
+            namespace_id,
+            expected_revision=1,
+            values={"metadata_json": {"owner": "rolled-back"}},
+        )
+        raise RuntimeError("later failure")
 
     with session_factory() as session:
         namespace = session.get(Namespace, namespace_id)
