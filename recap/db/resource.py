@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    JSON,
     Column,
     ForeignKey,
     Table,
@@ -12,15 +13,23 @@ from sqlalchemy import (
     select,
 )
 from sqlalchemy.ext.associationproxy import association_proxy
-from sqlalchemy.orm import Mapped, mapped_collection, mapped_column, relationship
+from sqlalchemy.ext.mutable import MutableList
+from sqlalchemy.orm import (
+    Mapped,
+    mapped_collection,
+    mapped_column,
+    relationship,
+    validates,
+)
 
+from recap.db.namespace import Namespace
 from recap.db.process import ResourceAssignment
 from recap.utils.general import make_slug
 
 if TYPE_CHECKING:
     from recap.db.attribute import AttributeGroupTemplate
 
-from .base import Base, TimestampMixin
+from .base import Base, RevisionedLifecycleMixin, TimestampMixin
 
 # Sentinel for root ResourceTemplate
 ROOT_RESOURCE_TEMPLATE_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -78,12 +87,19 @@ resource_template_type_association = Table(
 )
 
 
-class ResourceTemplate(TimestampMixin, Base):
+class ResourceTemplate(RevisionedLifecycleMixin, TimestampMixin, Base):
     __tablename__ = "resource_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    namespace_id: Mapped[UUID] = mapped_column(
+        ForeignKey("namespace.id"), nullable=False
+    )
+    namespace: Mapped[Namespace] = relationship()
     name: Mapped[str] = mapped_column(nullable=False)
     slug: Mapped[str] = mapped_column(nullable=True)
     version: Mapped[str] = mapped_column(nullable=False, default="1.0")
+    labels: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSON), nullable=False, default=list
+    )
 
     types: Mapped[list["ResourceType"]] = relationship(
         "ResourceType",
@@ -110,12 +126,22 @@ class ResourceTemplate(TimestampMixin, Base):
 
     __table_args__ = (
         UniqueConstraint(
+            "namespace_id",
             "parent_id",
             "name",
             "version",
-            name="uq_resource_template_parent_name_version",
+            name="uq_resource_template_namespace_parent_name_version",
         ),
     )
+
+    @validates("labels")
+    def _normalize_labels(self, key, labels):
+        return [make_slug(label) for label in labels]
+
+    @validates("children")
+    def _inherit_child_namespace(self, key, child):
+        child.namespace = self.namespace
+        return child
 
 
 # --- Keep slug always in sync with name ---
@@ -135,6 +161,8 @@ def _before_insert_resource_template(mapper, connection, target: ResourceTemplat
                     name="__root__",
                     slug="__root__",
                     version="1.0",
+                    namespace_id=target.namespace_id,
+                    labels=[],
                     parent_id=None,
                 )
             )
@@ -152,12 +180,21 @@ class ResourceType(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
 
 
-class Resource(TimestampMixin, Base):
+class Resource(RevisionedLifecycleMixin, TimestampMixin, Base):
     __tablename__ = "resource"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    namespace_id: Mapped[UUID] = mapped_column(
+        ForeignKey("namespace.id"), nullable=False
+    )
+    namespace: Mapped[Namespace] = relationship()
     name: Mapped[str] = mapped_column(nullable=False)
     slug: Mapped[str | None] = mapped_column(nullable=True, index=True)
-    active: Mapped[bool] = mapped_column(nullable=False, default=True)
+    copied_from_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("resource.id"), nullable=True
+    )
+    copied_from: Mapped["Resource | None"] = relationship(
+        "Resource", foreign_keys=[copied_from_id], remote_side=[id]
+    )
     resource_template_id: Mapped[UUID] = mapped_column(
         ForeignKey("resource_template.id"), nullable=True
     )
@@ -166,11 +203,15 @@ class Resource(TimestampMixin, Base):
         ForeignKey("resource.id"), nullable=True
     )
     parent: Mapped["Resource"] = relationship(
-        "Resource", back_populates="children", remote_side=[id]
+        "Resource",
+        back_populates="children",
+        remote_side=[id],
+        foreign_keys=[parent_id],
     )
     children: Mapped[dict[str, "Resource"]] = relationship(
         "Resource",
         back_populates="parent",
+        foreign_keys=[parent_id],
         collection_class=mapped_collection(lambda c: c.name),
     )
     properties = relationship(
@@ -236,6 +277,7 @@ class Resource(TimestampMixin, Base):
                 name=child_ct.name,
                 template=child_ct,
                 parent=self,
+                namespace=self.namespace,
                 _visited_children=visited,
                 _max_depth=max_depth - 1,
             )
@@ -253,16 +295,6 @@ class Resource(TimestampMixin, Base):
 @event.listens_for(Resource, "before_insert", propagate=True)
 def _before_insert(mapper, connection, target: Resource):
     target.slug = make_slug(target.name)
-    # Set active as True
-    if target.active is None:
-        target.active = True
-
-    # Update all other copies of the resource to active = False
-    if target.active and target.name:
-        tbl = Resource.__table__
-        connection.execute(
-            tbl.update().where(tbl.c.name == target.name).values(active=False)
-        )
 
 
 def _descendant_templates_cte(template_id):
@@ -302,11 +334,11 @@ def _guard_resource_template(mapper, connection, target: ResourceTemplate):
 @event.listens_for(Resource, "before_update", propagate=True)
 def _before_update(mapper, connection, target: Resource):
     target.slug = make_slug(target.name)
-    # If this resource is set to active, set others as inactive
-    if target.active and target.name:
-        tbl = Resource.__table__
-        connection.execute(
-            tbl.update()
-            .where(tbl.c.name == target.name, tbl.c.id != target.id)
-            .values(active=False)
-        )
+    if inspect(target).attrs.namespace_id.history.has_changes():
+        raise ValueError("namespace_id is immutable")
+
+
+@event.listens_for(ResourceTemplate, "before_update", propagate=True)
+def _guard_resource_template_namespace_id(mapper, connection, target):
+    if inspect(target).attrs.namespace_id.history.has_changes():
+        raise ValueError("namespace_id is immutable")

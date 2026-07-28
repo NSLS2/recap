@@ -12,9 +12,17 @@ from enum import Enum
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+
+from recap.lifecycle import LifecycleStatus
+from recap.utils.general import make_slug
 
 SIMPLE_FIELD = "simple_field"
+NormalizedLabels = Annotated[
+    list[str],
+    SIMPLE_FIELD,
+    BeforeValidator(lambda labels: [make_slug(x) for x in labels]),
+]
 
 
 class ValueType(str, Enum):
@@ -134,3 +142,9 @@ class CommonFields(BaseModel):
     modified_date: Annotated[datetime, SIMPLE_FIELD] = Field(repr=False)
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class NamespaceOwnedFields(CommonFields):
+    namespace_id: Annotated[UUID, SIMPLE_FIELD]
+    status: Annotated[LifecycleStatus, SIMPLE_FIELD]
+    revision: Annotated[int, SIMPLE_FIELD]

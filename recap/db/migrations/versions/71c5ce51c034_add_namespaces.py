@@ -62,6 +62,40 @@ def upgrade() -> None:
                 ["id"],
             )
 
+    naming_convention = {"uq": "uq_%(table_name)s_%(column_0_name)s"}
+    with op.batch_alter_table(
+        "process_template", naming_convention=naming_convention
+    ) as batch_op:
+        batch_op.drop_constraint("uq_process_template_name", type_="unique")
+        batch_op.drop_constraint("uq_process_template_name_version", type_="unique")
+        batch_op.drop_column("is_active")
+        batch_op.create_unique_constraint(
+            "uq_process_template_namespace_name_version",
+            ["namespace_id", "name", "version"],
+        )
+
+    with op.batch_alter_table(
+        "process_run", naming_convention=naming_convention
+    ) as batch_op:
+        batch_op.drop_constraint("uq_process_run_name", type_="unique")
+        batch_op.create_unique_constraint(
+            "uq_process_run_namespace_name", ["namespace_id", "name"]
+        )
+
+    with op.batch_alter_table("resource_template") as batch_op:
+        batch_op.drop_constraint(
+            "uq_resource_template_parent_name_version", type_="unique"
+        )
+        batch_op.create_unique_constraint(
+            "uq_resource_template_namespace_parent_name_version",
+            ["namespace_id", "parent_id", "name", "version"],
+        )
+
+    with op.batch_alter_table(
+        "resource", reflect_kwargs={"resolve_fks": False}
+    ) as batch_op:
+        batch_op.drop_column("active")
+
     with op.batch_alter_table("resource") as batch_op:
         batch_op.add_column(sa.Column("copied_from_id", sa.Uuid(), nullable=True))
         batch_op.create_foreign_key(
@@ -70,6 +104,12 @@ def upgrade() -> None:
             ["copied_from_id"],
             ["id"],
         )
+
+    for table_name in ("process_template", "resource_template"):
+        with op.batch_alter_table(table_name) as batch_op:
+            batch_op.add_column(
+                sa.Column("labels", sa.JSON(), nullable=False, server_default="[]")
+            )
 
     connection = op.get_bind()
     options = context.get_context().opts
@@ -186,6 +226,21 @@ def upgrade() -> None:
         "resource_template",
         "resource",
     ):
+        with op.batch_alter_table(table_name) as batch_op:
+            batch_op.alter_column(
+                "namespace_id", existing_type=sa.Uuid(), nullable=False
+            )
+            batch_op.alter_column("status", existing_type=sa.String(), nullable=False)
+            batch_op.alter_column(
+                "revision", existing_type=sa.Integer(), nullable=False
+            )
+
+    for table_name in (
+        "process_run",
+        "process_template",
+        "resource_template",
+        "resource",
+    ):
         missing = connection.scalar(
             sa.text(f"SELECT count(*) FROM {table_name} WHERE namespace_id IS NULL")
         )
@@ -194,6 +249,50 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    with op.batch_alter_table(
+        "resource", reflect_kwargs={"resolve_fks": False}
+    ) as batch_op:
+        batch_op.add_column(
+            sa.Column("active", sa.Boolean(), nullable=False, server_default="1")
+        )
+
+    with op.batch_alter_table(
+        "resource_template", reflect_kwargs={"resolve_fks": False}
+    ) as batch_op:
+        batch_op.drop_constraint(
+            "uq_resource_template_namespace_parent_name_version", type_="unique"
+        )
+        batch_op.create_unique_constraint(
+            "uq_resource_template_parent_name_version",
+            ["parent_id", "name", "version"],
+        )
+
+    with op.batch_alter_table(
+        "process_run", reflect_kwargs={"resolve_fks": False}
+    ) as batch_op:
+        batch_op.drop_constraint("uq_process_run_namespace_name", type_="unique")
+        batch_op.create_unique_constraint("uq_process_run_name", ["name"])
+
+    with op.batch_alter_table(
+        "process_template", reflect_kwargs={"resolve_fks": False}
+    ) as batch_op:
+        batch_op.drop_constraint(
+            "uq_process_template_namespace_name_version", type_="unique"
+        )
+        batch_op.add_column(
+            sa.Column("is_active", sa.Boolean(), nullable=False, server_default="0")
+        )
+        batch_op.create_unique_constraint("uq_process_template_name", ["name"])
+        batch_op.create_unique_constraint(
+            "uq_process_template_name_version", ["name", "version"]
+        )
+
+    for table_name in ("resource_template", "process_template"):
+        with op.batch_alter_table(
+            table_name, reflect_kwargs={"resolve_fks": False}
+        ) as batch_op:
+            batch_op.drop_column("labels")
+
     with op.batch_alter_table(
         "resource", reflect_kwargs={"resolve_fks": False}
     ) as batch_op:

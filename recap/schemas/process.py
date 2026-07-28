@@ -20,12 +20,17 @@ from uuid import UUID
 from pydantic import ConfigDict, PrivateAttr, field_validator
 
 from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
-from recap.schemas.common import SIMPLE_FIELD, CommonFields
+from recap.schemas.common import (
+    SIMPLE_FIELD,
+    CommonFields,
+    NamespaceOwnedFields,
+    NormalizedLabels,
+)
 from recap.schemas.resource import ResourceAssignmentSchema, ResourceSlotSchema
 from recap.schemas.step import StepSchema, StepTemplateSchema
 
 
-class ProcessTemplateRef(CommonFields):
+class ProcessTemplateRef(NamespaceOwnedFields):
     """Lightweight reference to a process template.
 
     Used inside :class:`ProcessRunRef` and similar contexts where the full
@@ -39,9 +44,10 @@ class ProcessTemplateRef(CommonFields):
 
     name: Annotated[str, SIMPLE_FIELD]
     version: Annotated[str, SIMPLE_FIELD]
+    labels: NormalizedLabels
 
 
-class ProcessTemplateSchema(CommonFields):
+class ProcessTemplateSchema(NamespaceOwnedFields):
     """Blueprint for a workflow, defining its ordered steps and resource slots.
 
     A :class:`ProcessTemplateSchema` is created once and reused across
@@ -67,12 +73,12 @@ class ProcessTemplateSchema(CommonFields):
 
     name: Annotated[str, SIMPLE_FIELD]
     version: Annotated[str, SIMPLE_FIELD]
-    is_active: Annotated[bool, SIMPLE_FIELD]
+    labels: NormalizedLabels
     step_templates: dict[str, StepTemplateSchema]
     resource_slots: list["ResourceSlotSchema"]
 
 
-class ProcessRunRef(CommonFields):
+class ProcessRunRef(NamespaceOwnedFields):
     """Lightweight reference to a process run.
 
     Used in list views or parent-link contexts where the full
@@ -93,7 +99,7 @@ class ProcessRunRef(CommonFields):
     template: ProcessTemplateRef
 
 
-class ProcessRunSchema(CommonFields):
+class ProcessRunSchema(NamespaceOwnedFields):
     """A concrete execution of a :class:`ProcessTemplateSchema`.
 
     A :class:`ProcessRunSchema` is the primary provenance record.  It links

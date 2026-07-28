@@ -2,8 +2,18 @@ import typing
 from collections import namedtuple
 from uuid import UUID, uuid4
 
-from sqlalchemy import Enum, ForeignKey, UniqueConstraint, event, func, inspect, select
+from sqlalchemy import (
+    JSON,
+    Enum,
+    ForeignKey,
+    UniqueConstraint,
+    event,
+    func,
+    inspect,
+    select,
+)
 from sqlalchemy.ext import associationproxy
+from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import (
     Mapped,
     attribute_mapped_collection,
@@ -15,11 +25,12 @@ from sqlalchemy.orm import (
 )
 
 from recap.db.campaign import Campaign
+from recap.db.namespace import Namespace
 from recap.db.step import Step, StepTemplate, StepTemplateEdge
 from recap.exceptions import DuplicateResourceError
-from recap.utils.general import Direction
+from recap.utils.general import Direction, make_slug
 
-from .base import Base, TimestampMixin
+from .base import Base, RevisionedLifecycleMixin, TimestampMixin
 
 if typing.TYPE_CHECKING:
     from recap.db.resource import Resource, ResourceType
@@ -27,12 +38,18 @@ if typing.TYPE_CHECKING:
 AssignedResource = namedtuple("AssignedResource", ["slot", "resource"])
 
 
-class ProcessTemplate(TimestampMixin, Base):
+class ProcessTemplate(RevisionedLifecycleMixin, TimestampMixin, Base):
     __tablename__ = "process_template"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    name: Mapped[str] = mapped_column(unique=True, nullable=False)
+    namespace_id: Mapped[UUID] = mapped_column(
+        ForeignKey("namespace.id"), nullable=False
+    )
+    namespace: Mapped[Namespace] = relationship()
+    name: Mapped[str] = mapped_column(nullable=False)
     version: Mapped[str] = mapped_column(nullable=False)
-    is_active: Mapped[bool] = mapped_column(nullable=False, default=False)
+    labels: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSON), nullable=False, default=list
+    )
     step_templates: Mapped[dict[str, "StepTemplate"]] = relationship(
         back_populates="process_template",
         collection_class=mapped_collection(lambda st: st.name),
@@ -46,8 +63,17 @@ class ProcessTemplate(TimestampMixin, Base):
         "ResourceSlot", back_populates="process_template"
     )
     __table_args__ = (
-        UniqueConstraint("name", "version", name="uq_process_template_name_version"),
+        UniqueConstraint(
+            "namespace_id",
+            "name",
+            "version",
+            name="uq_process_template_namespace_name_version",
+        ),
     )
+
+    @validates("labels")
+    def _normalize_labels(self, key, labels):
+        return [make_slug(label) for label in labels]
 
 
 class ResourceSlot(TimestampMixin, Base):
@@ -76,11 +102,15 @@ class ResourceSlot(TimestampMixin, Base):
     )
 
 
-class ProcessRun(TimestampMixin, Base):
+class ProcessRun(RevisionedLifecycleMixin, TimestampMixin, Base):
     __tablename__ = "process_run"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
 
-    name: Mapped[str] = mapped_column(unique=True, nullable=False)
+    namespace_id: Mapped[UUID] = mapped_column(
+        ForeignKey("namespace.id"), nullable=False
+    )
+    namespace: Mapped[Namespace] = relationship()
+    name: Mapped[str] = mapped_column(nullable=False)
     description: Mapped[str] = mapped_column(unique=False, nullable=False)
 
     process_template_id: Mapped[UUID] = mapped_column(
@@ -108,6 +138,10 @@ class ProcessRun(TimestampMixin, Base):
     )
     campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaign.id"), nullable=False)
     campaign: Mapped[Campaign] = relationship("Campaign", back_populates="process_runs")
+
+    __table_args__ = (
+        UniqueConstraint("namespace_id", "name", name="uq_process_run_namespace_name"),
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -187,6 +221,13 @@ class ProcessRun(TimestampMixin, Base):
         for resource_slot, resource in self.resources.items():
             ar.append(AssignedResource(slot=resource_slot, resource=resource))
         return ar
+
+
+@event.listens_for(ProcessTemplate, "before_update", propagate=True)
+@event.listens_for(ProcessRun, "before_update", propagate=True)
+def _guard_process_namespace_id(mapper, connection, target):
+    if inspect(target).attrs.namespace_id.history.has_changes():
+        raise ValueError("namespace_id is immutable")
 
 
 @event.listens_for(ProcessTemplate, "before_update", propagate=True)

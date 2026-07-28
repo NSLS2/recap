@@ -39,6 +39,7 @@ class ReadBackend(Protocol):
     @overload
     def get_process_template(
         self,
+        namespace_id: UUID,
         name: str | None,
         version: str | None,
         expand: Literal[False],
@@ -48,6 +49,7 @@ class ReadBackend(Protocol):
     @overload
     def get_process_template(
         self,
+        namespace_id: UUID,
         name: str | None,
         version: str | None,
         expand: Literal[True],
@@ -57,6 +59,7 @@ class ReadBackend(Protocol):
     @overload
     def get_resource_template(
         self,
+        namespace_id: UUID,
         name: str | None,
         version: str | None = None,
         id: UUID | str | None = None,
@@ -67,6 +70,7 @@ class ReadBackend(Protocol):
     @overload
     def get_resource_template(
         self,
+        namespace_id: UUID,
         name: str | None,
         version: str | None = None,
         id: UUID | str | None = None,
@@ -76,6 +80,7 @@ class ReadBackend(Protocol):
 
     def get_resource(
         self,
+        namespace_id: UUID,
         name: str,
         template_name: str,
         template_version: str | None = "1.0",
@@ -84,6 +89,7 @@ class ReadBackend(Protocol):
 
     def find_resources_by_identity(
         self,
+        namespace_id: UUID,
         name: str,
         parent_id: UUID | None,
         resource_template_id: UUID,
@@ -111,7 +117,7 @@ class WriteBackend(Protocol):
     def update_campaign(self, campaign: CampaignSchema) -> CampaignSchema: ...
 
     def create_process_template(
-        self, name: str, version: str
+        self, namespace_id: UUID, name: str, version: str
     ) -> ProcessTemplateRef: ...
 
     def add_resource_slot(
@@ -156,7 +162,11 @@ class WriteBackend(Protocol):
     def add_resource_types(self, type_names: list[str]) -> list[ResourceTypeSchema]: ...
 
     def add_resource_template(
-        self, name: str, type_names: list[ResourceTypeSchema], version: str = "1.0"
+        self,
+        namespace_id: UUID,
+        name: str,
+        type_names: list[ResourceTypeSchema],
+        version: str = "1.0",
     ) -> ResourceTemplateRef: ...
 
     def add_child_resource_template(
@@ -170,6 +180,7 @@ class WriteBackend(Protocol):
     @overload
     def create_resource(
         self,
+        namespace_id: UUID,
         name: str,
         resource_template: ResourceTemplateRef | ResourceTemplateSchema,
         parent_resource: ResourceRef | ResourceSchema | None,
@@ -179,6 +190,7 @@ class WriteBackend(Protocol):
     @overload
     def create_resource(
         self,
+        namespace_id: UUID,
         name: str,
         resource_template: ResourceTemplateRef | ResourceTemplateSchema,
         parent_resource: ResourceRef | ResourceSchema | None,
@@ -195,6 +207,7 @@ class WriteBackend(Protocol):
 
     def create_process_run(
         self,
+        namespace_id: UUID,
         name: str,
         description: str,
         process_template: ProcessTemplateRef | ProcessTemplateSchema,

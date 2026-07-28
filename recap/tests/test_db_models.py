@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.campaign import Campaign
+from recap.db.namespace import Namespace
 from recap.db.process import (
     Direction,
     ProcessRun,
@@ -15,10 +16,20 @@ from recap.db.step import StepTemplate, StepTemplateResourceSlotBinding
 from recap.utils.general import make_slug
 
 
-def test_attribute_group_template_slug_and_constraint(db_session):
-    process_template = ProcessTemplate(name="Pipeline", version="v1")
+@pytest.fixture
+def namespace(db_session):
+    namespace = Namespace(path="db-models", metadata_json={})
+    db_session.add(namespace)
+    db_session.flush()
+    return namespace
+
+
+def test_attribute_group_template_slug_and_constraint(db_session, namespace):
+    process_template = ProcessTemplate(
+        namespace=namespace, name="Pipeline", version="v1"
+    )
     step_template = StepTemplate(name="Prep", process_template=process_template)
-    resource_template = ResourceTemplate(name="Instrument")
+    resource_template = ResourceTemplate(namespace=namespace, name="Instrument")
     valid_group = AttributeGroupTemplate(
         name="Group One", resource_template=resource_template
     )
@@ -42,8 +53,8 @@ def test_attribute_group_template_slug_and_constraint(db_session):
     db_session.rollback()
 
 
-def test_resource_initialization_from_template(db_session):
-    resource_template = ResourceTemplate(name="Parent")
+def test_resource_initialization_from_template(db_session, namespace):
+    resource_template = ResourceTemplate(namespace=namespace, name="Parent")
     attr_group = AttributeGroupTemplate(
         name="Settings", resource_template=resource_template
     )
@@ -57,7 +68,9 @@ def test_resource_initialization_from_template(db_session):
     db_session.add_all([resource_template, attr_group, child_template])
     db_session.flush()
 
-    resource = Resource(name="Main Resource", template=resource_template)
+    resource = Resource(
+        namespace=namespace, name="Main Resource", template=resource_template
+    )
     db_session.add(resource)
     db_session.flush()
 
@@ -70,9 +83,11 @@ def test_resource_initialization_from_template(db_session):
     assert child.name == child_template.name
 
 
-def test_process_run_validates_resource_assignments(db_session):
+def test_process_run_validates_resource_assignments(db_session, namespace):
     resource_type = ResourceType(name="Microscope")
-    process_template = ProcessTemplate(name="Acquisition", version="v1")
+    process_template = ProcessTemplate(
+        namespace=namespace, name="Acquisition", version="v1"
+    )
     slot = ResourceSlot(
         name="instrument",
         process_template=process_template,
@@ -82,15 +97,22 @@ def test_process_run_validates_resource_assignments(db_session):
     campaign = Campaign(name="Campaign", proposal="P1", saf=None, meta_data=None)
 
     matching_template = ResourceTemplate(
-        name="MicroscopeTemplate", types=[resource_type]
+        namespace=namespace, name="MicroscopeTemplate", types=[resource_type]
     )
-    matching_resource = Resource(name="Scope A", template=matching_template)
+    matching_resource = Resource(
+        namespace=namespace, name="Scope A", template=matching_template
+    )
 
     wrong_type = ResourceType(name="Other")
-    wrong_template = ResourceTemplate(name="OtherTemplate", types=[wrong_type])
-    wrong_resource = Resource(name="Other A", template=wrong_template)
+    wrong_template = ResourceTemplate(
+        namespace=namespace, name="OtherTemplate", types=[wrong_type]
+    )
+    wrong_resource = Resource(
+        namespace=namespace, name="Other A", template=wrong_template
+    )
 
     run = ProcessRun(
+        namespace=namespace,
         name="run-1",
         description="desc",
         template=process_template,
@@ -127,7 +149,9 @@ def test_process_run_validates_resource_assignments(db_session):
     with pytest.raises(ValueError):
         run.resources[slot_two] = wrong_resource
 
-    another_resource = Resource(name="Scope B", template=matching_template)
+    another_resource = Resource(
+        namespace=namespace, name="Scope B", template=matching_template
+    )
     db_session.add(another_resource)
     with pytest.raises(ValueError):
         run.assignments[slot] = ResourceAssignment(
@@ -135,8 +159,8 @@ def test_process_run_validates_resource_assignments(db_session):
         )
 
 
-def test_step_initializes_parameters_from_template(db_session):
-    process_template = ProcessTemplate(name="Prep", version="1.0")
+def test_step_initializes_parameters_from_template(db_session, namespace):
+    process_template = ProcessTemplate(namespace=namespace, name="Prep", version="1.0")
     step_template = StepTemplate(name="Incubate", process_template=process_template)
     attr_group = AttributeGroupTemplate(name="Conditions", step_template=step_template)
     AttributeTemplate(
@@ -148,6 +172,7 @@ def test_step_initializes_parameters_from_template(db_session):
     campaign = Campaign(name="C1", proposal="P1", saf=None, meta_data=None)
 
     run = ProcessRun(
+        namespace=namespace,
         name="run-001",
         description="desc",
         template=process_template,
@@ -163,44 +188,42 @@ def test_step_initializes_parameters_from_template(db_session):
     assert param.values["Duration"] == 30
 
 
-def test_resource_slug_and_active_toggle(db_session):
-    tmpl1 = ResourceTemplate(name="Machine")
-    tmpl2 = ResourceTemplate(name="Machine2")
+def test_resource_slug_and_duplicate_top_level_names(db_session, namespace):
+    tmpl1 = ResourceTemplate(namespace=namespace, name="Machine")
+    tmpl2 = ResourceTemplate(namespace=namespace, name="Machine2")
     db_session.add_all([tmpl1, tmpl2])
     db_session.flush()
 
-    first = Resource(name="Shared Name", template=tmpl1)
+    first = Resource(namespace=namespace, name="Shared Name", template=tmpl1)
     db_session.add(first)
     db_session.flush()
 
     assert first.slug == make_slug("Shared Name")
-    assert first.active is True
 
-    second = Resource(name="Shared Name", template=tmpl2)
+    second = Resource(namespace=namespace, name="Shared Name", template=tmpl2)
     db_session.add(second)
     db_session.flush()
 
-    # new one is active, old one was deactivated by the before_insert hook
-    assert second.active is True
-    db_session.refresh(first)
-    assert first.active is False
+    assert second.slug == make_slug("Shared Name")
+    assert first.id != second.id
+    assert not hasattr(first, "active")
 
 
-def test_resource_children_respect_max_depth(db_session):
-    tmpl = ResourceTemplate(name="Parent")
+def test_resource_children_respect_max_depth(db_session, namespace):
+    tmpl = ResourceTemplate(namespace=namespace, name="Parent")
     ResourceTemplate(name="Child", parent=tmpl)
     db_session.add(tmpl)
     db_session.flush()
 
-    resource = Resource(name="Root", template=tmpl, _max_depth=0)
+    resource = Resource(namespace=namespace, name="Root", template=tmpl, _max_depth=0)
     db_session.add(resource)
     db_session.flush()
 
     assert resource.children == {}
 
 
-def test_property_values_reject_unknown_keys(db_session):
-    tmpl = ResourceTemplate(name="Machine")
+def test_property_values_reject_unknown_keys(db_session, namespace):
+    tmpl = ResourceTemplate(namespace=namespace, name="Machine")
     group = AttributeGroupTemplate(name="Props", resource_template=tmpl)
     AttributeTemplate(
         name="Voltage",
@@ -211,7 +234,7 @@ def test_property_values_reject_unknown_keys(db_session):
     db_session.add_all([tmpl, group])
     db_session.flush()
 
-    res = Resource(name="Machine A", template=tmpl)
+    res = Resource(namespace=namespace, name="Machine A", template=tmpl)
     db_session.add(res)
     db_session.flush()
 
@@ -219,8 +242,8 @@ def test_property_values_reject_unknown_keys(db_session):
         res.properties["Props"].values["Unknown"] = 1
 
 
-def test_resource_slot_name_unique_per_process_template(db_session):
-    pt = ProcessTemplate(name="PT", version="1")
+def test_resource_slot_name_unique_per_process_template(db_session, namespace):
+    pt = ProcessTemplate(namespace=namespace, name="PT", version="1")
     slot1 = ResourceSlot(
         name="instrument",
         process_template=pt,
@@ -239,11 +262,17 @@ def test_resource_slot_name_unique_per_process_template(db_session):
     db_session.rollback()
 
 
-def test_step_uses_template_name_when_missing(db_session):
-    pt = ProcessTemplate(name="PT2", version="1")
+def test_step_uses_template_name_when_missing(db_session, namespace):
+    pt = ProcessTemplate(namespace=namespace, name="PT2", version="1")
     st = StepTemplate(name="T1", process_template=pt)
     campaign = Campaign(name="C2", proposal="p", saf=None, meta_data=None)
-    run = ProcessRun(name="run-step", description="", template=pt, campaign=campaign)
+    run = ProcessRun(
+        namespace=namespace,
+        name="run-step",
+        description="",
+        template=pt,
+        campaign=campaign,
+    )
     db_session.add_all([pt, st, campaign, run])
     db_session.flush()
 
@@ -252,8 +281,8 @@ def test_step_uses_template_name_when_missing(db_session):
     assert auto_step.name == st.name
 
 
-def test_step_template_binding_role_unique(db_session):
-    pt = ProcessTemplate(name="PT3", version="1")
+def test_step_template_binding_role_unique(db_session, namespace):
+    pt = ProcessTemplate(namespace=namespace, name="PT3", version="1")
     st = StepTemplate(name="T2", process_template=pt)
     rt = ResourceType(name="slot-type")
     slot = ResourceSlot(

@@ -264,22 +264,28 @@ class LocalBackend(Backend):
         return CampaignSchema.model_validate(model)
 
     def create_process_template(
-        self, name: str, version: str
+        self, namespace_id: UUID, name: str, version: str
     ) -> ProcessTemplateRef | None:
         template, created = get_or_create(
-            self.session, ProcessTemplate, {"name": name, "version": version}, {}
+            self.session,
+            ProcessTemplate,
+            {"namespace_id": namespace_id, "name": name, "version": version},
+            {},
         )
         if created:
             return ProcessTemplateRef.model_validate(template)
 
     def get_process_template(
         self,
+        namespace_id: UUID,
         name: str | None,
         version: str | None,
         expand: bool = False,
         id: UUID | str | None = None,
     ) -> ProcessTemplateRef | ProcessTemplateSchema:
-        statement = select(ProcessTemplate)
+        statement = select(ProcessTemplate).where(
+            ProcessTemplate.namespace_id == namespace_id
+        )
         if name:
             statement = statement.where(ProcessTemplate.name == name)
         if version:
@@ -462,9 +468,14 @@ class LocalBackend(Backend):
         return resource_type_schemas
 
     def add_resource_template(
-        self, name: str, types: list[ResourceTypeSchema], version: str = "1.0"
+        self,
+        namespace_id: UUID,
+        name: str,
+        types: list[ResourceTypeSchema],
+        version: str = "1.0",
     ) -> ResourceTemplateRef:
         template = ResourceTemplate(
+            namespace_id=namespace_id,
             name=name,
             version=version,
             # types=types,
@@ -529,13 +540,16 @@ class LocalBackend(Backend):
 
     def get_resource_template(
         self,
+        namespace_id: UUID,
         name: str | None,
         version: str | None = None,
         id: UUID | str | None = None,
         parent: ResourceTemplateRef | ResourceTemplate | None = None,
         expand: bool = False,
     ) -> ResourceTemplateRef | ResourceTemplateSchema:
-        statement = select(ResourceTemplate)
+        statement = select(ResourceTemplate).where(
+            ResourceTemplate.namespace_id == namespace_id
+        )
         if name:
             statement = statement.where(ResourceTemplate.name == name)
         if version:
@@ -563,6 +577,7 @@ class LocalBackend(Backend):
 
     def find_resources_by_identity(
         self,
+        namespace_id: UUID,
         name: str,
         parent_id: UUID | None,
         template_id: UUID,
@@ -579,6 +594,7 @@ class LocalBackend(Backend):
             select(Resource)
             .where(
                 parent_clause,
+                Resource.namespace_id == namespace_id,
                 Resource.name == name,
                 Resource.resource_template_id == template_id,
             )
@@ -588,6 +604,7 @@ class LocalBackend(Backend):
 
     def create_resource(
         self,
+        namespace_id: UUID,
         name: str,
         resource_template: ResourceTemplateRef | ResourceTemplateSchema,
         parent_resource: ResourceRef | ResourceSchema | None = None,
@@ -599,7 +616,7 @@ class LocalBackend(Backend):
 
         if on_existing != "create":
             matches = self.find_resources_by_identity(
-                name, parent_id, resource_template.id
+                namespace_id, name, parent_id, resource_template.id
             )
             if matches:
                 existing = matches[0]
@@ -617,6 +634,7 @@ class LocalBackend(Backend):
                 return ResourceRef.model_validate(existing)
 
         resource = Resource(
+            namespace_id=namespace_id,
             name=name,
             resource_template_id=resource_template.id,
             parent_id=parent_id,
@@ -648,6 +666,7 @@ class LocalBackend(Backend):
 
     def get_resource(
         self,
+        namespace_id: UUID,
         name: str,
         template_name: str,
         template_version: str | None = "1.0",
@@ -658,9 +677,9 @@ class LocalBackend(Backend):
             .join(Resource.template)
             .where(
                 Resource.name == name,
+                Resource.namespace_id == namespace_id,
                 ResourceTemplate.name == template_name,
                 ResourceTemplate.version == template_version,
-                Resource.active.is_(True),
             )
         )
         with self._session_scope() as session:
@@ -689,11 +708,14 @@ class LocalBackend(Backend):
 
     def create_process_run(
         self,
+        namespace_id: UUID,
         name: str,
         description: str,
         process_template: ProcessTemplateRef | ProcessTemplateSchema,
         campaign: CampaignSchema,
     ) -> ProcessRunSchema:
+        if namespace_id != campaign.id:
+            raise ValueError("ProcessRun namespace_id must match campaign id")
         statement = select(ProcessTemplate).where(
             ProcessTemplate.id == process_template.id
         )
@@ -701,6 +723,7 @@ class LocalBackend(Backend):
             self.session, statement, label="ProcessTemplate"
         )
         process_run = ProcessRun(
+            namespace_id=namespace_id,
             name=name,
             description=description,
             template=process_template_model,
@@ -752,9 +775,6 @@ class LocalBackend(Backend):
             raise ValueError(
                 f"Resource {resource_model.name!r} must have a template with types"
             )
-
-        if not resource_model.active:
-            raise ValueError(f"Resource {resource_model.name!r} is inactive")
 
         template_type_ids = {rt.id for rt in resource_model.template.types}
         if resource_slot_model.resource_type_id not in template_type_ids:
