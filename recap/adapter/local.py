@@ -2,6 +2,7 @@ import json
 import warnings
 from collections.abc import Sequence
 from contextlib import contextmanager
+from copy import deepcopy
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
@@ -66,6 +67,7 @@ from recap.schemas.process import (
     ProcessTemplateSchema,
 )
 from recap.schemas.resource import (
+    ResourceCopyOptions,
     ResourceRef,
     ResourceSchema,
     ResourceSlotSchema,
@@ -82,7 +84,7 @@ from recap.utils.database import get_or_create, load_single
 from recap.utils.dsl import AliasMixin, build_param_values_model, resolve_path
 from recap.utils.general import make_slug, to_json_compatible
 from recap.utils.loaders import chain_load
-from recap.utils.namespace import namespace_ancestors
+from recap.utils.namespace import is_namespace_ancestor, namespace_ancestors
 
 SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
     NamespaceSchema: Namespace,
@@ -691,6 +693,109 @@ class LocalBackend(Backend):
         if expand:
             return ResourceSchema.model_validate(resource)
         return ResourceRef.model_validate(resource)
+
+    def copy_resource(  # noqa: C901
+        self,
+        source_resource_id: UUID,
+        destination_namespace_id: UUID,
+        options: ResourceCopyOptions,
+    ) -> ResourceSchema:
+        source_resources = self._load_resource_subtrees(
+            self.session, [source_resource_id]
+        )
+        if not source_resources:
+            raise LookupError(f"Resource does not exist: {source_resource_id}")
+
+        source_by_id = {resource.id: resource for resource in source_resources}
+        source = source_by_id[source_resource_id]
+        if source.parent_id is not None:
+            raise ValueError("Source resource must be a resource graph root")
+
+        destination = self.session.get(Namespace, destination_namespace_id)
+        if destination is None:
+            raise LookupError(
+                f"Destination namespace does not exist: {destination_namespace_id}"
+            )
+        if not is_namespace_ancestor(source.namespace.path, destination.path):
+            raise ValueError(
+                "Destination namespace must be the source namespace or its descendant"
+            )
+
+        children_by_parent: dict[UUID, list[Resource]] = {}
+        for resource in source_resources:
+            if resource.parent_id is not None:
+                children_by_parent.setdefault(resource.parent_id, []).append(resource)
+
+        def clone_resource(
+            original: Resource, parent: Resource | None = None
+        ) -> Resource:
+            clone = Resource(
+                id=uuid4(),
+                name=original.name,
+                template=original.template,
+                namespace=destination,
+                parent=parent,
+                status=LifecycleStatus.MUTABLE,
+                revision=1,
+                _init_children=False,
+            )
+            for original_property in original.properties.values():
+                copied_property = Property(
+                    id=uuid4(), template=original_property.template, resource=clone
+                )
+                for name, original_value in original_property._values.items():
+                    copied_value = copied_property._values[name]
+                    copied_value.id = uuid4()
+                    copied_value.value_json = deepcopy(original_value.value_json)
+                    copied_value.unit = original_value.unit
+                    copied_value.metadata_json = deepcopy(original_value.metadata_json)
+            for child in children_by_parent.get(original.id, []):
+                clone_resource(child, clone)
+            return clone
+
+        copied_root = clone_resource(source)
+        copied_root.copied_from = source
+        self.session.add(copied_root)
+
+        if options.name is not None:
+            copied_root.name = options.name
+        for group_name, changes in options.changes.properties.items():
+            copied_property = next(
+                (
+                    prop
+                    for prop in copied_root.properties.values()
+                    if group_name in {prop.template.name, prop.template.slug}
+                ),
+                None,
+            )
+            if copied_property is None:
+                raise ValueError(
+                    f"Copied resource has no property group {group_name!r}"
+                )
+            for attribute_name, raw_value in changes.items():
+                copied_value = next(
+                    (
+                        value
+                        for value in copied_property._values.values()
+                        if attribute_name in {value.template.name, value.template.slug}
+                    ),
+                    None,
+                )
+                if copied_value is None:
+                    raise ValueError(
+                        f"Property {attribute_name!r} not found in group {group_name!r}"
+                    )
+                if isinstance(raw_value, dict):
+                    copied_value.set_value(deepcopy(raw_value.get("value")))
+                    if "unit" in raw_value:
+                        copied_value.unit = raw_value["unit"]
+                else:
+                    copied_value.set_value(deepcopy(raw_value))
+
+        if source.status is LifecycleStatus.MUTABLE:
+            source.activate()
+        self.session.flush()
+        return ResourceSchema.model_validate(copied_root)
 
     def get_resource(
         self,

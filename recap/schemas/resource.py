@@ -290,6 +290,15 @@ class ResourceTypeSchema(CommonFields):
     name: Annotated[str, SIMPLE_FIELD]
 
 
+class ResourceCopyChanges(BaseModel):
+    properties: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class ResourceCopyOptions(BaseModel):
+    name: str | None = None
+    changes: ResourceCopyChanges = Field(default_factory=ResourceCopyChanges)
+
+
 class ResourceTemplateRef(NamespaceOwnedFields):
     """Lightweight reference to a resource template, without child or property detail.
 

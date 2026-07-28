@@ -12,6 +12,7 @@ from recap.schemas.process import (
     ProcessTemplateSchema,
 )
 from recap.schemas.resource import (
+    ResourceCopyOptions,
     ResourceRef,
     ResourceSchema,
     ResourceSlotSchema,
@@ -208,6 +209,13 @@ class WriteBackend(Protocol):
     ) -> None: ...
 
     def update_resource(self, resource: ResourceSchema) -> ResourceSchema: ...
+
+    def copy_resource(
+        self,
+        source_resource_id: UUID,
+        destination_namespace_id: UUID,
+        options: ResourceCopyOptions,
+    ) -> ResourceSchema: ...
 
     def create_process_run(
         self,

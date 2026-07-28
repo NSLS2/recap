@@ -15,7 +15,7 @@ from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.process import CampaignSchema
-from recap.schemas.resource import ResourceRef, ResourceSchema
+from recap.schemas.resource import ResourceCopyOptions, ResourceRef, ResourceSchema
 from recap.utils.migrations import apply_migrations
 
 
@@ -743,6 +743,27 @@ class RecapClient:
             parent=parent,
             on_existing=on_existing,
         )
+
+    def copy_resource(
+        self,
+        source_resource_id: UUID,
+        destination_namespace_id: UUID,
+        options: ResourceCopyOptions | None = None,
+    ) -> ResourceSchema:
+        if self.backend is None:
+            raise RuntimeError("Backend not initialized")
+        uow = self.backend.begin()
+        try:
+            copied = self.backend.copy_resource(
+                source_resource_id,
+                destination_namespace_id,
+                options or ResourceCopyOptions(),
+            )
+            uow.commit()
+            return copied
+        except Exception:
+            uow.rollback()
+            raise
 
     @overload
     def get_resource(
