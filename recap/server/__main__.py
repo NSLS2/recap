@@ -56,7 +56,7 @@ def main() -> None:
 
     from recap.server.app import create_app
 
-    app = create_app(cfg.db_path)
+    app = create_app(cfg.db_path, api_key=cfg.api_key)
     uvicorn.run(app, host=cfg.host, port=cfg.port, log_level=cfg.log_level)
 
 

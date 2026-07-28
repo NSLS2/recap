@@ -4,17 +4,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
+from pydantic import SecretStr
 
+from recap.authentication.api_key import ApiKeyRequestAuthenticator
 from recap.client import RecapClient
+from recap.server.security import authenticate_request
 from recap.server.strawberry_schema import build_router
 
 
-def create_app(db_path: str | Path) -> FastAPI:
+def create_app(
+    db_path: str | Path, *, api_key: str | SecretStr | None = None
+) -> FastAPI:
     """Create the recap FastAPI application.
 
     Args:
         db_path: Path to the SQLite database file. Created if it doesn't exist.
+        api_key: Optional key that enables authentication on every route.
 
     Returns:
         Configured FastAPI application with /graphql and /db_path endpoints.
@@ -28,8 +34,11 @@ def create_app(db_path: str | Path) -> FastAPI:
         title="recap GraphQL server",
         description="Read-only GraphQL API for recap experiment provenance data.",
         version="1.0.0",
+        dependencies=[Depends(authenticate_request)] if api_key is not None else None,
     )
 
+    if api_key is not None:
+        app.state.request_authenticator = ApiKeyRequestAuthenticator(api_key)
     app.include_router(graphql_router, prefix="/graphql")
 
     @app.get("/db_path", summary="Get database path")
