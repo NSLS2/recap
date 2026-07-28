@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 readme = "README.md"
 license = { text = "BSD-3-Clause" }
 dependencies = [
+    "alembic>=1.17.2,<2",
     "sqlalchemy>=2.0",
     "pydantic>=2.0",
     "python-slugify",
