@@ -1,16 +1,21 @@
 """Root GraphQL Query type and schema builder."""
 
+from typing import Annotated
+
 import strawberry
+from fastapi import Header, Request
 from strawberry.fastapi import GraphQLRouter
 from strawberry.scalars import JSON
 from strawberry.schema.config import StrawberryConfig
 
 from recap.adapter.local import LocalBackend
+from recap.server.context import StrawberryGraphQLContext, graphql_context
 from recap.server.resolvers import (
     resolve_execute_count,
     resolve_execute_query,
     resolve_namespaces,
     resolve_namespaces_count,
+    resolve_permissions,
     resolve_process_runs,
     resolve_process_runs_count,
     resolve_process_templates,
@@ -22,6 +27,7 @@ from recap.server.resolvers import (
 )
 from recap.server.strawberry_types import (
     NamespaceType,
+    PermissionsType,
     ProcessRunType,
     ProcessTemplateType,
     ResourceTemplateType,
@@ -33,6 +39,7 @@ from recap.server.strawberry_types import (
 class Query:
     execute_query: JSON = strawberry.field(resolver=resolve_execute_query)
     execute_count: int = strawberry.field(resolver=resolve_execute_count)
+    permissions: PermissionsType = strawberry.field(resolver=resolve_permissions)
 
     # List fields
     resources: list[ResourceType] = strawberry.field(resolver=resolve_resources)
@@ -73,8 +80,11 @@ def build_schema(backend: LocalBackend) -> strawberry.Schema:
 def build_router(backend: LocalBackend) -> GraphQLRouter:
     """Build a GraphQLRouter (for mounting in FastAPI) with backend in context."""
 
-    async def get_context() -> dict:
-        return {"backend": backend}
+    async def get_context(
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> StrawberryGraphQLContext:
+        return await graphql_context(request, backend, authorization)
 
     schema = strawberry.Schema(
         query=Query, config=StrawberryConfig(auto_camel_case=False)

@@ -98,3 +98,19 @@ class NamespaceType:
     metadata: JSON
     create_date: datetime
     modified_date: datetime
+
+
+@strawberry.type
+class PermissionIdentityType:
+    provider: str
+    subject: str
+
+
+@strawberry.type
+class PermissionsType:
+    identities: list[PermissionIdentityType]
+    snapshot_generation: str | None
+    effective_scopes: list[str]
+    matched_namespace_paths: list[str]
+    groups: list[str]
+    roles: list[str]

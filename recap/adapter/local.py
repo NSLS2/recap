@@ -31,6 +31,7 @@ from recap.adapter.query_loaders import (
     resolve_loader_options,
 )
 from recap.adapter.resource_construct import ResourceSchemaHydrator
+from recap.authorization.query import AuthorizedQuery
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate, AttributeValue
 from recap.db.base import Base
 from recap.db.exceptions import ValidationError
@@ -1486,11 +1487,24 @@ class LocalBackend(Backend):
         return stmt
 
     def _build_select(
-        self, schema: type[SchemaT], spec: QuerySpec, namespace_path: str
+        self,
+        schema: type[SchemaT],
+        spec: QuerySpec,
+        namespace_path: str,
+        authorization: AuthorizedQuery | None = None,
     ) -> Select:
         model = SCHEMA_MODEL_MAPPING[schema]
         stmt = select(model)
-        stmt = self._apply_namespace_visibility(model, stmt, spec, namespace_path)
+        if authorization is None:
+            stmt = self._apply_namespace_visibility(model, stmt, spec, namespace_path)
+        else:
+            context_id, ancestor_ids = self._namespace_visibility(namespace_path)
+            stmt = authorization.apply(
+                model,
+                stmt,
+                context_id=context_id,
+                ancestor_ids=ancestor_ids,
+            )
 
         if model is ResourceTemplate and "types__names_in" in spec.filters:
             type_names = spec.filters["types__names_in"]
@@ -1542,7 +1556,33 @@ class LocalBackend(Backend):
     def query(
         self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
     ) -> list[SchemaT]:
-        stmt = self._build_select(schema, spec, namespace_path)
+        return self._query(schema, spec, namespace_path, authorization=None)
+
+    def query_authorized(
+        self,
+        schema: type[SchemaT],
+        spec: QuerySpec,
+        *,
+        authorization: AuthorizedQuery,
+    ) -> list[SchemaT]:
+        return self._query(
+            schema,
+            spec,
+            authorization.namespace_path,
+            authorization=authorization,
+        )
+
+    def _query(
+        self,
+        schema: type[SchemaT],
+        spec: QuerySpec,
+        namespace_path: str,
+        *,
+        authorization: AuthorizedQuery | None,
+    ) -> list[SchemaT]:
+        stmt = self._build_select(
+            schema, spec, namespace_path, authorization=authorization
+        )
 
         # Resource trees with children go through the bulk recursive-CTE path
         # below; the root query then only needs ids, so skip the (one-level,
@@ -1640,8 +1680,33 @@ class LocalBackend(Backend):
     def count(
         self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
     ) -> int:
-        # model = SCHEMA_MODEL_MAPPING[schema]
-        stmt = self._build_select(schema, spec, namespace_path)
+        return self._count(schema, spec, namespace_path, authorization=None)
+
+    def count_authorized(
+        self,
+        schema: type[SchemaT],
+        spec: QuerySpec,
+        *,
+        authorization: AuthorizedQuery,
+    ) -> int:
+        return self._count(
+            schema,
+            spec,
+            authorization.namespace_path,
+            authorization=authorization,
+        )
+
+    def _count(
+        self,
+        schema: type[SchemaT],
+        spec: QuerySpec,
+        namespace_path: str,
+        *,
+        authorization: AuthorizedQuery | None,
+    ) -> int:
+        stmt = self._build_select(
+            schema, spec, namespace_path, authorization=authorization
+        )
 
         with self._session_scope() as session:
             select_stmt = select(count()).select_from(stmt.subquery())

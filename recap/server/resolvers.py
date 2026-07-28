@@ -11,6 +11,7 @@ from strawberry.scalars import JSON
 
 from recap.adapter.local import LocalBackend
 from recap.adapter.transport import QueryResult, serialize_model
+from recap.authorization.query import AuthorizedQuery
 from recap.dsl.query import QuerySpec
 from recap.schemas.namespace import NamespaceSchema
 from recap.schemas.process import (
@@ -25,8 +26,11 @@ from recap.schemas.resource import (
     ResourceTemplateRef,
     ResourceTemplateSchema,
 )
+from recap.server.context import StrawberryGraphQLContext
 from recap.server.strawberry_types import (
     NamespaceType,
+    PermissionIdentityType,
+    PermissionsType,
     ProcessRunType,
     ProcessTemplateType,
     ResourceTemplateType,
@@ -51,6 +55,41 @@ _SCHEMA_REGISTRY: Mapping[str, type[BaseModel]] = MappingProxyType(
 )
 
 
+def _backend_and_authorization(
+    info: strawberry.types.Info, namespace_path: str
+) -> tuple[LocalBackend, AuthorizedQuery | None]:
+    context = info.context
+    if isinstance(context, StrawberryGraphQLContext):
+        return context.backend, AuthorizedQuery.from_policy(
+            context.policy, context.actor, namespace_path=namespace_path
+        )
+    return context["backend"], None
+
+
+def _query(
+    info: strawberry.types.Info,
+    schema: type[BaseModel],
+    spec: QuerySpec,
+    namespace_path: str,
+):
+    backend, authorization = _backend_and_authorization(info, namespace_path)
+    if authorization is None:
+        return backend.query(schema, spec, namespace_path=namespace_path)
+    return backend.query_authorized(schema, spec, authorization=authorization)
+
+
+def _count(
+    info: strawberry.types.Info,
+    schema: type[BaseModel],
+    spec: QuerySpec,
+    namespace_path: str,
+) -> int:
+    backend, authorization = _backend_and_authorization(info, namespace_path)
+    if authorization is None:
+        return backend.count(schema, spec, namespace_path=namespace_path)
+    return backend.count_authorized(schema, spec, authorization=authorization)
+
+
 def _resolve_schema(schema_name: str) -> type[BaseModel]:
     try:
         return _SCHEMA_REGISTRY[schema_name]
@@ -72,12 +111,11 @@ def _validate_query_spec(spec: JSON) -> QuerySpec:
 def resolve_execute_query(
     info: strawberry.types.Info, schema_name: str, namespace_path: str, spec: JSON
 ) -> JSON:
-    backend: LocalBackend = info.context["backend"]
     schema = _resolve_schema(schema_name)
     query_spec = _validate_query_spec(spec)
     items = [
         serialize_model(item)
-        for item in backend.query(schema, query_spec, namespace_path=namespace_path)
+        for item in _query(info, schema, query_spec, namespace_path)
     ]
     return QueryResult(schema_name=schema_name, items=items).model_dump(mode="json")
 
@@ -85,11 +123,8 @@ def resolve_execute_query(
 def resolve_execute_count(
     info: strawberry.types.Info, schema_name: str, namespace_path: str, spec: JSON
 ) -> int:
-    backend: LocalBackend = info.context["backend"]
     schema = _resolve_schema(schema_name)
-    return backend.count(
-        schema, _validate_query_spec(spec), namespace_path=namespace_path
-    )
+    return _count(info, schema, _validate_query_spec(spec), namespace_path)
 
 
 def _resource_schema_to_type(r: ResourceSchema) -> ResourceType:
@@ -163,10 +198,9 @@ def resolve_resources(
     limit: int | None = None,
     offset: int | None = None,
 ) -> list[ResourceType]:
-    backend: LocalBackend = info.context["backend"]
     effective_limit = _check_limit(limit)
     spec = QuerySpec(limit=effective_limit, offset=offset)
-    results = backend.query(ResourceSchema, spec, namespace_path=namespace_path)
+    results = _query(info, ResourceSchema, spec, namespace_path)
     return [_resource_schema_to_type(r) for r in results]
 
 
@@ -174,8 +208,7 @@ def resolve_resources_count(
     info: strawberry.types.Info,
     namespace_path: str,
 ) -> int:
-    backend: LocalBackend = info.context["backend"]
-    return backend.count(ResourceSchema, QuerySpec(), namespace_path=namespace_path)
+    return _count(info, ResourceSchema, QuerySpec(), namespace_path)
 
 
 def resolve_resource_templates(
@@ -184,10 +217,9 @@ def resolve_resource_templates(
     limit: int | None = None,
     offset: int | None = None,
 ) -> list[ResourceTemplateType]:
-    backend: LocalBackend = info.context["backend"]
     effective_limit = _check_limit(limit)
     spec = QuerySpec(limit=effective_limit, offset=offset)
-    results = backend.query(ResourceTemplateSchema, spec, namespace_path=namespace_path)
+    results = _query(info, ResourceTemplateSchema, spec, namespace_path)
     return [_resource_template_schema_to_type(r) for r in results]
 
 
@@ -197,10 +229,9 @@ def resolve_process_runs(
     limit: int | None = None,
     offset: int | None = None,
 ) -> list[ProcessRunType]:
-    backend: LocalBackend = info.context["backend"]
     effective_limit = _check_limit(limit)
     spec = QuerySpec(limit=effective_limit, offset=offset)
-    results = backend.query(ProcessRunSchema, spec, namespace_path=namespace_path)
+    results = _query(info, ProcessRunSchema, spec, namespace_path)
     return [_process_run_schema_to_type(pr) for pr in results]
 
 
@@ -208,8 +239,7 @@ def resolve_process_runs_count(
     info: strawberry.types.Info,
     namespace_path: str,
 ) -> int:
-    backend: LocalBackend = info.context["backend"]
-    return backend.count(ProcessRunSchema, QuerySpec(), namespace_path=namespace_path)
+    return _count(info, ProcessRunSchema, QuerySpec(), namespace_path)
 
 
 def resolve_process_templates(
@@ -218,10 +248,9 @@ def resolve_process_templates(
     limit: int | None = None,
     offset: int | None = None,
 ) -> list[ProcessTemplateType]:
-    backend: LocalBackend = info.context["backend"]
     effective_limit = _check_limit(limit)
     spec = QuerySpec(limit=effective_limit, offset=offset)
-    results = backend.query(ProcessTemplateSchema, spec, namespace_path=namespace_path)
+    results = _query(info, ProcessTemplateSchema, spec, namespace_path)
     return [_process_template_schema_to_type(pt) for pt in results]
 
 
@@ -231,30 +260,46 @@ def resolve_namespaces(
     limit: int | None = None,
     offset: int | None = None,
 ) -> list[NamespaceType]:
-    backend: LocalBackend = info.context["backend"]
     effective_limit = _check_limit(limit)
     spec = QuerySpec(limit=effective_limit, offset=offset)
-    results = backend.query(NamespaceSchema, spec, namespace_path=namespace_path)
+    results = _query(info, NamespaceSchema, spec, namespace_path)
     return [_namespace_schema_to_type(namespace) for namespace in results]
 
 
 def resolve_namespaces_count(info: strawberry.types.Info, namespace_path: str) -> int:
-    backend: LocalBackend = info.context["backend"]
     spec = QuerySpec()
-    return backend.count(NamespaceSchema, spec, namespace_path=namespace_path)
+    return _count(info, NamespaceSchema, spec, namespace_path)
 
 
 def resolve_resource_templates_count(
     info: strawberry.types.Info, namespace_path: str
 ) -> int:
-    backend = info.context["backend"]
     spec = QuerySpec()
-    return backend.count(ResourceTemplateSchema, spec, namespace_path=namespace_path)
+    return _count(info, ResourceTemplateSchema, spec, namespace_path)
 
 
 def resolve_process_templates_count(
     info: strawberry.types.Info, namespace_path: str
 ) -> int:
-    backend = info.context["backend"]
     spec = QuerySpec()
-    return backend.count(ProcessTemplateSchema, spec, namespace_path=namespace_path)
+    return _count(info, ProcessTemplateSchema, spec, namespace_path)
+
+
+def resolve_permissions(
+    info: strawberry.types.Info, namespace_path: str
+) -> PermissionsType:
+    context = info.context
+    if not isinstance(context, StrawberryGraphQLContext):
+        raise RuntimeError("GraphQLContext is required")
+    permissions = context.policy.permissions_for(context.actor, namespace_path)
+    return PermissionsType(
+        identities=[
+            PermissionIdentityType(provider=item.provider, subject=item.subject)
+            for item in permissions.identities
+        ],
+        snapshot_generation=permissions.snapshot_generation,
+        effective_scopes=sorted(scope.value for scope in permissions.effective_scopes),
+        matched_namespace_paths=list(permissions.matched_namespace_paths),
+        groups=sorted({grant.group for grant in permissions.grants}),
+        roles=sorted({grant.role for grant in permissions.grants}),
+    )
