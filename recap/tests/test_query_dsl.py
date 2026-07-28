@@ -4,16 +4,20 @@ import warnings
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 
 from recap.adapter.local import LocalBackend
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.campaign import Campaign
+from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate, StepTemplateResourceSlotBinding
 from recap.dsl.query import QueryDSL, ResourceQuery
 from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
+from recap.lifecycle import LifecycleStatus
+from recap.schemas.namespace import NamespaceContext
 from recap.schemas.process import (
     ProcessRunRef,
     ProcessRunSchema,
@@ -29,11 +33,40 @@ from recap.schemas.resource import (
 from recap.utils.database import get_or_create
 from recap.utils.general import Direction
 
+_ACTIVE_CONTEXT = None
 
-def make_query(db_session, campaign_id=None):
+
+@pytest.fixture(autouse=True)
+def active_namespace(db_session):
+    global _ACTIVE_CONTEXT
+    namespace = Namespace(
+        id=uuid4(),
+        path=f"test/{uuid4().hex}",
+        metadata_json={},
+        status=LifecycleStatus.ACTIVE,
+    )
+    db_session.add(namespace)
+    db_session.flush()
+    _ACTIVE_CONTEXT = NamespaceContext(id=namespace.id, path=namespace.path)
+
+    def assign_namespace(_session, _flush_context, _instances):
+        for item in _session.new:
+            if isinstance(
+                item, ProcessTemplate | ResourceTemplate | Resource | ProcessRun
+            ):
+                if item.namespace_id is None:
+                    item.namespace = namespace
+                item.status = LifecycleStatus.ACTIVE
+
+    event.listen(db_session, "before_flush", assign_namespace)
+    yield namespace
+    event.remove(db_session, "before_flush", assign_namespace)
+
+
+def make_query(db_session):
     SessionLocal = sessionmaker(bind=db_session.get_bind())
     backend = LocalBackend(SessionLocal)
-    return QueryDSL(backend, campaign_id=campaign_id)
+    return QueryDSL(backend, context=_ACTIVE_CONTEXT)
 
 
 def seed_process_run(
@@ -94,29 +127,8 @@ def seed_process_run(
     return campaign, run
 
 
-def test_campaign_without_include_requires_lazy_load(db_session):
-    campaign, _ = seed_process_run(db_session, name="lazy")
-    campaign_row = make_query(db_session).campaigns().filter(id=campaign.id).first()
-    assert campaign_row is not None
-    # with pytest.raises(DetachedInstanceError):
-    _ = len(campaign_row.process_runs)
-
-
-def test_campaign_include_process_runs_and_steps(db_session):
-    campaign, _ = seed_process_run(db_session, name="include", with_parameters=True)
-
-    loaded_campaign = (
-        make_query(db_session)
-        .campaigns()
-        .filter(id=campaign.id)
-        .include_process_runs()  # lambda q: q.include_steps(include_parameters=True))
-        .first()
-    )
-    assert loaded_campaign is not None
-    assert loaded_campaign.process_runs[0].name.startswith("Run-include")
-    step = loaded_campaign.process_runs[0].steps["Step-include"]
-    exposure = step.parameters["Exposure-include"]
-    assert exposure.values.dwell_time.value == 5
+def test_campaign_query_family_is_removed(db_session):
+    assert not hasattr(make_query(db_session), "campaigns")
 
 
 def test_process_run_pagination_and_filtering(db_session):
@@ -287,7 +299,12 @@ def test_cloning_normalized_query_emits_no_deprecation_warning(db_session):
 def test_direct_query_construction_normalizes_deprecated_names(db_session):
     backend = make_query(db_session).backend
     with pytest.warns(DeprecationWarning) as warnings_seen:
-        query = ResourceQuery(backend, shape="schema", load="full")
+        query = ResourceQuery(
+            backend,
+            context=make_query(db_session).context,
+            shape="schema",
+            load="full",
+        )
 
     assert len(warnings_seen) == 2
     assert query._shape == "full"
@@ -373,7 +390,7 @@ def test_add_child_step_allows_descendant_of_slot_resource(db_session):
     backend = LocalBackend(SessionLocal)
 
     loaded_run = (
-        QueryDSL(backend)
+        QueryDSL(backend, context=make_query(db_session).context)
         .process_runs()
         .filter(id=run.id)
         .include_steps(include_parameters=False)
@@ -416,7 +433,7 @@ def test_add_child_step_rejects_unrelated_resource(db_session):
     backend = LocalBackend(SessionLocal)
 
     loaded_run = (
-        QueryDSL(backend)
+        QueryDSL(backend, context=make_query(db_session).context)
         .process_runs()
         .filter(id=run.id)
         .include_steps(include_parameters=False)
@@ -755,47 +772,6 @@ def test_parameter_filtering_numeric_unchanged(db_session):
 
     hits_bool = q.filter_parameter("enabled", eq=True, group="Readings").all()
     assert {r.name for r in hits_bool} == {"run-num-a"}
-
-
-def test_queries_are_scoped_to_campaign(db_session):
-    camp_a, run_a = seed_process_run(
-        db_session, name="scope-a", with_resource=True, with_parameters=True
-    )
-    camp_b, run_b = seed_process_run(
-        db_session, name="scope-b", with_resource=True, with_parameters=True
-    )
-
-    q_a = make_query(db_session, campaign_id=camp_a.id)
-    runs_a = q_a.process_runs().all()
-    assert {r.id for r in runs_a} == {run_a.id}
-
-    resources_a = q_a.resources().all()
-    assigned_res_ids = {res.id for res in run_a.resources.values()}
-    assert {res.id for res in resources_a} == assigned_res_ids
-
-    campaigns_a = q_a.campaigns().all()
-    assert camp_a.id in {c.id for c in campaigns_a}
-
-    q_b = make_query(db_session, campaign_id=camp_b.id)
-    runs_b = q_b.process_runs().all()
-    assert {r.id for r in runs_b} == {run_b.id}
-
-
-def test_campaign_scope_not_applied_to_templates(db_session):
-    camp_a, _ = seed_process_run(
-        db_session, name="tmpl-a", with_resource=True, with_parameters=True
-    )
-    _, run_b = seed_process_run(
-        db_session, name="tmpl-b", with_resource=True, with_parameters=True
-    )
-
-    q = make_query(db_session, campaign_id=camp_a.id)
-
-    tmpl_ids = {pt.id for pt in q.process_templates().all()}
-    res_tmpl_ids = {rt.id for rt in q.resource_templates().all()}
-
-    assert run_b.template.id in tmpl_ids
-    assert len(res_tmpl_ids) >= 2
 
 
 def _seed_resource_hierarchy(db_session):

@@ -13,6 +13,7 @@ from recap.adapter.local import LocalBackend
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
+from recap.schemas.namespace import NamespaceContext
 from recap.schemas.process import CampaignSchema
 from recap.schemas.resource import ResourceRef, ResourceSchema
 from recap.utils.migrations import apply_migrations
@@ -63,6 +64,7 @@ class RecapClient:
             ValueError: If the URL scheme is not recognised.
         """
         self._campaign: CampaignSchema | None = None
+        self._namespace_context: NamespaceContext | None = None
         self.database_path: Path | None = None
         self.backend: Backend | None = None
         if url is not None:
@@ -124,6 +126,7 @@ class RecapClient:
         """
         instance = cls.__new__(cls)
         instance._campaign = None
+        instance._namespace_context = None
         instance.database_path = None
         instance.backend = write_backend
         instance._read_backend = read_backend
@@ -297,6 +300,8 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
+        if self._campaign is None:
+            raise ValueError("Namespace context is required; set a campaign first")
 
         if process_template_id is not None:
             if args or kwargs:
@@ -307,6 +312,7 @@ class RecapClient:
                 name=None,
                 version=None,
                 backend=self.backend,
+                namespace_id=self._campaign.id,
                 process_template_id=process_template_id,
                 on_existing=on_existing,
             )
@@ -328,6 +334,7 @@ class RecapClient:
             name=name,
             version=version,
             backend=self.backend,
+            namespace_id=self._campaign.id,
             on_existing=on_existing,
         )
 
@@ -500,6 +507,8 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
+        if self._campaign is None:
+            raise ValueError("Namespace context is required; set a campaign first")
 
         if resource_template_id is not None:
             if name is not None or type_names is not None:
@@ -511,6 +520,7 @@ class RecapClient:
                 type_names=None,
                 version=version,
                 backend=self.backend,
+                namespace_id=self._campaign.id,
                 resource_template_id=resource_template_id,
                 on_existing=on_existing,
             )
@@ -527,6 +537,7 @@ class RecapClient:
             type_names=type_names,
             version=version,
             backend=self.backend,
+            namespace_id=self._campaign.id,
             on_existing=on_existing,
         )
 
@@ -598,6 +609,8 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
+        if self._campaign is None:
+            raise ValueError("Namespace context is required; set a campaign first")
 
         if resource_id is not None:
             if args or kwargs:
@@ -614,6 +627,7 @@ class RecapClient:
                 template_name=None,
                 template_version="1.0",
                 backend=self.backend,
+                namespace_id=self._campaign.id,
                 resource_id=resource_id,
                 on_existing=on_existing,
             )
@@ -626,6 +640,7 @@ class RecapClient:
             template_name=template_name,
             template_version=template_version,
             backend=self.backend,
+            namespace_id=self._campaign.id,
             on_existing=on_existing,
             parent=resolved_parent,
         )
@@ -717,11 +732,14 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
+        if self._campaign is None:
+            raise ValueError("Namespace context is required; set a campaign first")
         return ResourceBuilder.create(
             name=name,
             template_name=template_name,
             template_version=template_version,
             backend=self.backend,
+            namespace_id=self._campaign.id,
             parent=parent,
             on_existing=on_existing,
         )
@@ -848,6 +866,10 @@ class RecapClient:
         """
         return self._campaign
 
+    @property
+    def namespace_context(self) -> NamespaceContext | None:
+        return self._namespace_context
+
     def set_campaign(
         self,
         id: UUID | None = None,
@@ -972,83 +994,18 @@ class RecapClient:
     def query_maker(
         self,
         *,
-        campaign=None,
-        unscoped: bool = False,
+        context: NamespaceContext,
         on_unloaded: str = "warn",
     ):
-        """Return a :class:`~recap.dsl.query.QueryDSL` scoped to a campaign.
-
-        The returned object exposes a fluent query API for retrieving
-        resources, process runs, and their relationships from the database.
-
-        If *campaign* is omitted the client's currently active campaign is
-        used. Pass an explicit campaign (or its UUID) to query a different
-        one without changing the client's active campaign.
-
-        Pass ``unscoped=True`` to disable campaign scoping entirely and
-        query across all campaigns.  This is mutually exclusive with an
-        explicit *campaign* argument.
-
-        ``on_unloaded`` controls behavior when accessing relationship fields
-        that were not included in the originating query.
-
-        .. note:: Campaign scoping for resources
-
-           Resources do **not** carry a ``campaign_id`` column directly.
-           Campaign scoping for resource queries is achieved by joining
-           through ``ResourceAssignment`` -> ``ProcessRun`` and filtering
-           on ``ProcessRun.campaign_id``.  A consequence is that resources
-           which have never been assigned to any process run will be
-           invisible to campaign-scoped queries.  Use ``unscoped=True`` to
-           include all resources regardless of assignment status.
-
-        Example::
-
-            qm = client.query_maker()
-            resources = qm.resources().of_type("library_plate").all()
-
-            # Cross-campaign query
-            qm_all = client.query_maker(unscoped=True)
-
-        Args:
-            campaign: A :class:`~recap.schemas.process.CampaignSchema` instance
-                or its UUID to scope the query.  When ``None`` the active
-                campaign is used (if one is set).
-            unscoped: When ``True``, ignore the active campaign and return
-                results across all campaigns.  Cannot be combined with
-                an explicit *campaign*.
-            on_unloaded: One of ``"silent"``, ``"warn"``, or ``"raise"``.
-                Defaults to ``"warn"``.
-
-        Returns:
-            A :class:`~recap.dsl.query.QueryDSL` instance.
-
-        Raises:
-            RuntimeError: If the backend has not been initialised.
-            ValueError: If both *campaign* and ``unscoped=True`` are given.
-        """
+        """Return a query DSL scoped to explicit Namespace context."""
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-
-        if unscoped and campaign is not None:
-            raise ValueError(
-                "Cannot combine campaign with unscoped=True — "
-                "pass one or the other, not both"
-            )
-
-        campaign_id = None
-        if unscoped:
-            campaign_id = None
-        elif campaign is not None:
-            campaign_id = getattr(campaign, "id", campaign)
-        elif self._campaign is not None:
-            campaign_id = self._campaign.id
 
         read_backend = getattr(self, "_read_backend", self.backend) or self.backend
         if read_backend is None:
             raise RuntimeError("No read backend available")
         return QueryDSL(
             read_backend,
-            campaign_id=campaign_id,
+            context=context,
             on_unloaded=on_unloaded,
         )

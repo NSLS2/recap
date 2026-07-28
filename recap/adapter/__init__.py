@@ -33,9 +33,12 @@ class UnitOfWork(Protocol):
 class ReadBackend(Protocol):
     """Read-only backend contract. Implemented by LocalBackend and GraphQLAdapter."""
 
-    def query(self, schema: type[SchemaT], spec: QuerySpec) -> list[SchemaT]: ...
-    def count(self, schema: type[SchemaT], spec: QuerySpec) -> int: ...
-
+    def query(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ) -> list[SchemaT]: ...
+    def count(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ) -> int: ...
     @overload
     def get_process_template(
         self,
@@ -104,6 +107,7 @@ class WriteBackend(Protocol):
     """Write-only backend contract. LocalBackend (Phase 1), RESTAdapter (Phase 2)."""
 
     def begin(self) -> UnitOfWork: ...
+    def get_namespace_path(self, namespace_id: UUID) -> str: ...
 
     def create_campaign(
         self,

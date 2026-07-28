@@ -15,12 +15,12 @@ from recap.schemas.resource import ResourceSchema
 from recap.schemas.step import StepSchema
 
 _EXECUTE_QUERY = (
-    "query ExecuteQuery($schema_name: String!, $spec: JSON!) "
-    "{ execute_query(schema_name: $schema_name, spec: $spec) }"
+    "query ExecuteQuery($schema_name: String!, $namespace_path: String!, $spec: JSON!) "
+    "{ execute_query(schema_name: $schema_name, namespace_path: $namespace_path, spec: $spec) }"
 )
 _EXECUTE_COUNT = (
-    "query ExecuteCount($schema_name: String!, $spec: JSON!) "
-    "{ execute_count(schema_name: $schema_name, spec: $spec) }"
+    "query ExecuteCount($schema_name: String!, $namespace_path: String!, $spec: JSON!) "
+    "{ execute_count(schema_name: $schema_name, namespace_path: $namespace_path, spec: $spec) }"
 )
 
 
@@ -61,8 +61,10 @@ class GraphQLAdapter:
     def __exit__(self, *args: object) -> None:
         self.close()
 
-    def query(self, schema: type[SchemaT], spec: QuerySpec) -> list[SchemaT]:
-        request = QueryRequest.from_query(schema, spec)
+    def query(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ) -> list[SchemaT]:
+        request = QueryRequest.from_query(schema, spec, namespace_path=namespace_path)
         response = self._client.post(
             self._url,
             json={
@@ -76,8 +78,10 @@ class GraphQLAdapter:
         result = QueryResult.model_validate(body["data"]["execute_query"])
         return cast(list[SchemaT], hydrate_result(schema, result))
 
-    def count(self, schema: type[SchemaT], spec: QuerySpec) -> int:
-        request = QueryRequest.from_query(schema, spec)
+    def count(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ) -> int:
+        request = QueryRequest.from_query(schema, spec, namespace_path=namespace_path)
         response = self._client.post(
             self._url,
             json={
@@ -97,6 +101,7 @@ class GraphQLAdapter:
 
     def get_resource(
         self,
+        namespace_id: UUID,
         name: str,
         template_name: str,
         template_version: str | None = "1.0",
@@ -108,6 +113,7 @@ class GraphQLAdapter:
 
     def get_resource_template(
         self,
+        namespace_id: UUID,
         name: str | None,
         version: str | None = None,
         id: UUID | str | None = None,
@@ -120,6 +126,7 @@ class GraphQLAdapter:
 
     def get_process_template(
         self,
+        namespace_id: UUID,
         name: str | None,
         version: str | None,
         expand=False,
@@ -130,7 +137,11 @@ class GraphQLAdapter:
         )
 
     def find_resources_by_identity(
-        self, name: str, parent_id: UUID | None, resource_template_id: UUID
+        self,
+        namespace_id: UUID,
+        name: str,
+        parent_id: UUID | None,
+        resource_template_id: UUID,
     ) -> list:
         raise NotImplementedError(
             "find_resources_by_identity via GraphQL not yet implemented"

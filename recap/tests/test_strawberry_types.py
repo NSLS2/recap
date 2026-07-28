@@ -1,9 +1,9 @@
 def test_strawberry_types_importable():
     from recap.server.strawberry_types import (
-        CampaignType,
+        NamespaceType,
     )
 
-    assert CampaignType is not None
+    assert NamespaceType is not None
 
 
 def test_build_schema_importable():

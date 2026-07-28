@@ -31,12 +31,14 @@ class ProcessTemplateBuilder:
     def __init__(
         self,
         backend: Backend,
+        namespace_id: UUID,
         name: str | None,
         version: str | None,
         process_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
     ):
         self.backend = backend
+        self.namespace_id = namespace_id
         self._uow = None
         if on_existing not in {"silent", "warn", "raise"}:
             raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
@@ -58,7 +60,11 @@ class ProcessTemplateBuilder:
     def _initialize_template(self, process_template_id: UUID | None):
         if process_template_id is not None:
             tmpl = self.backend.get_process_template(
-                name=None, version=None, id=process_template_id, expand=False
+                self.namespace_id,
+                name=None,
+                version=None,
+                id=process_template_id,
+                expand=False,
             )
             self.name = tmpl.name
             self.version = tmpl.version
@@ -108,7 +114,9 @@ class ProcessTemplateBuilder:
                 "name and version are required to create a process template"
             )
         try:
-            created = self.backend.create_process_template(self.name, self.version)
+            created = self.backend.create_process_template(
+                self.namespace_id, self.name, self.version
+            )
             if created is None:
                 raise ValueError("Process template already exists")
             self._template = created
@@ -119,7 +127,7 @@ class ProcessTemplateBuilder:
                 ) from exc
             self._restart_uow()
             self._template = self.backend.get_process_template(
-                self.name, self.version, expand=False
+                self.namespace_id, self.name, self.version, expand=False
             )
             if self.on_existing == "warn":
                 warnings.warn(
@@ -135,7 +143,7 @@ class ProcessTemplateBuilder:
     def _reload_template(self):
         self._ensure_uow()
         self._template = self.backend.get_process_template(
-            self.name, self.version, expand=True
+            self.namespace_id, self.name, self.version, expand=True
         )
 
     def add_resource_slot(
@@ -181,7 +189,9 @@ class ProcessTemplateBuilder:
         elif self._template is None:
             self._ensure_template()
 
-        model = self.backend.get_process_template(self.name, self.version, expand=True)
+        model = self.backend.get_process_template(
+            self.namespace_id, self.name, self.version, expand=True
+        )
         return lock_instance_fields(
             model.model_copy(deep=True),
             {"id", "create_date", "modified_date", "version"},
@@ -281,6 +291,9 @@ class ProcessRunBuilder:
         on_existing: Literal["silent", "warn", "raise"] = "warn",
     ):
         self.backend = backend
+        if campaign is None:
+            raise ValueError("Campaign is required to determine Namespace")
+        self.namespace_id = campaign.id
         self._uow = None
         self.name = name
         self.description = description
@@ -315,11 +328,15 @@ class ProcessRunBuilder:
             return
         self._validate_new_process_run_inputs(campaign)
         self._process_template = self.backend.get_process_template(
-            self.template_name, self.version, expand=True
+            self.namespace_id, self.template_name, self.version, expand=True
         )
         try:
             self._process_run = self.backend.create_process_run(
-                self.name, self.description, self._process_template, campaign
+                self.namespace_id,
+                self.name,
+                self.description,
+                self._process_template,
+                campaign,
             )
         except Exception as exc:
             self._handle_existing_process_run(exc)
@@ -328,7 +345,7 @@ class ProcessRunBuilder:
         self._process_run = self._reload_process_run(process_run_id)
         template = self._process_run.template
         self._process_template = self.backend.get_process_template(
-            template.name, template.version, expand=True
+            self.namespace_id, template.name, template.version, expand=True
         )
         self.name = self._process_run.name
         self.description = self._process_run.description
@@ -356,6 +373,7 @@ class ProcessRunBuilder:
                 filters={"name": self.name},
                 preloads=["steps", "steps.parameters", "resources"],
             ),
+            namespace_path=self.backend.get_namespace_path(self.namespace_id),
         )
         if self.on_existing == "raise":
             raise ExistingProcessRunError(
@@ -382,7 +400,7 @@ class ProcessRunBuilder:
             self._process_run = self._reload_process_run(self._process_run.id)
             template = self._process_run.template
             self._process_template = self.backend.get_process_template(
-                template.name, template.version, expand=True
+                self.namespace_id, template.name, template.version, expand=True
             )
             self.name = self._process_run.name
             self.description = self._process_run.description
@@ -544,6 +562,7 @@ class ProcessRunBuilder:
                 filters={"id": process_run_id},
                 preloads=["steps", "steps.parameters", "resources"],
             ),
+            namespace_path=self.backend.get_namespace_path(self.namespace_id),
         )
         if not runs:
             raise ValueError(f"ProcessRun with id {process_run_id} not found")

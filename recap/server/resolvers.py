@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from uuid import UUID
 
 import strawberry
 from pydantic import BaseModel, ValidationError
@@ -13,8 +12,8 @@ from strawberry.scalars import JSON
 from recap.adapter.local import LocalBackend
 from recap.adapter.transport import QueryResult, serialize_model
 from recap.dsl.query import QuerySpec
+from recap.schemas.namespace import NamespaceSchema
 from recap.schemas.process import (
-    CampaignSchema,
     ProcessRunRef,
     ProcessRunSchema,
     ProcessTemplateRef,
@@ -27,7 +26,7 @@ from recap.schemas.resource import (
     ResourceTemplateSchema,
 )
 from recap.server.strawberry_types import (
-    CampaignType,
+    NamespaceType,
     ProcessRunType,
     ProcessTemplateType,
     ResourceTemplateType,
@@ -47,7 +46,7 @@ _SCHEMA_REGISTRY: Mapping[str, type[BaseModel]] = MappingProxyType(
         "ProcessRunRef": ProcessRunRef,
         "ProcessTemplateSchema": ProcessTemplateSchema,
         "ProcessTemplateRef": ProcessTemplateRef,
-        "CampaignSchema": CampaignSchema,
+        "NamespaceSchema": NamespaceSchema,
     }
 )
 
@@ -71,21 +70,26 @@ def _validate_query_spec(spec: JSON) -> QuerySpec:
 
 
 def resolve_execute_query(
-    info: strawberry.types.Info, schema_name: str, spec: JSON
+    info: strawberry.types.Info, schema_name: str, namespace_path: str, spec: JSON
 ) -> JSON:
     backend: LocalBackend = info.context["backend"]
     schema = _resolve_schema(schema_name)
     query_spec = _validate_query_spec(spec)
-    items = [serialize_model(item) for item in backend.query(schema, query_spec)]
+    items = [
+        serialize_model(item)
+        for item in backend.query(schema, query_spec, namespace_path=namespace_path)
+    ]
     return QueryResult(schema_name=schema_name, items=items).model_dump(mode="json")
 
 
 def resolve_execute_count(
-    info: strawberry.types.Info, schema_name: str, spec: JSON
+    info: strawberry.types.Info, schema_name: str, namespace_path: str, spec: JSON
 ) -> int:
     backend: LocalBackend = info.context["backend"]
     schema = _resolve_schema(schema_name)
-    return backend.count(schema, _validate_query_spec(spec))
+    return backend.count(
+        schema, _validate_query_spec(spec), namespace_path=namespace_path
+    )
 
 
 def _resource_schema_to_type(r: ResourceSchema) -> ResourceType:
@@ -107,13 +111,18 @@ def _process_run_schema_to_type(pr: ProcessRunSchema) -> ProcessRunType:
     )
 
 
-def _campaign_schema_to_type(c: CampaignSchema) -> CampaignType:
-    return CampaignType(
-        id=strawberry.ID(str(c.id)),
-        name=c.name,
-        proposal=getattr(c, "proposal", None),
-        create_date=c.create_date,
-        modified_date=c.modified_date,
+def _namespace_schema_to_type(namespace: NamespaceSchema) -> NamespaceType:
+    return NamespaceType(
+        id=strawberry.ID(str(namespace.id)),
+        path=namespace.path,
+        parent_id=(
+            strawberry.ID(str(namespace.parent_id)) if namespace.parent_id else None
+        ),
+        status=namespace.status.value,
+        revision=namespace.revision,
+        metadata=namespace.metadata,
+        create_date=namespace.create_date,
+        modified_date=namespace.modified_date,
     )
 
 
@@ -150,105 +159,102 @@ def _check_limit(limit: int | None) -> int:
 
 def resolve_resources(
     info: strawberry.types.Info,
-    campaign_id: strawberry.ID | None = None,
+    namespace_path: str,
     limit: int | None = None,
     offset: int | None = None,
 ) -> list[ResourceType]:
     backend: LocalBackend = info.context["backend"]
     effective_limit = _check_limit(limit)
-    spec = QuerySpec(
-        campaign_id=UUID(str(campaign_id)) if campaign_id else None,
-        limit=effective_limit,
-        offset=offset,
-    )
-    results = backend.query(ResourceSchema, spec)
+    spec = QuerySpec(limit=effective_limit, offset=offset)
+    results = backend.query(ResourceSchema, spec, namespace_path=namespace_path)
     return [_resource_schema_to_type(r) for r in results]
 
 
 def resolve_resources_count(
     info: strawberry.types.Info,
-    campaign_id: strawberry.ID | None = None,
+    namespace_path: str,
 ) -> int:
     backend: LocalBackend = info.context["backend"]
-    spec = QuerySpec(campaign_id=UUID(str(campaign_id)) if campaign_id else None)
-    return backend.count(ResourceSchema, spec)
+    return backend.count(ResourceSchema, QuerySpec(), namespace_path=namespace_path)
 
 
 def resolve_resource_templates(
     info: strawberry.types.Info,
+    namespace_path: str,
     limit: int | None = None,
     offset: int | None = None,
 ) -> list[ResourceTemplateType]:
     backend: LocalBackend = info.context["backend"]
     effective_limit = _check_limit(limit)
     spec = QuerySpec(limit=effective_limit, offset=offset)
-    results = backend.query(ResourceTemplateSchema, spec)
+    results = backend.query(ResourceTemplateSchema, spec, namespace_path=namespace_path)
     return [_resource_template_schema_to_type(r) for r in results]
 
 
 def resolve_process_runs(
     info: strawberry.types.Info,
-    campaign_id: strawberry.ID | None = None,
+    namespace_path: str,
     limit: int | None = None,
     offset: int | None = None,
 ) -> list[ProcessRunType]:
     backend: LocalBackend = info.context["backend"]
     effective_limit = _check_limit(limit)
-    spec = QuerySpec(
-        campaign_id=UUID(str(campaign_id)) if campaign_id else None,
-        limit=effective_limit,
-        offset=offset,
-    )
-    results = backend.query(ProcessRunSchema, spec)
+    spec = QuerySpec(limit=effective_limit, offset=offset)
+    results = backend.query(ProcessRunSchema, spec, namespace_path=namespace_path)
     return [_process_run_schema_to_type(pr) for pr in results]
 
 
 def resolve_process_runs_count(
     info: strawberry.types.Info,
-    campaign_id: strawberry.ID | None = None,
+    namespace_path: str,
 ) -> int:
     backend: LocalBackend = info.context["backend"]
-    spec = QuerySpec(campaign_id=UUID(str(campaign_id)) if campaign_id else None)
-    return backend.count(ProcessRunSchema, spec)
+    return backend.count(ProcessRunSchema, QuerySpec(), namespace_path=namespace_path)
 
 
 def resolve_process_templates(
     info: strawberry.types.Info,
+    namespace_path: str,
     limit: int | None = None,
     offset: int | None = None,
 ) -> list[ProcessTemplateType]:
     backend: LocalBackend = info.context["backend"]
     effective_limit = _check_limit(limit)
     spec = QuerySpec(limit=effective_limit, offset=offset)
-    results = backend.query(ProcessTemplateSchema, spec)
+    results = backend.query(ProcessTemplateSchema, spec, namespace_path=namespace_path)
     return [_process_template_schema_to_type(pt) for pt in results]
 
 
-def resolve_campaigns(
+def resolve_namespaces(
     info: strawberry.types.Info,
+    namespace_path: str,
     limit: int | None = None,
     offset: int | None = None,
-) -> list[CampaignType]:
+) -> list[NamespaceType]:
     backend: LocalBackend = info.context["backend"]
     effective_limit = _check_limit(limit)
     spec = QuerySpec(limit=effective_limit, offset=offset)
-    results = backend.query(CampaignSchema, spec)
-    return [_campaign_schema_to_type(c) for c in results]
+    results = backend.query(NamespaceSchema, spec, namespace_path=namespace_path)
+    return [_namespace_schema_to_type(namespace) for namespace in results]
 
 
-def resolve_campaigns_count(info: strawberry.types.Info) -> int:
+def resolve_namespaces_count(info: strawberry.types.Info, namespace_path: str) -> int:
     backend: LocalBackend = info.context["backend"]
     spec = QuerySpec()
-    return backend.count(CampaignSchema, spec)
+    return backend.count(NamespaceSchema, spec, namespace_path=namespace_path)
 
 
-def resolve_resource_templates_count(info: strawberry.types.Info) -> int:
+def resolve_resource_templates_count(
+    info: strawberry.types.Info, namespace_path: str
+) -> int:
     backend = info.context["backend"]
     spec = QuerySpec()
-    return backend.count(ResourceTemplateSchema, spec)
+    return backend.count(ResourceTemplateSchema, spec, namespace_path=namespace_path)
 
 
-def resolve_process_templates_count(info: strawberry.types.Info) -> int:
+def resolve_process_templates_count(
+    info: strawberry.types.Info, namespace_path: str
+) -> int:
     backend = info.context["backend"]
     spec = QuerySpec()
-    return backend.count(ProcessTemplateSchema, spec)
+    return backend.count(ProcessTemplateSchema, spec, namespace_path=namespace_path)

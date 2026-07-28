@@ -42,7 +42,6 @@ def test_query_spec_normalizes_legacy_full_load_mode():
 
 
 def test_query_request_serializes_complete_supported_query_spec():
-    campaign_id = uuid4()
     parent_id = uuid4()
     spec = QuerySpec(
         filters={"name": "sample"},
@@ -51,14 +50,17 @@ def test_query_request_serializes_complete_supported_query_spec():
         offset=5,
         property_filters=[PropertyFilter(name="temperature", value=20)],
         parent_resource_id=parent_id,
-        campaign_id=campaign_id,
+        include_archived=True,
         load_mode="eager",
         on_unloaded="raise",
     )
 
-    request = QueryRequest.from_query(ResourceSchema, spec)
+    request = QueryRequest.from_query(
+        ResourceSchema, spec, namespace_path="beamline/amx"
+    )
 
     assert request.schema_name == "ResourceSchema"
+    assert request.namespace_path == "beamline/amx"
     assert request.spec == {
         "filters": {"name": "sample"},
         "predicates": [],
@@ -78,7 +80,9 @@ def test_query_request_serializes_complete_supported_query_spec():
         ],
         "parent_resource_id": str(parent_id),
         "parameter_filters": [],
-        "campaign_id": str(campaign_id),
+        "include_archived": True,
+        "local_metadata_filters": {},
+        "effective_metadata_filters": {},
         "load_mode": "eager",
         "on_unloaded": "raise",
     }
@@ -97,6 +101,7 @@ def test_query_request_serializes_structured_predicates_and_orderings():
             ],
             orderings=[Field("create_date").desc()],
         ),
+        namespace_path="beamline/amx",
     )
 
     assert request.spec["predicates"] == [
@@ -128,7 +133,11 @@ def test_query_request_serializes_structured_predicates_and_orderings():
 )
 def test_query_request_rejects_every_legacy_query_feature(field, value):
     with pytest.raises(TypeError, match="Field"):
-        QueryRequest.from_query(ResourceSchema, QuerySpec(**{field: value}))
+        QueryRequest.from_query(
+            ResourceSchema,
+            QuerySpec(**{field: value}),
+            namespace_path="beamline/amx",
+        )
 
 
 def test_datetime_default_value_round_trips_as_datetime():

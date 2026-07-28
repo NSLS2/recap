@@ -32,11 +32,17 @@ class ResourceBuilder:
         template_name: str | None,
         template_version: str = "1.0",
         backend: Backend | None = None,
+        namespace_id: UUID | None = None,
         parent: "ResourceBuilder | ResourceSchema | None" = None,
         resource_id: UUID | None = None,
         on_existing: Literal["create", "silent", "warn", "raise"] = "warn",
     ):
         self.name = name
+        self.namespace_id = namespace_id or (
+            parent.namespace_id if isinstance(parent, ResourceBuilder) else None
+        )
+        if self.namespace_id is None:
+            raise ValueError("namespace_id is required")
         self._children: list[Resource] = []
         self.parent = None
         self.parent_resource = None
@@ -95,14 +101,14 @@ class ResourceBuilder:
         if self.name is None or self.template_name is None:
             raise ValueError("name and template_name are required")
         template = self.backend.get_resource_template(
-            name=self.template_name, version=self.template_version
+            self.namespace_id, name=self.template_name, version=self.template_version
         )
 
         # For "create" mode, skip lookup and always insert
         if self.on_existing != "create":
             parent_id = self.parent_resource.id if self.parent_resource else None
             matches = self.backend.find_resources_by_identity(
-                self.name, parent_id, template.id
+                self.namespace_id, self.name, parent_id, template.id
             )
             if matches:
                 existing = matches[0]
@@ -125,6 +131,7 @@ class ResourceBuilder:
 
         # No match found (or "create" mode) — create new resource
         self._resource = self.backend.create_resource(
+            self.namespace_id,
             self.name,
             resource_template=template,
             parent_resource=self.parent_resource,
@@ -138,6 +145,7 @@ class ResourceBuilder:
         template_name: str,
         template_version: str,
         backend: Backend,
+        namespace_id: UUID,
         parent=None,
         on_existing: Literal["create", "silent", "warn", "raise"] = "create",
     ):
@@ -146,6 +154,7 @@ class ResourceBuilder:
             template_name,
             template_version,
             backend,
+            namespace_id=namespace_id,
             parent=parent,
             on_existing=on_existing,
         ) as rb:
@@ -201,6 +210,7 @@ class ResourceBuilder:
         resources = self.backend.query(
             ResourceSchema,
             QuerySpec(filters={"id": resource_id}, preloads=["children", "properties"]),
+            namespace_path=self.backend.get_namespace_path(self.namespace_id),
         )
         if not resources:
             raise ValueError(f"Resource with id {resource_id} not found")
@@ -305,10 +315,14 @@ class ResourceTemplateBuilder:
         version: str = "1.0",
         parent: Optional["ResourceTemplateBuilder"] = None,
         backend: Backend | None = None,
+        namespace_id: UUID | None = None,
         resource_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
     ):
         self._uow = None
+        self.namespace_id = namespace_id or (parent.namespace_id if parent else None)
+        if self.namespace_id is None:
+            raise ValueError("namespace_id is required")
         self.name = name
         self.type_names = type_names
         self._children: list[ResourceTemplateRef] = []
@@ -345,7 +359,11 @@ class ResourceTemplateBuilder:
 
     def _load_existing_template(self, resource_template_id: UUID):
         tmpl = self.backend.get_resource_template(
-            name=None, version=None, id=resource_template_id, expand=True
+            self.namespace_id,
+            name=None,
+            version=None,
+            id=resource_template_id,
+            expand=True,
         )
         self.name = tmpl.name
         self.type_names = [rt.name for rt in tmpl.types]
@@ -373,6 +391,7 @@ class ResourceTemplateBuilder:
                 parent_resource_template=self.parent._template,
             )
         return self.backend.add_resource_template(
+            self.namespace_id,
             self.name,
             list(self.resource_types.values()),
             version=self.version,
@@ -399,12 +418,14 @@ class ResourceTemplateBuilder:
     def _fetch_existing_template(self):
         if self.parent:
             return self.backend.get_resource_template(
+                self.namespace_id,
                 self.name,
                 version=self.version,
                 parent=self.parent._template,
                 expand=True,
             )
         return self.backend.get_resource_template(
+            self.namespace_id,
             self.name,
             version=self.version,
             expand=True,
@@ -493,13 +514,18 @@ class ResourceTemplateBuilder:
     ) -> "ResourceTemplateBuilder":
         self._ensure_uow()
         child_builder = ResourceTemplateBuilder(
-            name=name, type_names=type_names, version=version, parent=self
+            name=name,
+            type_names=type_names,
+            version=version,
+            parent=self,
+            namespace_id=self.namespace_id,
         )
         return child_builder
 
     def _reload_template(self):
         self._ensure_uow()
         self._template = self.backend.get_resource_template(
+            self.namespace_id,
             self.name,
             version=self.version,
             id=self._template.id if self._template else None,
@@ -515,6 +541,7 @@ class ResourceTemplateBuilder:
         if update and self._template:
             self._reload_template()
         model = self.backend.get_resource_template(
+            self.namespace_id,
             self.name,
             version=self.version,
             id=self._template.id if self._template else None,

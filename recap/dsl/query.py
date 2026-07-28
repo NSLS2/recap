@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, field_validator
 from pydantic import Field as PydanticField
 
+from recap.schemas.namespace import NamespaceContext, NamespaceSchema
 from recap.schemas.resource import (
     ResourceRef,
     ResourceSchema,
@@ -17,7 +18,6 @@ from recap.schemas.resource import (
 if TYPE_CHECKING:
     from recap.adapter import Backend
 from recap.schemas.process import (
-    CampaignSchema,
     ProcessRunRef,
     ProcessRunSchema,
     ProcessTemplateRef,
@@ -201,7 +201,9 @@ class QuerySpec(BaseModel):
     property_filters: list[PropertyFilter] = PydanticField(default_factory=list)
     parent_resource_id: UUID | None = None
     parameter_filters: list[ParameterFilter] = PydanticField(default_factory=list)
-    campaign_id: UUID | None = None
+    include_archived: bool = False
+    local_metadata_filters: dict[str, Any] = PydanticField(default_factory=dict)
+    effective_metadata_filters: dict[str, Any] = PydanticField(default_factory=dict)
     load_mode: LoadMode | None = None
     on_unloaded: OnUnloadedPolicy | None = None
 
@@ -244,6 +246,7 @@ class BaseQuery(Generic[SchemaT]):
         self: Self,
         backend: "Backend",
         *,
+        context: NamespaceContext,
         model: type[SchemaT] | None = None,
         filters: dict[str, Any] | None = None,
         predicates: list[Any] | None = None,
@@ -254,11 +257,14 @@ class BaseQuery(Generic[SchemaT]):
         property_filters: list[PropertyFilter] | None = None,
         parent_resource_id: UUID | None = None,
         parameter_filters: list[ParameterFilter] | None = None,
-        campaign_id: UUID | None = None,
+        include_archived: bool = False,
+        local_metadata_filters: dict[str, Any] | None = None,
+        effective_metadata_filters: dict[str, Any] | None = None,
         load_mode: LoadMode | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
     ):
         self._backend = backend
+        self._context = context
         self.model: type[SchemaT] = model or self.__class__.model  # type: ignore[attr-defined]
         self._filters = filters or {}
         self._predicates = predicates or []
@@ -269,7 +275,9 @@ class BaseQuery(Generic[SchemaT]):
         self._property_filters = property_filters or []
         self._parent_resource_id = parent_resource_id
         self._parameter_filters = parameter_filters or []
-        self._campaign_id = campaign_id
+        self._include_archived = include_archived
+        self._local_metadata_filters = local_metadata_filters or {}
+        self._effective_metadata_filters = effective_metadata_filters or {}
         self._load_mode = load_mode
         self._on_unloaded = on_unloaded
 
@@ -292,6 +300,7 @@ class BaseQuery(Generic[SchemaT]):
         """
         params = dict(
             backend=self._backend,
+            context=self._context,
             model=self.model,
             filters=dict(self._filters),
             predicates=list(self._predicates),
@@ -302,7 +311,9 @@ class BaseQuery(Generic[SchemaT]):
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
-            campaign_id=self._campaign_id,
+            include_archived=self._include_archived,
+            local_metadata_filters=dict(self._local_metadata_filters),
+            effective_metadata_filters=dict(self._effective_metadata_filters),
             load_mode=self._load_mode,
             on_unloaded=self._on_unloaded,
         )
@@ -346,6 +357,9 @@ class BaseQuery(Generic[SchemaT]):
     def offset(self, value: int) -> "Self":
         return self._clone(offset=value)
 
+    def include_archived(self) -> "Self":
+        return self._clone(include_archived=True)
+
     def include(self, relation_names: str | Sequence[str]) -> "Self":
         names = (
             [relation_names]
@@ -370,13 +384,17 @@ class BaseQuery(Generic[SchemaT]):
             property_filters=self._property_filters,
             parent_resource_id=self._parent_resource_id,
             parameter_filters=self._parameter_filters,
-            campaign_id=self._campaign_id,
+            include_archived=self._include_archived,
+            local_metadata_filters=self._local_metadata_filters,
+            effective_metadata_filters=self._effective_metadata_filters,
             load_mode=self._load_mode,
             on_unloaded=self._on_unloaded,
         )
 
     def _execute(self) -> list[SchemaT]:
-        rows = self._backend.query(self.model, self._spec)
+        rows = self._backend.query(
+            self.model, self._spec, namespace_path=self._context.path
+        )
         return rows
 
     def all(self) -> Sequence[SchemaT] | Sequence[BaseModel]:
@@ -386,17 +404,23 @@ class BaseQuery(Generic[SchemaT]):
         return next(iter(self.limit(1)._execute()), None)
 
     def count(self) -> int:
-        return self._backend.count(self.model, self._spec)
+        return self._backend.count(
+            self.model, self._spec, namespace_path=self._context.path
+        )
 
 
-class CampaignQuery(BaseQuery[CampaignSchema]):
-    model = CampaignSchema
-    default_schema = None  # e.g. recap.schemas.campaign.CampaignSchema
+class NamespaceQuery(BaseQuery[NamespaceSchema]):
+    model = NamespaceSchema
 
-    def include_process_runs(
-        self,
-    ) -> "CampaignQuery":
-        return self.include("process_run")
+    def filter_local_metadata(self, **metadata: Any) -> "NamespaceQuery":
+        values = dict(self._local_metadata_filters)
+        values.update(metadata)
+        return self._clone(local_metadata_filters=values)
+
+    def filter_effective_metadata(self, **metadata: Any) -> "NamespaceQuery":
+        values = dict(self._effective_metadata_filters)
+        values.update(metadata)
+        return self._clone(effective_metadata_filters=values)
 
 
 class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
@@ -430,6 +454,7 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
     def _clone(self, **overrides) -> "ProcessRunQuery":
         params = dict(
             backend=self._backend,
+            context=self._context,
             shape=self._shape,
             load=self._load,
             filters=dict(self._filters),
@@ -441,7 +466,9 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
-            campaign_id=self._campaign_id,
+            include_archived=self._include_archived,
+            local_metadata_filters=dict(self._local_metadata_filters),
+            effective_metadata_filters=dict(self._effective_metadata_filters),
             on_unloaded=self._on_unloaded,
         )
         params.update(overrides)
@@ -550,6 +577,7 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
     def _clone(self, **overrides) -> "ResourceQuery":
         params = dict(
             backend=self._backend,
+            context=self._context,
             shape=self._shape,
             load=self._load,
             filters=dict(self._filters),
@@ -561,7 +589,9 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
-            campaign_id=self._campaign_id,
+            include_archived=self._include_archived,
+            local_metadata_filters=dict(self._local_metadata_filters),
+            effective_metadata_filters=dict(self._effective_metadata_filters),
             on_unloaded=self._on_unloaded,
         )
         params.update(overrides)
@@ -698,6 +728,7 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateR
     def _clone(self, **overrides) -> "ResourceTemplateQuery":
         params = dict(
             backend=self._backend,
+            context=self._context,
             shape=self._shape,
             load=self._load,
             filters=dict(self._filters),
@@ -709,7 +740,9 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateR
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
-            campaign_id=self._campaign_id,
+            include_archived=self._include_archived,
+            local_metadata_filters=dict(self._local_metadata_filters),
+            effective_metadata_filters=dict(self._effective_metadata_filters),
             on_unloaded=self._on_unloaded,
         )
         params.update(overrides)
@@ -724,6 +757,9 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateR
 
     def filter_by_types(self, type_list: list[str]) -> "ResourceTemplateQuery":
         return self.filter(types__names_in=type_list)
+
+    def filter_label(self, label: str) -> "ResourceTemplateQuery":
+        return self.filter(labels__contains=label)
 
     def include_children(self) -> "ResourceTemplateQuery":
         return self.include("children")
@@ -766,6 +802,7 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]
     def _clone(self, **overrides) -> "ProcessTemplateQuery":
         params = dict(
             backend=self._backend,
+            context=self._context,
             shape=self._shape,
             load=self._load,
             filters=dict(self._filters),
@@ -777,7 +814,9 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
-            campaign_id=self._campaign_id,
+            include_archived=self._include_archived,
+            local_metadata_filters=dict(self._local_metadata_filters),
+            effective_metadata_filters=dict(self._effective_metadata_filters),
             on_unloaded=self._on_unloaded,
         )
         params.update(overrides)
@@ -796,56 +835,39 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]
     def include_resource_slots(self) -> "ProcessTemplateQuery":
         return self.include("resource_slots")
 
+    def filter_label(self, label: str) -> "ProcessTemplateQuery":
+        return self.filter(labels__contains=label)
+
 
 class QueryDSL:
     def __init__(
         self,
         backend: "Backend",
         *,
-        campaign_id: UUID | None = None,
+        context: NamespaceContext,
         on_unloaded: OnUnloadedPolicy = "warn",
     ):
         if on_unloaded not in {"silent", "warn", "raise"}:
             raise ValueError("on_unloaded must be one of: 'silent', 'warn', 'raise'")
         self.backend = backend
-        self._campaign_id = campaign_id
+        self.context = context
         self._on_unloaded = on_unloaded
 
-    def _resolve_campaign_id(self, campaign: UUID | str | Any | None) -> UUID | None:
-        if campaign is None:
-            return None
-        if isinstance(campaign, UUID):
-            return campaign
-        if isinstance(campaign, str):
-            return UUID(campaign)
-        if hasattr(campaign, "id"):
-            return campaign.id
-        raise TypeError("campaign must be a UUID, UUID string, or object with an id")
-
-    def _pick_campaign_id(self, campaign: UUID | str | Any | None) -> UUID | None:
-        return (
-            self._resolve_campaign_id(campaign)
-            if campaign is not None
-            else self._campaign_id
-        )
-
-    def campaigns(self) -> CampaignQuery:
-        return CampaignQuery(self.backend)
+    def namespaces(self) -> NamespaceQuery:
+        return NamespaceQuery(self.backend, context=self.context)
 
     def process_runs(
         self,
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
-        campaign: UUID | str | Any | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ProcessRunQuery:
-        campaign_id = self._pick_campaign_id(campaign)
         return ProcessRunQuery(
             self.backend,
+            context=self.context,
             shape=_normalize_shape(shape),
             load=_normalize_load(load),
-            campaign_id=campaign_id,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )
 
@@ -858,6 +880,7 @@ class QueryDSL:
     ) -> ProcessTemplateQuery:
         return ProcessTemplateQuery(
             self.backend,
+            context=self.context,
             shape=_normalize_shape(shape),
             load=_normalize_load(load),
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
@@ -868,27 +891,13 @@ class QueryDSL:
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
-        campaign: UUID | str | Any | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ResourceQuery:
-        """Start a resource query, optionally scoped to a campaign.
-
-        .. note:: Campaign scoping for resources
-
-           Resources do not have a direct ``campaign_id`` column.  When a
-           campaign is active, the scope is applied by joining through
-           ``ResourceAssignment`` -> ``ProcessRun`` and filtering on
-           ``ProcessRun.campaign_id``.  Resources that have never been
-           assigned to a process run in the target campaign will be
-           excluded.  Use ``query_maker(unscoped=True)`` to include all
-           resources regardless of assignment status.
-        """
-        campaign_id = self._pick_campaign_id(campaign)
         return ResourceQuery(
             self.backend,
+            context=self.context,
             shape=_normalize_shape(shape),
             load=_normalize_load(load),
-            campaign_id=campaign_id,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )
 
@@ -901,6 +910,7 @@ class QueryDSL:
     ) -> ResourceTemplateQuery:
         return ResourceTemplateQuery(
             self.backend,
+            context=self.context,
             shape=_normalize_shape(shape),
             load=_normalize_load(load),
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,

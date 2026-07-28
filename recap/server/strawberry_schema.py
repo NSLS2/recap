@@ -7,10 +7,10 @@ from strawberry.schema.config import StrawberryConfig
 
 from recap.adapter.local import LocalBackend
 from recap.server.resolvers import (
-    resolve_campaigns,
-    resolve_campaigns_count,
     resolve_execute_count,
     resolve_execute_query,
+    resolve_namespaces,
+    resolve_namespaces_count,
     resolve_process_runs,
     resolve_process_runs_count,
     resolve_process_templates,
@@ -21,7 +21,7 @@ from recap.server.resolvers import (
     resolve_resources_count,
 )
 from recap.server.strawberry_types import (
-    CampaignType,
+    NamespaceType,
     ProcessRunType,
     ProcessTemplateType,
     ResourceTemplateType,
@@ -43,12 +43,12 @@ class Query:
     process_templates: list[ProcessTemplateType] = strawberry.field(
         resolver=resolve_process_templates
     )
-    campaigns: list[CampaignType] = strawberry.field(resolver=resolve_campaigns)
+    namespaces: list[NamespaceType] = strawberry.field(resolver=resolve_namespaces)
 
     # Count fields
     resources_count: int = strawberry.field(resolver=resolve_resources_count)
     process_runs_count: int = strawberry.field(resolver=resolve_process_runs_count)
-    campaigns_count: int = strawberry.field(resolver=resolve_campaigns_count)
+    namespaces_count: int = strawberry.field(resolver=resolve_namespaces_count)
     resource_templates_count: int = strawberry.field(
         resolver=resolve_resource_templates_count
     )

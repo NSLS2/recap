@@ -10,12 +10,12 @@ from recap.schemas.resource import ResourceSchema
 from recap.tests.transport_factories import full_resource
 
 EXECUTE_QUERY = (
-    "query ExecuteQuery($schema_name: String!, $spec: JSON!) "
-    "{ execute_query(schema_name: $schema_name, spec: $spec) }"
+    "query ExecuteQuery($schema_name: String!, $namespace_path: String!, $spec: JSON!) "
+    "{ execute_query(schema_name: $schema_name, namespace_path: $namespace_path, spec: $spec) }"
 )
 EXECUTE_COUNT = (
-    "query ExecuteCount($schema_name: String!, $spec: JSON!) "
-    "{ execute_count(schema_name: $schema_name, spec: $spec) }"
+    "query ExecuteCount($schema_name: String!, $namespace_path: String!, $spec: JSON!) "
+    "{ execute_count(schema_name: $schema_name, namespace_path: $namespace_path, spec: $spec) }"
 )
 
 
@@ -28,7 +28,6 @@ def response_with(body):
 def test_graphql_adapter_query_posts_complete_spec_and_hydrates_nested_state():
     from recap.adapter.graphql import GraphQLAdapter
 
-    campaign_id = uuid4()
     parent_id = uuid4()
     resource = full_resource()
     response = response_with(
@@ -49,7 +48,7 @@ def test_graphql_adapter_query_posts_complete_spec_and_hydrates_nested_state():
         property_filters=[PropertyFilter(name="temperature", value=20)],
         parent_resource_id=parent_id,
         parameter_filters=[ParameterFilter(name="exposure", step="Acquire", value=2.5)],
-        campaign_id=campaign_id,
+        include_archived=True,
         load_mode="none",
         on_unloaded="raise",
     )
@@ -58,7 +57,7 @@ def test_graphql_adapter_query_posts_complete_spec_and_hydrates_nested_state():
         patch("httpx2.Client.post", return_value=response) as post,
         GraphQLAdapter("http://localhost:9999/graphql") as adapter,
     ):
-        [hydrated] = adapter.query(ResourceSchema, spec)
+        [hydrated] = adapter.query(ResourceSchema, spec, namespace_path="beamline/amx")
 
     post.assert_called_once_with(
         "http://localhost:9999/graphql",
@@ -66,6 +65,7 @@ def test_graphql_adapter_query_posts_complete_spec_and_hydrates_nested_state():
             "query": EXECUTE_QUERY,
             "variables": {
                 "schema_name": "ResourceSchema",
+                "namespace_path": "beamline/amx",
                 "spec": {
                     "filters": {"name": "sample"},
                     "predicates": [],
@@ -95,7 +95,9 @@ def test_graphql_adapter_query_posts_complete_spec_and_hydrates_nested_state():
                             "value_type": None,
                         }
                     ],
-                    "campaign_id": str(campaign_id),
+                    "include_archived": True,
+                    "local_metadata_filters": {},
+                    "effective_metadata_filters": {},
                     "load_mode": "none",
                     "on_unloaded": "raise",
                 },
@@ -125,12 +127,13 @@ def test_graphql_adapter_count_posts_filters_in_complete_spec():
         patch("httpx2.Client.post", return_value=response) as post,
         GraphQLAdapter("http://localhost:9999/graphql") as adapter,
     ):
-        count = adapter.count(ResourceSchema, spec)
+        count = adapter.count(ResourceSchema, spec, namespace_path="beamline/amx")
 
     assert count == 42
     payload = post.call_args.kwargs["json"]
     assert payload["query"] == EXECUTE_COUNT
     assert payload["variables"]["schema_name"] == "ResourceSchema"
+    assert payload["variables"]["namespace_path"] == "beamline/amx"
     assert payload["variables"]["spec"]["filters"] == {"name": "sample"}
     assert payload["variables"]["spec"]["property_filters"] == [
         {
@@ -165,7 +168,9 @@ def test_graphql_adapter_rejects_http_200_graphql_errors(method):
         GraphQLAdapter("http://localhost:9999/graphql") as adapter,
         pytest.raises(RuntimeError) as exc_info,
     ):
-        getattr(adapter, method)(ResourceSchema, QuerySpec())
+        getattr(adapter, method)(
+            ResourceSchema, QuerySpec(), namespace_path="beamline/amx"
+        )
 
     assert str(exc_info.value) == "GraphQL request failed: Invalid query specification"
     assert "locations" not in str(exc_info.value)
@@ -189,7 +194,7 @@ def test_graphql_adapter_rejects_malformed_graphql_errors(errors):
         GraphQLAdapter("http://localhost:9999/graphql") as adapter,
         pytest.raises(RuntimeError) as exc_info,
     ):
-        adapter.query(ResourceSchema, QuerySpec())
+        adapter.query(ResourceSchema, QuerySpec(), namespace_path="beamline/amx")
 
     assert str(exc_info.value) == "GraphQL request failed: malformed error response"
 
@@ -217,6 +222,10 @@ def test_graphql_adapter_rejects_legacy_query_features_before_http(
         GraphQLAdapter("http://localhost:9999/graphql") as adapter,
         pytest.raises(TypeError, match="Field"),
     ):
-        getattr(adapter, method)(ResourceSchema, QuerySpec(**{field: value}))
+        getattr(adapter, method)(
+            ResourceSchema,
+            QuerySpec(**{field: value}),
+            namespace_path="beamline/amx",
+        )
 
     post.assert_not_called()

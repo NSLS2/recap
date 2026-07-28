@@ -7,7 +7,17 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, TypeAdapter, create_model
 from pydantic import ValidationError as PydanticError
-from sqlalchemy import Float, Integer, Select, String, cast, insert, select
+from sqlalchemy import (
+    Float,
+    Integer,
+    Select,
+    String,
+    cast,
+    exists,
+    func,
+    insert,
+    select,
+)
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import and_, or_
@@ -24,6 +34,7 @@ from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate, Attrib
 from recap.db.base import Base
 from recap.db.campaign import Campaign
 from recap.db.exceptions import ValidationError
+from recap.db.namespace import Namespace, NamespaceRepository
 from recap.db.process import (
     Direction,
     ProcessRun,
@@ -41,10 +52,12 @@ from recap.db.resource import (
 from recap.db.step import Parameter, Step, StepTemplate, StepTemplateResourceSlotBinding
 from recap.dsl.query import FieldOrdering, FieldPredicate, QuerySpec, SchemaT
 from recap.exceptions import ExistingResourceError, ExistingResourceWarning
+from recap.lifecycle import LifecycleStatus
 from recap.schemas.attribute import (
     AttributeGroupRef,
     AttributeTemplateSchema,
 )
+from recap.schemas.namespace import NamespaceSchema
 from recap.schemas.process import (
     CampaignSchema,
     ProcessRunRef,
@@ -69,9 +82,10 @@ from recap.utils.database import get_or_create, load_single
 from recap.utils.dsl import AliasMixin, build_param_values_model, resolve_path
 from recap.utils.general import make_slug, to_json_compatible
 from recap.utils.loaders import chain_load
+from recap.utils.namespace import namespace_ancestors
 
 SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
-    CampaignSchema: Campaign,
+    NamespaceSchema: Namespace,
     ResourceTemplateSchema: ResourceTemplate,
     ResourceTemplateRef: ResourceTemplate,
     ProcessRunRef: ProcessRun,
@@ -634,7 +648,7 @@ class LocalBackend(Backend):
                 return ResourceRef.model_validate(existing)
 
         resource = Resource(
-            namespace_id=namespace_id,
+            namespace=self.session.get(Namespace, namespace_id),
             name=name,
             resource_template_id=resource_template.id,
             parent_id=parent_id,
@@ -1306,37 +1320,100 @@ class LocalBackend(Backend):
                 children_map.setdefault(parent_id, []).append(resource)
         return children_map
 
-    def _apply_campaign_scope(self, model, stmt, spec):
-        if spec.campaign_id is None:
-            return stmt
+    def _namespace_visibility(self, namespace_path: str) -> tuple[UUID, list[UUID]]:
+        paths = namespace_ancestors(namespace_path)
+        with self._session_scope() as session:
+            by_path = {
+                namespace.path: namespace.id
+                for namespace in session.scalars(
+                    select(Namespace).where(Namespace.path.in_(paths))
+                )
+            }
+        try:
+            context_id = by_path[namespace_path]
+        except KeyError as exc:
+            raise LookupError(f"Namespace does not exist: {namespace_path}") from exc
+        return context_id, [by_path[path] for path in paths if path in by_path]
 
-        campaign_id = spec.campaign_id
+    def get_namespace_path(self, namespace_id: UUID) -> str:
+        with self._session_scope() as session:
+            namespace = session.get(Namespace, namespace_id)
+            if namespace is None:
+                raise LookupError(f"Namespace does not exist: {namespace_id}")
+            return namespace.path
+
+    def _apply_namespace_visibility(
+        self, model, stmt, spec: QuerySpec, namespace_path: str
+    ):
+        context_id, ancestor_ids = self._namespace_visibility(namespace_path)
+        statuses = [LifecycleStatus.ACTIVE]
+        if spec.include_archived:
+            statuses.append(LifecycleStatus.ARCHIVED)
+
         if model is ProcessRun:
-            return stmt.where(ProcessRun.campaign_id == campaign_id)
-        if model is Resource:
-            assignment_alias = aliased(
-                ResourceAssignment, name="campaign_resource_assignment"
+            return stmt.where(
+                model.namespace_id == context_id,
+                model.status.in_(statuses),
             )
-            pr_alias = aliased(ProcessRun, name="campaign_process_run")
-            stmt = stmt.join(assignment_alias, assignment_alias.resource_id == model.id)
-            stmt = stmt.join(pr_alias, pr_alias.id == assignment_alias.process_run_id)
-            stmt = stmt.where(pr_alias.campaign_id == campaign_id)
-            return stmt.distinct()
+        if model in {ProcessTemplate, ResourceTemplate, Resource}:
+            return stmt.where(
+                model.namespace_id.in_(ancestor_ids),
+                model.status.in_(statuses),
+            )
+        if model is Namespace:
+            return stmt.where(model.id.in_(ancestor_ids), model.status.in_(statuses))
         return stmt
 
-    def _build_select(self, schema: type[SchemaT], spec: QuerySpec) -> Select:
+    def _apply_namespace_metadata(self, stmt, spec: QuerySpec):
+        for key, value in spec.local_metadata_filters.items():
+            stmt = stmt.where(Namespace.metadata_json[key].as_string() == value)
+        if spec.effective_metadata_filters:
+            with self._session_scope() as session:
+                repository = NamespaceRepository(session)
+                candidate_ids = list(
+                    session.scalars(stmt.with_only_columns(Namespace.id))
+                )
+                matching_ids = [
+                    namespace_id
+                    for namespace_id in candidate_ids
+                    if all(
+                        repository.effective_metadata(namespace_id).get(key) == value
+                        for key, value in spec.effective_metadata_filters.items()
+                    )
+                ]
+            stmt = stmt.where(Namespace.id.in_(matching_ids))
+        return stmt
+
+    def _build_select(
+        self, schema: type[SchemaT], spec: QuerySpec, namespace_path: str
+    ) -> Select:
         model = SCHEMA_MODEL_MAPPING[schema]
         stmt = select(model)
+        stmt = self._apply_namespace_visibility(model, stmt, spec, namespace_path)
 
         if model is ResourceTemplate and "types__names_in" in spec.filters:
-            type_names = spec.filters.pop("types__names_in")
+            type_names = spec.filters["types__names_in"]
             stmt = (
                 stmt.join(ResourceTemplate.types)
                 .where(ResourceType.name.in_(type_names))
                 .group_by(ResourceTemplate.id)
             )
 
-        filters = dict(spec.filters)
+        filters = {
+            key: value
+            for key, value in spec.filters.items()
+            if key != "types__names_in"
+        }
+        label = filters.pop("labels__contains", None)
+        if label is not None:
+            label_values = func.json_each(model.labels).table_valued("value")
+            stmt = stmt.where(
+                exists(
+                    select(1)
+                    .select_from(label_values)
+                    .where(label_values.c.value == make_slug(label))
+                )
+            )
         joined_paths: dict[tuple[str, ...], type] = {}
         simple_filters: dict[str, object] = {}
 
@@ -1357,11 +1434,14 @@ class LocalBackend(Backend):
         if model is ProcessRun:
             stmt = self._build_select_process_run(model, stmt, spec)
 
-        stmt = self._apply_campaign_scope(model, stmt, spec)
+        if model is Namespace:
+            stmt = self._apply_namespace_metadata(stmt, spec)
         return _apply_field_expressions(model, stmt, spec, joined_paths)
 
-    def query(self, schema: type[SchemaT], spec: QuerySpec) -> list[SchemaT]:
-        stmt = self._build_select(schema, spec)
+    def query(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ) -> list[SchemaT]:
+        stmt = self._build_select(schema, spec, namespace_path)
 
         # Resource trees with children go through the bulk recursive-CTE path
         # below; the root query then only needs ids, so skip the (one-level,
@@ -1456,9 +1536,11 @@ class LocalBackend(Backend):
                 for obj in list(session.scalars(stmt).unique())
             ]
 
-    def count(self, schema: type[SchemaT], spec: QuerySpec) -> int:
+    def count(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ) -> int:
         # model = SCHEMA_MODEL_MAPPING[schema]
-        stmt = self._build_select(schema, spec)
+        stmt = self._build_select(schema, spec, namespace_path)
 
         with self._session_scope() as session:
             select_stmt = select(count()).select_from(stmt.subquery())
