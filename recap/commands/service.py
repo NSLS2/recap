@@ -467,7 +467,9 @@ class CommandService:
                 )
                 return result
         except IntegrityError as error:
-            mapped = CommandConflictError("Resource template already exists")
+            mapped = CommandConflictError(
+                "Resource template name/version already exists in namespace"
+            )
             self._emit_failure(
                 context,
                 "create_resource_template",
@@ -538,7 +540,15 @@ class CommandService:
                     )
                 )
                 if duplicate is not None:
-                    raise CommandConflictError("Resource template already exists")
+                    raise CommandConflictError(
+                        "Resource template name/version already exists in namespace"
+                    )
+                # Build replacement graph under a savepoint before advancing
+                # revision. Readers only observe changes after outer commit.
+                with session.begin_nested():
+                    self._clear_resource_template(session, template)
+                    self._materialize_resource_contents(session, template, draft)
+                    session.flush()
                 compare_and_swap_revision(
                     session,
                     ResourceTemplate,
@@ -550,8 +560,6 @@ class CommandService:
                         "labels": list(draft.labels),
                     },
                 )
-                self._clear_resource_template(session, template)
-                self._materialize_resource_contents(session, template, draft)
                 session.flush()
                 session.refresh(template)
                 from recap.schemas.resource import ResourceTemplateSchema

@@ -11,14 +11,16 @@ from sqlalchemy.orm import sessionmaker
 from recap.authentication.models import ActorKind, ProviderIdentity, RequestActor
 from recap.authorization.policy import UnrestrictedNamespacePolicy
 from recap.authorization.scopes import Scope
-from recap.commands.errors import CommandConflictError
-from recap.commands.models import CommandContext, CreateResourceTemplate, UpdateResourceTemplate
+from recap.commands.errors import CommandConflictError, CommandNotFoundError
+from recap.commands.models import (
+    CommandContext,
+    CreateResourceTemplate,
+)
 from recap.commands.service import CommandService
 from recap.db.audit import MutationAudit
 from recap.db.base import Base
 from recap.db.resource import ResourceTemplate
 from recap.dsl.drafts import AttributeDraft, AttributeGroupDraft, ResourceTemplateDraft
-from recap.lifecycle import LifecycleStatus
 
 
 class AuditCollector:
@@ -53,7 +55,13 @@ def command_setup(tmp_path):
     )
     service = CommandService(factory)
     namespace = service.create_namespace(context, path="beamline/amx", metadata={})
-    return service, factory, replace(context, idempotency_key="resource-template-1"), namespace, audit
+    return (
+        service,
+        factory,
+        replace(context, idempotency_key="resource-template-1"),
+        namespace,
+        audit,
+    )
 
 
 def template_draft(name="plate", version="1.0"):
@@ -101,11 +109,16 @@ def test_create_persists_nested_graph_replays_and_audits(command_setup):
     assert replay.model_dump(mode="json") == created.model_dump(mode="json")
     assert created.namespace_id == namespace.id
     assert created.children["well"].types[1].name == "well"
-    assert created.attribute_group_templates[0].attribute_templates[0].default_value == 8
+    assert (
+        created.attribute_group_templates[0].attribute_templates[0].default_value == 8
+    )
     assert len(audit.records) == 2
     with factory() as session:
         assert len(session.scalars(select(ResourceTemplate)).all()) == 3
-        assert session.scalars(select(MutationAudit)).all()[-1].resource_type == "resource_template"
+        assert (
+            session.scalars(select(MutationAudit)).all()[-1].resource_type
+            == "resource_template"
+        )
 
 
 def test_duplicate_identity_and_frozen_update_conflict(command_setup):
@@ -143,7 +156,7 @@ def test_duplicate_identity_and_frozen_update_conflict(command_setup):
 
 def test_failed_nested_materialization_rolls_back(command_setup):
     service, factory, context, namespace, _ = command_setup
-    with pytest.raises(Exception):
+    with pytest.raises(CommandNotFoundError):
         service.create_resource_template(
             replace(context, idempotency_key="resource-template-bad"),
             namespace_path="beamline/missing",
@@ -151,6 +164,42 @@ def test_failed_nested_materialization_rolls_back(command_setup):
         )
     with factory() as session:
         assert session.scalars(select(ResourceTemplate)).all() == []
+
+
+def test_failed_update_preserves_graph_and_revision(command_setup, monkeypatch):
+    service, factory, context, namespace, _ = command_setup
+    created = service.create_resource_template(
+        context, namespace_path=namespace.path, draft=template_draft()
+    )
+
+    observed_revisions = []
+
+    def fail_materialization(session, template, draft):
+        observed_revisions.append(
+            session.scalar(
+                select(ResourceTemplate.revision).where(
+                    ResourceTemplate.id == template.id
+                )
+            )
+        )
+        raise RuntimeError("materialization failed")
+
+    monkeypatch.setattr(service, "_materialize_resource_contents", fail_materialization)
+    with pytest.raises(RuntimeError, match="materialization failed"):
+        service.update_resource_template(
+            replace(context, idempotency_key="resource-template-failed-update"),
+            template_id=created.id,
+            expected_revision=1,
+            draft=template_draft(name="replacement"),
+        )
+    assert observed_revisions == [1]
+
+    with factory() as session:
+        stored = session.get(ResourceTemplate, created.id)
+        assert stored.revision == 1
+        assert stored.name == "plate"
+        assert stored.children["well"].name == "well"
+        assert stored.attribute_group_templates[0].name == "dimensions"
 
 
 class RecordingBackend:
@@ -180,7 +229,9 @@ def test_builder_submits_one_complete_command():
         version="1.0",
         command_context=context,
     ) as builder:
-        builder.add_properties({"dimensions": [{"name": "rows", "type": "int", "default": 8}]})
+        builder.add_properties(
+            {"dimensions": [{"name": "rows", "type": "int", "default": 8}]}
+        )
         builder.add_child("well", ["container", "well"])
 
     assert len(backend.commands) == 1
@@ -194,14 +245,17 @@ def test_builder_submits_nothing_when_body_raises():
     from recap.dsl.resource_builder import ResourceTemplateBuilder
 
     backend = RecordingBackend()
-    with pytest.raises(RuntimeError, match="stop"), ResourceTemplateBuilder(
-        backend=backend,
-        namespace_id=uuid4(),
-        namespace_path="beamline/amx",
-        name="plate",
-        type_names=["plate"],
-        version="1.0",
-        command_context=object(),
+    with (
+        pytest.raises(RuntimeError, match="stop"),
+        ResourceTemplateBuilder(
+            backend=backend,
+            namespace_id=uuid4(),
+            namespace_path="beamline/amx",
+            name="plate",
+            type_names=["plate"],
+            version="1.0",
+            command_context=object(),
+        ),
     ):
         raise RuntimeError("stop")
     assert backend.commands == []

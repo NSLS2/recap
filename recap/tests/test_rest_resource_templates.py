@@ -6,7 +6,9 @@ from recap.server.app import create_app
 
 @pytest.fixture
 def client(tmp_path):
-    with TestClient(create_app(tmp_path / "rest-resource.db", api_key="secret")) as client:
+    with TestClient(
+        create_app(tmp_path / "rest-resource.db", api_key="secret")
+    ) as client:
         yield client
 
 
@@ -15,10 +17,12 @@ def draft(name="plate", version="1.0"):
         "name": name,
         "version": version,
         "type_names": ["container", "plate"],
-        "property_groups": [{
-            "name": "dimensions",
-            "attributes": [{"name": "rows", "type": "int", "default": 8}],
-        }],
+        "property_groups": [
+            {
+                "name": "dimensions",
+                "attributes": [{"name": "rows", "type": "int", "default": 8}],
+            }
+        ],
         "children": [{"name": "well", "version": "1.0", "type_names": ["well"]}],
     }
 
@@ -61,10 +65,15 @@ def test_resource_template_route_replays_and_has_no_granular_child_route(client)
     create_namespace(client)
     request = {"headers": headers("template-1"), "json": draft()}
     first = client.post("/api/v1/namespaces/beamline/amx/resource-templates", **request)
-    replay = client.post("/api/v1/namespaces/beamline/amx/resource-templates", **request)
+    replay = client.post(
+        "/api/v1/namespaces/beamline/amx/resource-templates", **request
+    )
     assert replay.json() == first.json()
-    assert client.post(
-        f"/api/v1/resource-templates/{first.json()['id']}/children",
-        headers=headers("child-1"),
-        json={},
-    ).status_code == 404
+    assert (
+        client.post(
+            f"/api/v1/resource-templates/{first.json()['id']}/children",
+            headers=headers("child-1"),
+            json={},
+        ).status_code
+        == 404
+    )
