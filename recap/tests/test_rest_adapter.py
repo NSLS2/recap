@@ -76,7 +76,11 @@ def test_transport_failures_map_to_typed_connection_error_without_secret(exc_typ
     from recap.adapter.rest import RESTAdapter
     from recap.exceptions import RecapConnectionError
 
-    error = httpx2.ConnectError("secret connection detail") if exc_type == "connect" else httpx2.TimeoutException("secret timeout")
+    error = (
+        httpx2.ConnectError("secret connection detail")
+        if exc_type == "connect"
+        else httpx2.TimeoutException("secret timeout")
+    )
     with patch("recap.adapter.rest.httpx.Client") as client_type:
         client_type.return_value.request.side_effect = error
         with pytest.raises(RecapConnectionError) as caught:
