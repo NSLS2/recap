@@ -31,6 +31,7 @@ class CreateResourceRequest(RestModel):
     name: str
     template_id: str
     parent_id: str | None = None
+    properties: dict[str, dict[str, Any]] | None = None
 
 
 class UpdateResourceRequest(RestModel):

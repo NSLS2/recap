@@ -71,6 +71,7 @@ class ResourceBuilder:
         self._command_mode = command_context is not None
         self._submitted = False
         self._expected_revision = 1
+        self._is_new_resource = resource_id is None
         self._resource: ResourceSchema | None = None
         self._uow = None
         self._loaded_in_uow: bool = False
@@ -170,9 +171,14 @@ class ResourceBuilder:
         if self.name is None or self.template_name is None:
             raise ValueError("name and template_name are required")
         template = self.backend.get_resource_template(
-            self.namespace_id, name=self.template_name, version=self.template_version
+            self.namespace_id,
+            name=self.template_name,
+            version=self.template_version,
+            expand=True,
         )
         self._template_id = template.id
+        if isinstance(template, ResourceTemplateSchema):
+            self._resource = self._draft_resource(template)
         if self.on_existing != "create":
             parent_id = self.parent_resource.id if self.parent_resource else None
             matches = self.backend.find_resources_by_identity(
@@ -189,6 +195,42 @@ class ResourceBuilder:
                     )
                 self._resource = ResourceSchema.model_validate(matches[0])
                 self._expected_revision = self._resource.revision
+                self._is_new_resource = False
+
+    def _draft_resource(self, template: ResourceTemplateSchema) -> ResourceSchema:
+        properties = {}
+        for group in template.attribute_group_templates:
+            properties[group.name] = {
+                attribute.name: {
+                    "value": attribute.default_value,
+                    "unit": attribute.unit,
+                    "metadata_json": attribute.metadata or {},
+                }
+                for attribute in group.attribute_templates
+            }
+            properties[group.name] = {
+                "template": group,
+                "values": properties[group.name],
+            }
+        return ResourceSchema.model_construct(
+            id=UUID(int=0),
+            name=self.name,
+            template=template,
+            children={},
+            properties={
+                name: self._property_schema(value)
+                for name, value in properties.items()
+            },
+            namespace_id=self.namespace_id,
+            revision=1,
+            status=LifecycleStatus.MUTABLE,
+        )
+
+    @staticmethod
+    def _property_schema(value):
+        from recap.schemas.resource import PropertySchema
+
+        return PropertySchema.model_validate(value)
 
     @classmethod
     def create(
@@ -253,23 +295,26 @@ class ResourceBuilder:
 
     def save(self):
         if self._command_mode:
-            if self._resource is None:
+            if self._is_new_resource:
                 command = CreateResource(
                     namespace_path=self.namespace_path,
                     name=self.name,
                     template_id=self._template_id,
                     parent_id=self.parent_resource.id if self.parent_resource else None,
+                    properties=self._resource_properties_payload(),
                 )
             else:
                 command = UpdateResource(
                     resource_id=self._resource.id,
                     expected_revision=self._expected_revision,
                     name=self._resource.name,
+                    properties=self._resource_properties_payload(),
                 )
             result = self.backend.execute(command, self._command_context)
             if result is not None:
                 self._resource = result
                 self._expected_revision = result.revision
+                self._is_new_resource = False
             self._submitted = True
             return self
         self._ensure_uow()
@@ -277,6 +322,28 @@ class ResourceBuilder:
         self._loaded_in_uow = False  # stale after commit; reload on next __enter__
         self._uow = None
         return self
+
+    def _resource_properties_payload(self):
+        if self._resource is None:
+            return None
+        payload = {}
+        for group_name, prop in self._resource.properties.items():
+            value_names = (
+                prop.values.model_fields
+                if isinstance(prop.values, BaseModel)
+                else vars(prop.values)
+            )
+            payload[group_name] = {
+                value_name: {
+                    "value": getattr(prop.values, value_name).value,
+                    "unit": getattr(prop.values, value_name).unit,
+                    "metadata_json": getattr(
+                        prop.values, value_name
+                    ).metadata_json,
+                }
+                for value_name in value_names
+            }
+        return payload
 
     def activate(self):
         self._ensure_uow()

@@ -216,6 +216,7 @@ def create_resource(
             name=body.name,
             template_id=UUID(body.template_id),
             parent_id=UUID(body.parent_id) if body.parent_id else None,
+            properties=body.properties,
         ),
         _context(request, actor, idempotency_key),
     )

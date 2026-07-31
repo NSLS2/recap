@@ -108,7 +108,11 @@ class PropertySchema(CommonFields):
             )
             values_model = build_param_values_model(tmpl.slug or tmpl.name, tmpl_key)
             raw_values = {
-                av.template.name: {"value": av.value, "unit": av.unit}
+                av.template.name: {
+                    "value": av.value,
+                    "unit": av.unit,
+                    "metadata_json": av.metadata_json,
+                }
                 for av in data._values.values()
             }
             return {
@@ -168,9 +172,11 @@ class PropertySchema(CommonFields):
             attr_tmpl = tmpl_by_name[name]
             if isinstance(raw_value, dict):
                 raw_unit = raw_value.get("unit")
+                raw_metadata = raw_value.get("metadata_json", {})
                 raw_value = raw_value.get("value")
             else:
                 raw_unit = None
+                raw_metadata = {}
 
             validator = AttributeTemplateValidator(
                 name=attr_tmpl.name,
@@ -182,6 +188,7 @@ class PropertySchema(CommonFields):
             coerced[name] = {
                 "value": validator.default,
                 "unit": attr_tmpl.unit if raw_unit is None else raw_unit,
+                "metadata_json": raw_metadata,
             }
 
         self.values = self.values.__class__.model_validate(coerced)

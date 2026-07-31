@@ -27,6 +27,7 @@ class CreateResource(CommandModel):
     name: str
     template_id: UUID
     parent_id: UUID | None = None
+    properties: dict[str, dict[str, object]] | None = None
 
 
 class UpdateResource(CommandModel):

@@ -11,6 +11,7 @@ from recap.authorization.scopes import Scope
 from recap.commands.errors import CommandConflictError
 from recap.commands.models import CommandContext
 from recap.commands.service import CommandService
+from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.base import Base
 from recap.db.namespace import Namespace
 from recap.db.resource import Resource, ResourceTemplate
@@ -60,6 +61,23 @@ def _template(factory, path="beamline"):
         return namespace.path, template.id
 
 
+def _property_template(factory, path="beamline/properties"):
+    with factory.begin() as session:
+        namespace = Namespace(path=path)
+        template = ResourceTemplate(name="property-plate", version="1", namespace=namespace)
+        group = AttributeGroupTemplate(name="measurements", resource_template=template)
+        AttributeTemplate(
+            name="dose",
+            value_type="int",
+            unit="mg",
+            default_value=0,
+            attribute_group_template=group,
+        )
+        session.add(template)
+        session.flush()
+        return namespace.path, template.id
+
+
 def test_resource_create_update_revision_and_frozen_patch(command_setup):
     service, factory, context, audit = command_setup
     path, template_id = _template(factory)
@@ -89,3 +107,29 @@ def test_resource_create_update_revision_and_frozen_patch(command_setup):
     with factory() as session:
         assert session.scalar(select(Resource).where(Resource.id == created.id)).status is LifecycleStatus.ACTIVE
     assert audit.records[-1].outcome is AuditOutcome.ERROR
+
+
+def test_resource_create_and_update_apply_complete_property_payload(command_setup):
+    service, _, context, _ = command_setup
+    path, template_id = _property_template(command_setup[1])
+    created = service.create_resource(
+        context,
+        namespace_path=path,
+        name="property-plate-1",
+        template_id=template_id,
+        properties={
+            "measurements": {
+                "dose": {"value": 12, "unit": "mg", "metadata_json": {"source": "builder"}}
+            }
+        },
+    )
+    assert created.properties["measurements"].values["dose"].value == 12
+    assert created.properties["measurements"].values["dose"].metadata_json == {"source": "builder"}
+
+    updated = service.update_resource(
+        replace(context, idempotency_key="resource-property-update"),
+        resource_id=created.id,
+        expected_revision=1,
+        properties={"measurements": {"dose": {"value": 24}}},
+    )
+    assert updated.properties["measurements"].values["dose"].value == 24

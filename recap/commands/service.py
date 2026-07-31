@@ -74,6 +74,7 @@ class _CreateResourceFingerprint(BaseModel):
     name: str
     template_id: UUID
     parent_id: UUID | None
+    properties: dict[str, dict[str, object]] | None
 
 
 class _UpdateResourceFingerprint(BaseModel):
@@ -120,6 +121,7 @@ class CommandService:
                 name=command.name,
                 template_id=command.template_id,
                 parent_id=command.parent_id,
+                properties=command.properties,
             )
         if isinstance(command, UpdateResource):
             return self.update_resource(
@@ -178,7 +180,7 @@ class CommandService:
             f"Unsupported command type: {type(command).__name__}"
         )
 
-    def create_resource(
+    def create_resource(  # noqa: C901
         self,
         context: CommandContext,
         *,
@@ -186,6 +188,7 @@ class CommandService:
         name: str,
         template_id: UUID,
         parent_id: UUID | None = None,
+        properties: dict[str, dict[str, object]] | None = None,
     ) -> ResourceSchema:
         try:
             canonical_path = canonicalize_namespace_path(namespace_path)
@@ -197,7 +200,12 @@ class CommandService:
             route_template="/api/v1/resources/{namespace_path:path}",
             namespace_path=canonical_path,
             source_id=None,
-            body=_CreateResourceFingerprint(name=name, template_id=template_id, parent_id=parent_id),
+            body=_CreateResourceFingerprint(
+                name=name,
+                template_id=template_id,
+                parent_id=parent_id,
+                properties=properties,
+            ),
         )
         try:
             with self._session_factory.begin() as session:
@@ -224,6 +232,8 @@ class CommandService:
                     parent=parent,
                 )
                 session.add(resource)
+                if properties:
+                    self._apply_resource_changes(resource, properties)
                 session.flush()
                 result = ResourceSchema.model_validate(resource)
                 response = result.model_dump(mode="json")

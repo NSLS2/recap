@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from uuid import uuid4
 
 from recap.commands.models import (
@@ -125,3 +126,39 @@ def test_resource_builder_has_no_construction_side_effect_and_submits_once():
 
     assert len(backend.commands) == 1
     assert isinstance(backend.commands[0][0], CreateResource)
+
+
+def test_resource_builder_serializes_property_values_into_create_command():
+    backend = RecordingBackend()
+    builder = ResourceBuilder(
+        name="resource-with-values",
+        template_name="template",
+        backend=backend,
+        namespace_id=uuid4(),
+        namespace_path="beamline/amx",
+        command_context=object(),
+    )
+    builder._resource = SimpleNamespace(
+        properties={
+            "measurements": SimpleNamespace(
+                values=SimpleNamespace(
+                    dose=SimpleNamespace(
+                        value=12,
+                        unit="mg",
+                        metadata_json={"source": "builder"},
+                    )
+                )
+            )
+        }
+    )
+    builder.save()
+
+    assert backend.commands[0][0].properties == {
+        "measurements": {
+            "dose": {
+                "value": 12,
+                "unit": "mg",
+                "metadata_json": {"source": "builder"},
+            }
+        }
+    }
