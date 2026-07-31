@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -91,6 +92,18 @@ class ResourceTemplateDraft(DraftModel):
         _require_unique(self.property_groups, "property group")
         _require_unique(self.children, "child template")
         return self
+
+
+class ProcessRunStepDraft(DraftModel):
+    parameters: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class ProcessRunDraft(DraftModel):
+    name: str = Field(min_length=1)
+    description: str
+    template_id: UUID
+    assignments: dict[str, UUID] = Field(default_factory=dict)
+    steps: dict[str, ProcessRunStepDraft] = Field(default_factory=dict)
 
 
 def _require_unique(items, kind: str) -> None:

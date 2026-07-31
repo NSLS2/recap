@@ -13,9 +13,13 @@ from recap.authorization.policy import (
 )
 from recap.commands.models import CommandContext
 from recap.commands.service import CommandService
-from recap.dsl.drafts import ProcessTemplateDraft, ResourceTemplateDraft
+from recap.dsl.drafts import (
+    ProcessRunDraft,
+    ProcessTemplateDraft,
+    ResourceTemplateDraft,
+)
 from recap.schemas.namespace import NamespaceSchema
-from recap.schemas.process import ProcessTemplateSchema
+from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
 from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
 from recap.server.audit import AuditRecord
 from recap.server.errors import request_id_from
@@ -264,6 +268,35 @@ def copy_resource(
             destination_namespace_path=destination_namespace_path,
             options=body,
         ),
+        _context(request, actor, idempotency_key),
+    )
+    return _set_etag(response, result)
+
+
+@router.post("/process-runs/{namespace_path:path}", response_model=None, status_code=201)
+def create_process_run(
+    namespace_path: str, body: ProcessRunDraft, request: Request, response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+) -> ProcessRunSchema:
+    from recap.commands.models import CreateProcessRun
+    result = CommandService(request.app.state.session_factory).execute(
+        CreateProcessRun(namespace_path=namespace_path, draft=body),
+        _context(request, actor, idempotency_key),
+    )
+    return _set_etag(response, result)
+
+
+@router.patch("/process-runs/{process_run_id}", response_model=None)
+def update_process_run(
+    process_run_id: UUID, body: dict, request: Request, response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    if_match: Annotated[str, Header(alias="If-Match")],
+) -> ProcessRunSchema:
+    from recap.commands.models import UpdateProcessRun
+    result = CommandService(request.app.state.session_factory).execute(
+        UpdateProcessRun(process_run_id=process_run_id, expected_revision=_parse_if_match(if_match), **body),
         _context(request, actor, idempotency_key),
     )
     return _set_etag(response, result)

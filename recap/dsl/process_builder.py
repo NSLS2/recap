@@ -8,13 +8,16 @@ from sqlalchemy.exc import NoResultFound
 from recap.adapter import Backend
 from recap.commands.models import (
     CommandContext,
+    CreateProcessRun,
     CreateProcessTemplate,
+    UpdateProcessRun,
     UpdateProcessTemplate,
 )
 from recap.dsl.attribute_builder import AttributeGroupBuilder
 from recap.dsl.drafts import (
     AttributeDraft,
     AttributeGroupDraft,
+    ProcessRunDraft,
     ProcessTemplateDraft,
     ResourceSlotDraft,
     StepTemplateDraft,
@@ -471,6 +474,9 @@ class ProcessRunBuilder:
         version: str | None = None,
         process_run_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
+        namespace_path: str | None = None,
+        command_context: CommandContext | None = None,
+        template_id: UUID | None = None,
     ):
         self.backend = backend
         if namespace_id is None:
@@ -484,6 +490,19 @@ class ProcessRunBuilder:
         if on_existing not in {"silent", "warn", "raise"}:
             raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
         self.on_existing = on_existing
+        self.namespace_path = namespace_path
+        self._command_context = command_context
+        self._command_mode = command_context is not None
+        self._template_id = template_id
+        self._submitted = False
+        self._draft_assignments: dict[str, UUID] = {}
+        if self._command_mode:
+            if namespace_path is None or template_id is None:
+                raise ValueError("namespace_path and template_id are required for command-backed builders")
+            self._process_run = None
+            self._steps = []
+            self._resources = {}
+            return
         self._process_template: ProcessTemplateSchema | ProcessTemplateRef | None = None
         self._loaded_in_uow: bool = False
         self._model_dirty: bool = False
@@ -573,6 +592,8 @@ class ProcessRunBuilder:
         self._loaded_in_uow = True  # mark fresh after recovery load
 
     def __enter__(self):
+        if self._command_mode:
+            return self
         self._ensure_uow()
         if getattr(self, "_process_run", None) is not None and not self._loaded_in_uow:
             # Re-entering after save() or _restart_uow() — reload current state
@@ -589,6 +610,10 @@ class ProcessRunBuilder:
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        if self._command_mode:
+            if exc_type is None:
+                self.save()
+            return
         if exc_type is None:
             if self._model_dirty:
                 if self._params_flushed:
@@ -606,6 +631,24 @@ class ProcessRunBuilder:
             self._uow = None
 
     def save(self):
+        if self._command_mode:
+            if self._submitted:
+                return self
+            result = self.backend.execute(
+                CreateProcessRun(
+                    namespace_path=self.namespace_path,
+                    draft=ProcessRunDraft(
+                        name=self.name,
+                        description=self.description,
+                        template_id=self._template_id,
+                        assignments=self._draft_assignments,
+                    ),
+                ),
+                self._command_context,
+            )
+            self._process_run = result
+            self._submitted = True
+            return self
         self._ensure_uow()
         self._uow.commit()
         self._loaded_in_uow = False
@@ -615,6 +658,17 @@ class ProcessRunBuilder:
         return self
 
     def finalize(self):
+        if self._command_mode:
+            self._ensure_command_saved()
+            self._process_run = self.backend.execute(
+                UpdateProcessRun(
+                    process_run_id=self._process_run.id,
+                    expected_revision=self._process_run.revision,
+                    status=LifecycleStatus.ACTIVE.value,
+                ),
+                self._command_context,
+            )
+            return self
         self._ensure_uow()
         self.backend.set_process_run_status(
             self._process_run.id, LifecycleStatus.ACTIVE
@@ -650,6 +704,9 @@ class ProcessRunBuilder:
         resource_slot_name: str,
         resource: ResourceSchema,
     ) -> "ProcessRunBuilder":
+        if self._command_mode:
+            self._draft_assignments[resource_slot_name] = resource.id
+            return self
         self._ensure_uow()
         resource_slot = None
         for slot in self._process_template.resource_slots:
@@ -738,6 +795,10 @@ class ProcessRunBuilder:
         if self._uow is None:
             self._uow = self.backend.begin()
         return self._uow
+
+    def _ensure_command_saved(self):
+        if not self._submitted:
+            self.save()
 
     def _restart_uow(self):
         if self._uow:

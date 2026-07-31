@@ -25,9 +25,11 @@ from recap.commands.models import (
     CommandContext,
     CommandModel,
     CopyResource,
+    CreateProcessRun,
     CreateProcessTemplate,
     CreateResource,
     CreateResourceTemplate,
+    UpdateProcessRun,
     UpdateProcessTemplate,
     UpdateResource,
     UpdateResourceTemplate,
@@ -37,15 +39,24 @@ from recap.db.audit import MutationAuditRepository
 from recap.db.base import compare_and_swap_revision
 from recap.db.idempotency import IdempotencyRepository
 from recap.db.namespace import Namespace, NamespaceRepository
-from recap.db.process import ProcessTemplate, ResourceSlot
+from recap.db.process import (
+    ProcessRun,
+    ProcessTemplate,
+    ResourceSlot,
+)
 from recap.db.resource import Property, Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate, StepTemplateResourceSlotBinding
-from recap.dsl.drafts import ProcessTemplateDraft, ResourceTemplateDraft
+from recap.dsl.drafts import (
+    ProcessRunDraft,
+    ProcessTemplateDraft,
+    ResourceTemplateDraft,
+)
 from recap.lifecycle import LifecycleStatus, validate_transition
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.namespace import NamespaceSchema
-from recap.schemas.process import ProcessTemplateSchema
+from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
 from recap.schemas.resource import ResourceCopyOptions, ResourceSchema
+from recap.schemas.step import ParameterSchema, StepSchema
 from recap.server.audit import AuditOutcome, AuditRecord
 from recap.server.errors import AuthorizationDenied, ErrorCode
 from recap.utils.namespace import (
@@ -84,6 +95,14 @@ class _UpdateProcessTemplateFingerprint(BaseModel):
 
 class _UpdateResourceTemplateFingerprint(BaseModel):
     draft: ResourceTemplateDraft
+    expected_revision: int
+
+
+class _UpdateProcessRunFingerprint(BaseModel):
+    description: str | None
+    status: str | None
+    assignments: dict[str, UUID] | None
+    steps: dict[str, dict[str, dict[str, object]]] | None
     expected_revision: int
 
 
@@ -140,6 +159,20 @@ class CommandService:
                 template_id=command.template_id,
                 expected_revision=command.expected_revision,
                 draft=command.draft,
+            )
+        if isinstance(command, CreateProcessRun):
+            return self.create_process_run(
+                context, namespace_path=command.namespace_path, draft=command.draft
+            )
+        if isinstance(command, UpdateProcessRun):
+            return self.update_process_run(
+                context,
+                process_run_id=command.process_run_id,
+                expected_revision=command.expected_revision,
+                description=command.description,
+                status=command.status,
+                assignments=command.assignments,
+                steps=command.steps,
             )
         raise CommandValidationError(
             f"Unsupported command type: {type(command).__name__}"
@@ -851,6 +884,167 @@ class CommandService:
                 resource_type="resource_template",
             )
             raise
+
+    def create_process_run(self, context: CommandContext, *, namespace_path: str, draft: ProcessRunDraft):
+        try:
+            target_path = canonicalize_namespace_path(namespace_path)
+        except ValueError as error:
+            raise CommandValidationError(str(error)) from error
+        self._authorize_scope(context, target_path, Scope.PROCESS_RUN_WRITE, "create_process_run")
+        fingerprint = command_fingerprint(
+            method="POST", route_template="/api/v1/process-runs/{namespace_path:path}",
+            namespace_path=target_path, source_id=None, body=draft,
+        )
+        try:
+            with self._session_factory.begin() as session:
+                namespace = session.scalar(select(Namespace).where(Namespace.path == target_path))
+                if namespace is None:
+                    raise CommandNotFoundError("Namespace not found")
+                template = session.get(ProcessTemplate, draft.template_id)
+                if template is None:
+                    raise CommandNotFoundError("Process template not found")
+                self._authorize_scope(context, template.namespace.path, Scope.PROCESS_TEMPLATE_READ, "create_process_run")
+                decision = self._claim(IdempotencyRepository(session), context, fingerprint, lambda _id: None)
+                if decision is not None and decision.replayed:
+                    return ProcessRunSchema.model_validate(decision.response)
+                run = ProcessRun(namespace=namespace, name=draft.name, description=draft.description, template=template)
+                session.add(run)
+                session.flush()
+                self._apply_run_assignments(session, run, draft.assignments, context)
+                self._apply_run_steps(run, draft.steps)
+                session.flush()
+                session.expire_all()
+                run = session.get(ProcessRun, run.id)
+                result = self._process_run_schema(run)
+                if decision is not None:
+                    idempotency = IdempotencyRepository(session)
+                    idempotency.complete(decision, target_id=str(run.id), response=result.model_dump(mode="json"))
+                self._emit_success(session, context, "create_process_run", str(run.id), resource_type="process_run")
+                return result
+        except IntegrityError as error:
+            mapped = CommandConflictError("Process run already exists in namespace")
+            self._emit_failure(context, "create_process_run", None, mapped, resource_type="process_run")
+            raise mapped from error
+        except Exception as error:
+            self._emit_failure(context, "create_process_run", None, error, resource_type="process_run")
+            raise
+
+    def update_process_run(self, context: CommandContext, *, process_run_id: UUID, expected_revision: int,  # noqa: C901
+                           description: str | None = None, status: str | None = None,
+                           assignments: dict[str, UUID] | None = None,
+                           steps: dict[str, dict[str, dict[str, object]]] | None = None):
+        if expected_revision < 1:
+            raise CommandValidationError("Expected revision must be positive")
+        fingerprint = command_fingerprint(
+            method="PATCH", route_template="/api/v1/process-runs/{process_run_id}",
+            namespace_path=None, source_id=process_run_id,
+            body=_UpdateProcessRunFingerprint(description=description, status=status,
+                                               assignments=assignments, steps=steps,
+                                               expected_revision=expected_revision),
+        )
+        try:
+            with self._session_factory.begin() as session:
+                run = session.get(ProcessRun, process_run_id)
+                if run is None:
+                    raise CommandNotFoundError("Process run not found")
+                self._authorize_scope(context, run.namespace.path, Scope.PROCESS_RUN_WRITE, "update_process_run")
+                decision = self._claim(IdempotencyRepository(session), context, fingerprint, lambda _id: None)
+                if decision is not None and decision.replayed:
+                    return ProcessRunSchema.model_validate(decision.response)
+                if description is None and status is None and assignments is None and steps is None:
+                    raise CommandValidationError("Process run update is empty")
+                if run.status is not LifecycleStatus.MUTABLE and (description is not None or assignments is not None or steps is not None):
+                    raise CommandConflictError("Cannot update a finalized process run")
+                if assignments is not None:
+                    self._apply_run_assignments(session, run, assignments, context)
+                if steps is not None:
+                    self._apply_run_steps(run, steps)
+                values: dict[str, Any] = {}
+                if description is not None:
+                    values["description"] = description
+                if status is not None:
+                    try:
+                        target_status = LifecycleStatus(status)
+                        if target_status is LifecycleStatus.ACTIVE:
+                            run.finalize()
+                        else:
+                            validate_transition(run.status, target_status)
+                            values["status"] = target_status
+                    except ValueError as error:
+                        raise CommandValidationError(str(error)) from error
+                compare_and_swap_revision(session, ProcessRun, process_run_id,
+                                          expected_revision=expected_revision, values=values)
+                session.flush()
+                session.expire_all()
+                run = session.get(ProcessRun, process_run_id)
+                session.refresh(run)
+                result = self._process_run_schema(run)
+                if decision is not None:
+                    IdempotencyRepository(session).complete(decision, target_id=str(run.id), response=result.model_dump(mode="json"))
+                self._emit_success(session, context, "update_process_run", str(run.id), resource_type="process_run")
+                return result
+        except Exception as error:
+            self._emit_failure(context, "update_process_run", str(process_run_id), error, resource_type="process_run")
+            raise
+
+    @staticmethod
+    def _process_run_schema(run):
+        result = ProcessRunSchema.model_validate(run)
+        for orm_step in run.steps.values():
+            current = result.steps[orm_step.name]
+            if orm_step.parameters:
+                parameters = {
+                    name: ParameterSchema.model_validate({
+                        "id": parameter.id,
+                        "create_date": parameter.create_date,
+                        "modified_date": parameter.modified_date,
+                        "template": parameter.template,
+                        "values": {
+                            value_name: {"value": value.value, "unit": value.unit}
+                            for value_name, value in parameter._values.items()
+                        },
+                    })
+                    for name, parameter in orm_step.parameters.items()
+                }
+                payload = current.model_dump()
+                payload["parameters"] = parameters
+                result.steps[orm_step.name] = StepSchema.model_validate(payload)
+        return result
+
+    @staticmethod
+    def _apply_run_assignments(session, run, assignments, context):
+        for slot_name, resource_id in assignments.items():
+            slot = next((item for item in run.template.resource_slots if item.name == slot_name), None)
+            if slot is None:
+                raise CommandValidationError(f"Resource slot {slot_name!r} not found")
+            resource = session.get(Resource, resource_id)
+            if resource is None:
+                raise CommandNotFoundError("Resource not found")
+            CommandService._authorize_scope(context, resource.namespace.path, Scope.RESOURCE_READ, "create_process_run")
+            run.resources[slot] = resource
+
+    @staticmethod
+    def _apply_run_steps(run, steps):
+        for step_name, step_data in steps.items():
+            step = run.steps.get(step_name)
+            if step is None:
+                raise CommandValidationError(f"Step {step_name!r} not found")
+            for group_name, values in (step_data.parameters or {}).items():
+                param = step.parameters.get(group_name)
+                if param is None:
+                    raise CommandValidationError(f"Parameter group {group_name!r} not found")
+                for attr_name, raw in values.items():
+                    value = param._values.get(attr_name)
+                    if value is None:
+                        value = next((item for key, item in param._values.items() if item.template.slug == attr_name), None)
+                    if value is None:
+                        raise CommandValidationError(f"Parameter {attr_name!r} not found")
+                    if isinstance(raw, dict):
+                        value.set_value(raw.get("value"))
+                        if "unit" in raw:
+                            value.unit = raw["unit"]
+                    else:
+                        value.set_value(raw)
 
     @staticmethod
     def _materialize_resource_template(session, namespace, draft):
