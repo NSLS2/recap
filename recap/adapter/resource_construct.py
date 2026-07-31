@@ -214,6 +214,11 @@ class ResourceSchemaHydrator:
             at.slug: AttributeValueSchema.model_construct(
                 value=prop._values[at.name].value if at.name in prop._values else None,
                 unit=prop._values[at.name].unit if at.name in prop._values else at.unit,
+                metadata_json=(
+                    prop._values[at.name].metadata_json
+                    if at.name in prop._values
+                    else {}
+                ),
             )
             for at in group_template.attribute_templates
         }

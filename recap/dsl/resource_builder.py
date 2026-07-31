@@ -225,7 +225,12 @@ class ResourceBuilder:
             changes = {}
             for prop in self._resource.properties.values():
                 changes[prop.template.name] = {
-                    name: value.value for name, value in prop.items()
+                    name: {
+                        "value": value.value,
+                        "unit": value.unit,
+                        "metadata_json": value.metadata_json,
+                    }
+                    for name, value in prop.items()
                 }
             self._resource = self.backend.copy_resource(
                 self._resource.id,

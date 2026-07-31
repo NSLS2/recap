@@ -124,6 +124,7 @@ class AttributeValueSchema(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
     value: Any = None
     unit: str | None = None
+    metadata_json: dict[str, Any] = Field(default_factory=dict)
 
     def __str__(self) -> str:
         """Return ``"<value><unit>"`` when a unit is set, otherwise ``str(value)``."""

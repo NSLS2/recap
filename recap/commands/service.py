@@ -360,6 +360,8 @@ class CommandService:
                     value.set_value(deepcopy(raw_value.get("value")))
                     if "unit" in raw_value:
                         value.unit = raw_value["unit"]
+                    if "metadata_json" in raw_value:
+                        value.metadata_json = deepcopy(raw_value["metadata_json"])
                 else:
                     value.set_value(deepcopy(raw_value))
 

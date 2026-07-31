@@ -56,6 +56,7 @@ def _create_source(client):
             parent=child,
         )
         root.properties["details"]._values["value"].value = [1, {"nested": [2]}]
+        root.properties["details"]._values["value"].unit = "uL"
         root.properties["details"]._values["value"].metadata_json = {"tags": ["source"]}
         child.properties["details"]._values["value"].value = [3]
         grandchild.properties["details"]._values["value"].value = [4]
@@ -168,6 +169,27 @@ def test_copy_resource_isolates_mutable_values_and_applies_root_overrides(client
     assert source["values"]["root"] == [1, {"nested": [2]}]
     assert clone["metadata"] == {"tags": ["source", "copy"]}
     assert source["metadata"] == {"tags": ["source"]}
+
+
+def test_builder_copy_on_write_preserves_value_metadata(client):
+    setup = _create_source(client)
+    uow = client.backend.begin()
+    client.backend.session.get(Resource, setup["source_id"]).activate()
+    uow.commit()
+    client.set_namespace(setup["source_namespace_id"])
+
+    with client.build_resource(resource_id=setup["source_id"]) as builder:
+        value = builder.resource.properties["details"].values["value"]
+        value.unit = "mL"
+        value.metadata_json = {"tags": ["builder"]}
+    copied_id = builder.resource.id
+
+    source = _load_tree(client, setup["source_id"])["root"]
+    copied = _load_tree(client, copied_id)["root"]
+    copied_value = copied.properties["details"]._values["value"]
+    assert copied_value.unit == "mL"
+    assert copied_value.metadata_json == {"tags": ["builder"]}
+    assert source.status is LifecycleStatus.ACTIVE
 
 
 def test_copy_resource_activates_source_and_owns_clone_in_destination(client):
