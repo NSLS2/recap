@@ -78,6 +78,21 @@ class ProcessTemplateDraft(DraftModel):
         return self
 
 
+class ResourceTemplateDraft(DraftModel):
+    name: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    labels: tuple[str, ...] = ()
+    type_names: tuple[str, ...] = ()
+    property_groups: tuple[AttributeGroupDraft, ...] = ()
+    children: tuple[ResourceTemplateDraft, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_nested_names(self):
+        _require_unique(self.property_groups, "property group")
+        _require_unique(self.children, "child template")
+        return self
+
+
 def _require_unique(items, kind: str) -> None:
     seen: set[str] = set()
     for item in items:

@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict
 
 from recap.authentication.models import RequestActor
 from recap.authorization.query import NamespacePolicy
-from recap.dsl.drafts import ProcessTemplateDraft
+from recap.dsl.drafts import ProcessTemplateDraft, ResourceTemplateDraft
 from recap.server.audit import AuditSink
 
 
@@ -32,6 +32,17 @@ class UpdateProcessTemplate(CommandModel):
     template_id: UUID
     expected_revision: int
     draft: ProcessTemplateDraft
+
+
+class CreateResourceTemplate(CommandModel):
+    namespace_path: str
+    draft: ResourceTemplateDraft
+
+
+class UpdateResourceTemplate(CommandModel):
+    template_id: UUID
+    expected_revision: int
+    draft: ResourceTemplateDraft
 
 
 @dataclass(frozen=True, slots=True)

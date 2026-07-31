@@ -24,7 +24,9 @@ from recap.commands.models import (
     CommandContext,
     CommandModel,
     CreateProcessTemplate,
+    CreateResourceTemplate,
     UpdateProcessTemplate,
+    UpdateResourceTemplate,
 )
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.audit import MutationAuditRepository
@@ -32,9 +34,9 @@ from recap.db.base import compare_and_swap_revision
 from recap.db.idempotency import IdempotencyRepository
 from recap.db.namespace import Namespace, NamespaceRepository
 from recap.db.process import ProcessTemplate, ResourceSlot
-from recap.db.resource import ResourceType
+from recap.db.resource import ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate, StepTemplateResourceSlotBinding
-from recap.dsl.drafts import ProcessTemplateDraft
+from recap.dsl.drafts import ProcessTemplateDraft, ResourceTemplateDraft
 from recap.lifecycle import LifecycleStatus, validate_transition
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.namespace import NamespaceSchema
@@ -59,6 +61,11 @@ class _UpdateProcessTemplateFingerprint(BaseModel):
     expected_revision: int
 
 
+class _UpdateResourceTemplateFingerprint(BaseModel):
+    draft: ResourceTemplateDraft
+    expected_revision: int
+
+
 class CommandService:
     """Execute namespace writes with one owning database transaction."""
 
@@ -74,6 +81,17 @@ class CommandService:
             )
         if isinstance(command, UpdateProcessTemplate):
             return self.update_process_template(
+                context,
+                template_id=command.template_id,
+                expected_revision=command.expected_revision,
+                draft=command.draft,
+            )
+        if isinstance(command, CreateResourceTemplate):
+            return self.create_resource_template(
+                context, namespace_path=command.namespace_path, draft=command.draft
+            )
+        if isinstance(command, UpdateResourceTemplate):
+            return self.update_resource_template(
                 context,
                 template_id=command.template_id,
                 expected_revision=command.expected_revision,
@@ -392,6 +410,250 @@ class CommandService:
                 resource_type="process_template",
             )
             raise
+
+    def create_resource_template(
+        self,
+        context: CommandContext,
+        *,
+        namespace_path: str,
+        draft: ResourceTemplateDraft,
+    ):
+        try:
+            canonical_path = canonicalize_namespace_path(namespace_path)
+        except ValueError as error:
+            raise CommandValidationError(str(error)) from error
+        self._authorize(context, canonical_path, mutation="create_resource_template")
+        fingerprint = command_fingerprint(
+            method="POST",
+            route_template="/api/v1/namespaces/{namespace_path:path}/resource-templates",
+            namespace_path=canonical_path,
+            source_id=None,
+            body=draft,
+        )
+        try:
+            with self._session_factory.begin() as session:
+                namespace = session.scalar(
+                    select(Namespace).where(Namespace.path == canonical_path)
+                )
+                if namespace is None:
+                    raise CommandNotFoundError("Namespace not found")
+                idempotency = IdempotencyRepository(session)
+                decision = self._claim(
+                    idempotency, context, fingerprint, lambda _id: None
+                )
+                if decision is not None and decision.replayed:
+                    assert decision.response is not None
+                    from recap.schemas.resource import ResourceTemplateSchema
+
+                    return ResourceTemplateSchema.model_validate(decision.response)
+                template = self._materialize_resource_template(
+                    session, namespace, draft
+                )
+                session.flush()
+                from recap.schemas.resource import ResourceTemplateSchema
+
+                result = ResourceTemplateSchema.model_validate(template)
+                response = result.model_dump(mode="json")
+                if decision is not None:
+                    idempotency.complete(
+                        decision, target_id=str(template.id), response=response
+                    )
+                self._emit_success(
+                    session,
+                    context,
+                    "create_resource_template",
+                    str(template.id),
+                    resource_type="resource_template",
+                )
+                return result
+        except IntegrityError as error:
+            mapped = CommandConflictError("Resource template already exists")
+            self._emit_failure(
+                context,
+                "create_resource_template",
+                None,
+                mapped,
+                resource_type="resource_template",
+            )
+            raise mapped from error
+        except Exception as error:
+            self._emit_failure(
+                context,
+                "create_resource_template",
+                None,
+                error,
+                resource_type="resource_template",
+            )
+            raise
+
+    def update_resource_template(
+        self,
+        context: CommandContext,
+        *,
+        template_id: UUID,
+        expected_revision: int,
+        draft: ResourceTemplateDraft,
+    ):
+        if expected_revision < 1:
+            raise CommandValidationError("Expected revision must be positive")
+        fingerprint = command_fingerprint(
+            method="PATCH",
+            route_template="/api/v1/resource-templates/{template_id}",
+            namespace_path=None,
+            source_id=template_id,
+            body=_UpdateResourceTemplateFingerprint(
+                draft=draft, expected_revision=expected_revision
+            ),
+        )
+        try:
+            with self._session_factory.begin() as session:
+                template = session.get(ResourceTemplate, template_id)
+                if template is None:
+                    raise CommandNotFoundError("Resource template not found")
+                self._authorize(
+                    context,
+                    template.namespace.path,
+                    mutation="update_resource_template",
+                )
+                idempotency = IdempotencyRepository(session)
+                decision = self._claim(
+                    idempotency, context, fingerprint, lambda _id: None
+                )
+                if decision is not None and decision.replayed:
+                    assert decision.response is not None
+                    from recap.schemas.resource import ResourceTemplateSchema
+
+                    return ResourceTemplateSchema.model_validate(decision.response)
+                if template.status is not LifecycleStatus.MUTABLE:
+                    raise CommandConflictError(
+                        "Cannot update an active resource template"
+                    )
+                duplicate = session.scalar(
+                    select(ResourceTemplate.id).where(
+                        ResourceTemplate.namespace_id == template.namespace_id,
+                        ResourceTemplate.parent_id == template.parent_id,
+                        ResourceTemplate.name == draft.name,
+                        ResourceTemplate.version == draft.version,
+                        ResourceTemplate.id != template.id,
+                    )
+                )
+                if duplicate is not None:
+                    raise CommandConflictError("Resource template already exists")
+                compare_and_swap_revision(
+                    session,
+                    ResourceTemplate,
+                    template_id,
+                    expected_revision=expected_revision,
+                    values={
+                        "name": draft.name,
+                        "version": draft.version,
+                        "labels": list(draft.labels),
+                    },
+                )
+                self._clear_resource_template(session, template)
+                self._materialize_resource_contents(session, template, draft)
+                session.flush()
+                session.refresh(template)
+                from recap.schemas.resource import ResourceTemplateSchema
+
+                result = ResourceTemplateSchema.model_validate(template)
+                response = result.model_dump(mode="json")
+                if decision is not None:
+                    idempotency.complete(
+                        decision, target_id=str(template.id), response=response
+                    )
+                self._emit_success(
+                    session,
+                    context,
+                    "update_resource_template",
+                    str(template.id),
+                    resource_type="resource_template",
+                )
+                return result
+        except Exception as error:
+            self._emit_failure(
+                context,
+                "update_resource_template",
+                str(template_id),
+                error,
+                resource_type="resource_template",
+            )
+            raise
+
+    @staticmethod
+    def _materialize_resource_template(session, namespace, draft):
+        template = ResourceTemplate(
+            namespace=namespace,
+            name=draft.name,
+            version=draft.version,
+            labels=list(draft.labels),
+        )
+        session.add(template)
+        CommandService._materialize_resource_contents(session, template, draft)
+        return template
+
+    @staticmethod
+    def _materialize_resource_contents(session, template, draft):
+        template.types = []
+        for type_name in draft.type_names:
+            resource_type = session.scalar(
+                select(ResourceType).where(ResourceType.name == type_name)
+            )
+            if resource_type is None:
+                resource_type = ResourceType(name=type_name)
+                session.add(resource_type)
+            template.types.append(resource_type)
+        for group_draft in draft.property_groups:
+            group = AttributeGroupTemplate(name=group_draft.name)
+            template.attribute_group_templates.append(group)
+            for attribute_draft in group_draft.attributes:
+                validated = AttributeTemplateValidator.model_validate(
+                    attribute_draft.model_dump()
+                )
+                default = validated.default
+                if isinstance(default, list):
+                    default = json.dumps(default, default=str)
+                group.attribute_templates.append(
+                    AttributeTemplate(
+                        name=validated.name,
+                        value_type=validated.type,
+                        unit=validated.unit,
+                        default_value=default,
+                        metadata_json=validated.metadata,
+                    )
+                )
+        for child_draft in draft.children:
+            child = ResourceTemplate(
+                namespace=template.namespace,
+                name=child_draft.name,
+                version=child_draft.version,
+                labels=list(child_draft.labels),
+                parent=template,
+            )
+            session.add(child)
+            template.children[child.name] = child
+            CommandService._materialize_resource_contents(session, child, child_draft)
+
+    @staticmethod
+    def _clear_resource_template(session, template):
+        for child in list(template.children.values()):
+            CommandService._delete_resource_template_tree(session, child)
+        for group in list(template.attribute_group_templates):
+            for attribute in list(group.attribute_templates):
+                session.delete(attribute)
+            session.delete(group)
+        session.flush()
+        session.expire(template, ["children", "attribute_group_templates", "types"])
+
+    @staticmethod
+    def _delete_resource_template_tree(session, template):
+        for child in list(template.children.values()):
+            CommandService._delete_resource_template_tree(session, child)
+        for group in list(template.attribute_group_templates):
+            for attribute in list(group.attribute_templates):
+                session.delete(attribute)
+            session.delete(group)
+        session.delete(template)
 
     @staticmethod
     def _clear_process_template(session, template: ProcessTemplate) -> None:

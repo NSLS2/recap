@@ -13,9 +13,10 @@ from recap.authorization.policy import (
 )
 from recap.commands.models import CommandContext
 from recap.commands.service import CommandService
-from recap.dsl.drafts import ProcessTemplateDraft
+from recap.dsl.drafts import ProcessTemplateDraft, ResourceTemplateDraft
 from recap.schemas.namespace import NamespaceSchema
 from recap.schemas.process import ProcessTemplateSchema
+from recap.schemas.resource import ResourceTemplateSchema
 from recap.server.audit import AuditRecord
 from recap.server.errors import request_id_from
 from recap.server.rest_models import CreateNamespaceRequest, UpdateNamespaceRequest
@@ -136,6 +137,48 @@ def update_process_template(
     if_match: Annotated[str, Header(alias="If-Match")],
 ) -> ProcessTemplateSchema:
     result = CommandService(request.app.state.session_factory).update_process_template(
+        _context(request, actor, idempotency_key),
+        template_id=template_id,
+        expected_revision=_parse_if_match(if_match),
+        draft=body,
+    )
+    return _set_etag(response, result)
+
+
+@router.post(
+    "/namespaces/{namespace_path:path}/resource-templates",
+    response_model=ResourceTemplateSchema,
+    status_code=201,
+)
+def create_resource_template(
+    namespace_path: str,
+    body: ResourceTemplateDraft,
+    request: Request,
+    response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+) -> ResourceTemplateSchema:
+    result = CommandService(request.app.state.session_factory).create_resource_template(
+        _context(request, actor, idempotency_key),
+        namespace_path=namespace_path,
+        draft=body,
+    )
+    return _set_etag(response, result)
+
+
+@router.patch(
+    "/resource-templates/{template_id}", response_model=ResourceTemplateSchema
+)
+def update_resource_template(
+    template_id: UUID,
+    body: ResourceTemplateDraft,
+    request: Request,
+    response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    if_match: Annotated[str, Header(alias="If-Match")],
+) -> ResourceTemplateSchema:
+    result = CommandService(request.app.state.session_factory).update_resource_template(
         _context(request, actor, idempotency_key),
         template_id=template_id,
         expected_revision=_parse_if_match(if_match),

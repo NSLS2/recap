@@ -5,8 +5,13 @@ from uuid import UUID
 from pydantic import BaseModel, Field, create_model
 
 from recap.adapter import Backend
+from recap.commands.models import (
+    CreateResourceTemplate,
+    UpdateResourceTemplate,
+)
 from recap.db.resource import Resource
 from recap.dsl.attribute_builder import AttributeGroupBuilder
+from recap.dsl.drafts import AttributeDraft, AttributeGroupDraft, ResourceTemplateDraft
 from recap.dsl.query import QuerySpec
 from recap.exceptions import (
     ExistingResourceError,
@@ -326,15 +331,23 @@ class ResourceTemplateBuilder:
     def __init__(
         self,
         name: str | None,
-        type_names: list[str] | None,
+        type_names: list[str] | None = None,
         version: str = "1.0",
         parent: Optional["ResourceTemplateBuilder"] = None,
         backend: Backend | None = None,
         namespace_id: UUID | None = None,
         resource_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
+        namespace_path: str | None = None,
+        command_context=None,
     ):
         self._uow = None
+        self.namespace_path = namespace_path
+        self._command_context = command_context
+        self._command_mode = command_context is not None
+        self._submitted = False
+        self._draft_groups: list[AttributeGroupDraft] = []
+        self._draft_children: list[ResourceTemplateBuilder] = []
         self.namespace_id = namespace_id or (parent.namespace_id if parent else None)
         if self.namespace_id is None:
             raise ValueError("namespace_id is required")
@@ -349,6 +362,18 @@ class ResourceTemplateBuilder:
         self.on_existing = on_existing
         self._template: ResourceTemplateRef | ResourceTemplateSchema | None = None
         self._configure_backend(backend)
+        if self._command_mode:
+            if namespace_path is None:
+                raise ValueError(
+                    "namespace_path is required for command-backed builders"
+                )
+            if resource_template_id is not None:
+                self._initialize_command_update(resource_template_id)
+            elif name is None or type_names is None:
+                raise ValueError(
+                    "name and type_names are required to create a resource template"
+                )
+            return
         try:
             if resource_template_id is not None:
                 self._load_existing_template(resource_template_id)
@@ -363,11 +388,13 @@ class ResourceTemplateBuilder:
     def _configure_backend(self, backend: Backend | None):
         if backend:
             self.backend = backend
-            self._ensure_uow()
+            if not self._command_mode:
+                self._ensure_uow()
             return
         if self.parent:
             self.backend = self.parent.backend
-            self.parent._ensure_uow()
+            if not self._command_mode:
+                self.parent._ensure_uow()
             self._uow = self.parent._uow
             return
         raise ValueError("No parent builder or backend provided")
@@ -447,6 +474,8 @@ class ResourceTemplateBuilder:
         )
 
     def __enter__(self):
+        if self._command_mode:
+            return self
         self._ensure_uow()
         if self._template is not None:
             self._reload_template()
@@ -456,6 +485,10 @@ class ResourceTemplateBuilder:
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        if self._command_mode:
+            if exc_type is None:
+                self.save()
+            return
         if exc_type is None:
             self.save()
         else:
@@ -464,6 +497,25 @@ class ResourceTemplateBuilder:
             self._uow = None
 
     def save(self):
+        if self._command_mode:
+            if self._submitted:
+                return self
+            draft = self._build_draft()
+            if self._template is None:
+                command = CreateResourceTemplate(
+                    namespace_path=self.namespace_path, draft=draft
+                )
+            else:
+                command = UpdateResourceTemplate(
+                    template_id=self._template.id,
+                    expected_revision=self._expected_revision,
+                    draft=draft,
+                )
+            result = self.backend.execute(command, self._command_context)
+            if result is not None:
+                self._template = result
+            self._submitted = True
+            return self
         self._ensure_uow()
         self._uow.commit()
         self._uow = None
@@ -522,6 +574,24 @@ class ResourceTemplateBuilder:
         Returns:
             ``self``, to allow method chaining.
         """
+        if self._command_mode:
+            self._draft_groups.extend(
+                AttributeGroupDraft(
+                    name=group_key,
+                    attributes=[
+                        AttributeDraft(
+                            name=prop["name"],
+                            type=prop["type"],
+                            unit=prop.get("unit", ""),
+                            default=prop.get("default"),
+                            metadata=prop.get("metadata", {}),
+                        )
+                        for prop in props
+                    ],
+                )
+                for group_key, props in prop_def.items()
+            )
+            return self
         self._ensure_uow()
 
         for group_key, props in prop_def.items():
@@ -541,6 +611,18 @@ class ResourceTemplateBuilder:
     def add_child(
         self, name: str, type_names: list[str], version: str = "1.0"
     ) -> "ResourceTemplateBuilder":
+        if self._command_mode:
+            child_builder = ResourceTemplateBuilder(
+                name=name,
+                type_names=type_names,
+                version=version,
+                parent=self,
+                namespace_id=self.namespace_id,
+                namespace_path=self.namespace_path,
+                command_context=self._command_context,
+            )
+            self._draft_children.append(child_builder)
+            return child_builder
         self._ensure_uow()
         child_builder = ResourceTemplateBuilder(
             name=name,
@@ -608,3 +690,42 @@ class ResourceTemplateBuilder:
             return self.parent
         else:
             return self
+
+    def _build_draft(self) -> ResourceTemplateDraft:
+        return ResourceTemplateDraft(
+            name=self.name,
+            version=self.version,
+            type_names=self.type_names or (),
+            property_groups=self._draft_groups,
+            children=[child._build_draft() for child in self._draft_children],
+        )
+
+    def _initialize_command_update(self, resource_template_id: UUID) -> None:
+        template = self.backend.get_resource_template(
+            self.namespace_id,
+            name=None,
+            version=None,
+            id=resource_template_id,
+            expand=True,
+        )
+        self._template = template
+        self.name = template.name
+        self.version = template.version
+        self._expected_revision = template.revision
+        self.type_names = [resource_type.name for resource_type in template.types]
+        self._draft_groups = [
+            AttributeGroupDraft(
+                name=group.name,
+                attributes=[
+                    AttributeDraft(
+                        name=attribute.name,
+                        type=attribute.value_type,
+                        unit=attribute.unit or "",
+                        default=attribute.default_value,
+                        metadata=attribute.metadata or {},
+                    )
+                    for attribute in group.attribute_templates
+                ],
+            )
+            for group in template.attribute_group_templates
+        ]
