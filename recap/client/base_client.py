@@ -278,6 +278,7 @@ class RecapClient:
         *args,
         process_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
+        command_context=None,
         **kwargs,
     ) -> ProcessTemplateBuilder:
         """Open a builder for a :class:`~recap.dsl.process_builder.ProcessTemplateBuilder`.
@@ -332,6 +333,8 @@ class RecapClient:
                 namespace_id=self._namespace_context.id,
                 process_template_id=process_template_id,
                 on_existing=on_existing,
+                namespace_path=self._namespace_context.path,
+                command_context=command_context,
             )
 
         if args:
@@ -353,6 +356,8 @@ class RecapClient:
             backend=self.backend,
             namespace_id=self._namespace_context.id,
             on_existing=on_existing,
+            namespace_path=self._namespace_context.path,
+            command_context=command_context,
         )
 
     @overload
@@ -368,6 +373,7 @@ class RecapClient:
         *args,
         process_run_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
+        command_context=None,
         **kwargs,
     ) -> ProcessRunBuilder:
         """Open a builder for a :class:`~recap.dsl.process_builder.ProcessRunBuilder`.
@@ -426,8 +432,17 @@ class RecapClient:
                 else None,
                 backend=self.backend,
                 version=None,
-                process_run_id=process_run_id,
                 on_existing=on_existing,
+                namespace_path=self._namespace_context.path
+                if self._namespace_context
+                else None,
+                command_context=command_context,
+                process_run_id=process_run_id,
+                template_id=(
+                    self._resolve_process_template_id_for_builder(command_context)
+                    if command_context
+                    else None
+                ),
             )
 
         if args:
@@ -460,7 +475,30 @@ class RecapClient:
             backend=self.backend,
             version=version,
             on_existing=on_existing,
+            namespace_path=self._namespace_context.path,
+            command_context=command_context,
+            template_id=(
+                self._resolve_process_template_id_for_builder(
+                    command_context, template_name=template_name, version=version
+                )
+                if command_context
+                else None
+            ),
         )
+
+    def _resolve_process_template_id_for_builder(
+        self, command_context, *, template_name=None, version=None
+    ):
+        if template_name is None:
+            return None
+        read_backend = getattr(self, "_read_backend", self.backend)
+        template = read_backend.get_process_template(
+            self._namespace_context.id,
+            template_name,
+            version,
+            expand=False,
+        )
+        return template.id
 
     @overload
     def build_resource_template(
@@ -480,6 +518,7 @@ class RecapClient:
         version: str = "1.0",
         resource_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
+        command_context=None,
     ):
         """Open a builder for a :class:`~recap.dsl.resource_builder.ResourceTemplateBuilder`.
 
@@ -539,6 +578,8 @@ class RecapClient:
                 namespace_id=self._namespace_context.id,
                 resource_template_id=resource_template_id,
                 on_existing=on_existing,
+                namespace_path=self._namespace_context.path,
+                command_context=command_context,
             )
 
         if name is None or type_names is None:
@@ -555,6 +596,8 @@ class RecapClient:
             backend=self.backend,
             namespace_id=self._namespace_context.id,
             on_existing=on_existing,
+            namespace_path=self._namespace_context.path,
+            command_context=command_context,
         )
 
     @overload
@@ -575,6 +618,7 @@ class RecapClient:
         resource_id: UUID | None = None,
         on_existing: Literal["create", "silent", "warn", "raise"] = "warn",
         parent: "ResourceSchema | UUID | None" = None,
+        command_context=None,
         **kwargs,
     ):
         """Open a builder for a :class:`~recap.dsl.resource_builder.ResourceBuilder`.
@@ -646,6 +690,8 @@ class RecapClient:
                 namespace_id=self._namespace_context.id,
                 resource_id=resource_id,
                 on_existing=on_existing,
+                namespace_path=self._namespace_context.path,
+                command_context=command_context,
             )
 
         resolved_parent = self._resolve_parent(parent)
@@ -659,6 +705,8 @@ class RecapClient:
             namespace_id=self._namespace_context.id,
             on_existing=on_existing,
             parent=resolved_parent,
+            namespace_path=self._namespace_context.path,
+            command_context=command_context,
         )
 
     def _resolve_parent(

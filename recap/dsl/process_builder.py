@@ -141,8 +141,6 @@ class ProcessTemplateBuilder:
 
     def save(self):
         if self._command_mode:
-            if self._submitted:
-                return self
             draft = self._build_draft()
             if self._template is None:
                 command = CreateProcessTemplate(
@@ -157,6 +155,7 @@ class ProcessTemplateBuilder:
             result = self.backend.execute(command, self._command_context)
             if result is not None:
                 self._template = result
+                self._expected_revision = result.revision
             self._submitted = True
             return self
         self._ensure_uow()
@@ -497,9 +496,17 @@ class ProcessRunBuilder:
         self._submitted = False
         self._draft_assignments: dict[str, UUID] = {}
         if self._command_mode:
-            if namespace_path is None or template_id is None:
-                raise ValueError("namespace_path and template_id are required for command-backed builders")
-            self._process_run = None
+            if namespace_path is None or (template_id is None and process_run_id is None):
+                raise ValueError("namespace_path and template_id or process_run_id are required for command-backed builders")
+            self._process_run = (
+                self._reload_process_run(process_run_id)
+                if process_run_id is not None
+                else None
+            )
+            if self._process_run is not None:
+                self.name = self._process_run.name
+                self.description = self._process_run.description
+                self._template_id = self._process_run.template.id
             self._steps = []
             self._resources = {}
             return
@@ -632,10 +639,8 @@ class ProcessRunBuilder:
 
     def save(self):
         if self._command_mode:
-            if self._submitted:
-                return self
-            result = self.backend.execute(
-                CreateProcessRun(
+            if self._process_run is None:
+                command = CreateProcessRun(
                     namespace_path=self.namespace_path,
                     draft=ProcessRunDraft(
                         name=self.name,
@@ -643,9 +648,15 @@ class ProcessRunBuilder:
                         template_id=self._template_id,
                         assignments=self._draft_assignments,
                     ),
-                ),
-                self._command_context,
-            )
+                )
+            else:
+                command = UpdateProcessRun(
+                    process_run_id=self._process_run.id,
+                    expected_revision=self._process_run.revision,
+                    description=self.description,
+                    assignments=self._draft_assignments or None,
+                )
+            result = self.backend.execute(command, self._command_context)
             self._process_run = result
             self._submitted = True
             return self

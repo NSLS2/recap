@@ -6,7 +6,10 @@ from pydantic import BaseModel, Field, create_model
 
 from recap.adapter import Backend
 from recap.commands.models import (
+    CommandContext,
+    CreateResource,
     CreateResourceTemplate,
+    UpdateResource,
     UpdateResourceTemplate,
 )
 from recap.db.resource import Resource
@@ -44,6 +47,8 @@ class ResourceBuilder:
         parent: "ResourceBuilder | ResourceSchema | None" = None,
         resource_id: UUID | None = None,
         on_existing: Literal["create", "silent", "warn", "raise"] = "warn",
+        namespace_path: str | None = None,
+        command_context: CommandContext | None = None,
     ):
         self.name = name
         self.namespace_id = namespace_id or (
@@ -61,11 +66,24 @@ class ResourceBuilder:
                 "on_existing must be one of: 'create', 'silent', 'warn', 'raise'"
             )
         self.on_existing = on_existing
+        self.namespace_path = namespace_path
+        self._command_context = command_context
+        self._command_mode = command_context is not None
+        self._submitted = False
+        self._expected_revision = 1
         self._resource: ResourceSchema | None = None
         self._uow = None
         self._loaded_in_uow: bool = False
         self._configure_parent(parent)
         self._configure_backend(backend)
+        if self._command_mode:
+            if namespace_path is None:
+                raise ValueError("namespace_path is required for command-backed builders")
+            if resource_id is not None:
+                self._load_existing_resource(resource_id)
+            else:
+                self._prepare_new_resource()
+            return
         try:
             if resource_id is not None:
                 self._load_existing_resource(resource_id)
@@ -90,12 +108,14 @@ class ResourceBuilder:
     def _configure_backend(self, backend: Backend | None):
         if backend:
             self.backend = backend
-            self._ensure_uow()
+            if not self._command_mode:
+                self._ensure_uow()
             return
         if self.parent:
             self.backend = self.parent.backend
-            self.parent._ensure_uow()
-            self._uow = self.parent._uow
+            if not self._command_mode:
+                self.parent._ensure_uow()
+                self._uow = self.parent._uow
             return
         raise ValueError("backend is required")
 
@@ -146,6 +166,30 @@ class ResourceBuilder:
             expand=True,
         )
 
+    def _prepare_new_resource(self):
+        if self.name is None or self.template_name is None:
+            raise ValueError("name and template_name are required")
+        template = self.backend.get_resource_template(
+            self.namespace_id, name=self.template_name, version=self.template_version
+        )
+        self._template_id = template.id
+        if self.on_existing != "create":
+            parent_id = self.parent_resource.id if self.parent_resource else None
+            matches = self.backend.find_resources_by_identity(
+                self.namespace_id, self.name, parent_id, template.id
+            )
+            if matches:
+                if self.on_existing == "raise":
+                    raise ExistingResourceError(f"Resource {self.name!r} already exists")
+                if self.on_existing == "warn":
+                    warnings.warn(
+                        f"Resource {self.name!r} already exists and will be reused; no new resource will be created.",
+                        ExistingResourceWarning,
+                        stacklevel=2,
+                    )
+                self._resource = ResourceSchema.model_validate(matches[0])
+                self._expected_revision = self._resource.revision
+
     @classmethod
     def create(
         cls,
@@ -169,6 +213,8 @@ class ResourceBuilder:
             return rb.resource
 
     def __enter__(self):
+        if self._command_mode:
+            return self
         self._ensure_uow()
         if self._resource is not None and not self._loaded_in_uow:
             # Re-entering after save() or _restart_uow() — reload current state
@@ -179,6 +225,10 @@ class ResourceBuilder:
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        if self._command_mode:
+            if exc_type is None:
+                self.save()
+            return
         if exc_type is None:
             self.persist()
             self.save()
@@ -202,6 +252,26 @@ class ResourceBuilder:
         return self._uow
 
     def save(self):
+        if self._command_mode:
+            if self._resource is None:
+                command = CreateResource(
+                    namespace_path=self.namespace_path,
+                    name=self.name,
+                    template_id=self._template_id,
+                    parent_id=self.parent_resource.id if self.parent_resource else None,
+                )
+            else:
+                command = UpdateResource(
+                    resource_id=self._resource.id,
+                    expected_revision=self._expected_revision,
+                    name=self._resource.name,
+                )
+            result = self.backend.execute(command, self._command_context)
+            if result is not None:
+                self._resource = result
+                self._expected_revision = result.revision
+            self._submitted = True
+            return self
         self._ensure_uow()
         self._uow.commit()
         self._loaded_in_uow = False  # stale after commit; reload on next __enter__
@@ -368,6 +438,7 @@ class ResourceTemplateBuilder:
         self._command_context = command_context
         self._command_mode = command_context is not None
         self._submitted = False
+        self._expected_revision = 1
         self._draft_groups: list[AttributeGroupDraft] = []
         self._draft_children: list[ResourceTemplateBuilder] = []
         self.namespace_id = namespace_id or (parent.namespace_id if parent else None)
@@ -520,8 +591,6 @@ class ResourceTemplateBuilder:
 
     def save(self):
         if self._command_mode:
-            if self._submitted:
-                return self
             draft = self._build_draft()
             if self._template is None:
                 command = CreateResourceTemplate(
@@ -536,6 +605,7 @@ class ResourceTemplateBuilder:
             result = self.backend.execute(command, self._command_context)
             if result is not None:
                 self._template = result
+                self._expected_revision = result.revision
             self._submitted = True
             return self
         self._ensure_uow()
