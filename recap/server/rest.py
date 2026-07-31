@@ -16,10 +16,16 @@ from recap.commands.service import CommandService
 from recap.dsl.drafts import ProcessTemplateDraft, ResourceTemplateDraft
 from recap.schemas.namespace import NamespaceSchema
 from recap.schemas.process import ProcessTemplateSchema
-from recap.schemas.resource import ResourceTemplateSchema
+from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
 from recap.server.audit import AuditRecord
 from recap.server.errors import request_id_from
-from recap.server.rest_models import CreateNamespaceRequest, UpdateNamespaceRequest
+from recap.server.rest_models import (
+    CopyResourceRequest,
+    CreateNamespaceRequest,
+    CreateResourceRequest,
+    UpdateNamespaceRequest,
+    UpdateResourceRequest,
+)
 from recap.server.security import authenticate_request
 
 router = APIRouter(prefix="/api/v1")
@@ -183,5 +189,81 @@ def update_resource_template(
         template_id=template_id,
         expected_revision=_parse_if_match(if_match),
         draft=body,
+    )
+    return _set_etag(response, result)
+
+
+@router.post(
+    "/resources/{namespace_path:path}", response_model=None, status_code=201
+)
+def create_resource(
+    namespace_path: str,
+    body: CreateResourceRequest,
+    request: Request,
+    response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+) -> ResourceSchema:
+    from recap.commands.models import CreateResource
+
+    result = CommandService(request.app.state.session_factory).execute(
+        CreateResource(
+            namespace_path=namespace_path,
+            name=body.name,
+            template_id=UUID(body.template_id),
+            parent_id=UUID(body.parent_id) if body.parent_id else None,
+        ),
+        _context(request, actor, idempotency_key),
+    )
+    return _set_etag(response, result)
+
+
+@router.patch("/resources/{resource_id}", response_model=None)
+def update_resource(
+    resource_id: UUID,
+    body: UpdateResourceRequest,
+    request: Request,
+    response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    if_match: Annotated[str, Header(alias="If-Match")],
+) -> ResourceSchema:
+    from recap.commands.models import UpdateResource
+
+    result = CommandService(request.app.state.session_factory).execute(
+        UpdateResource(
+            resource_id=resource_id,
+            expected_revision=_parse_if_match(if_match),
+            name=body.name,
+            properties=body.properties,
+        ),
+        _context(request, actor, idempotency_key),
+    )
+    return _set_etag(response, result)
+
+
+@router.post(
+    "/resources/{source_resource_id}/copies/{destination_namespace_path:path}",
+    response_model=None,
+    status_code=201,
+)
+def copy_resource(
+    source_resource_id: UUID,
+    destination_namespace_path: str,
+    body: CopyResourceRequest,
+    request: Request,
+    response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+) -> ResourceSchema:
+    from recap.commands.models import CopyResource
+
+    result = CommandService(request.app.state.session_factory).execute(
+        CopyResource(
+            source_resource_id=source_resource_id,
+            destination_namespace_path=destination_namespace_path,
+            options=body,
+        ),
+        _context(request, actor, idempotency_key),
     )
     return _set_etag(response, result)

@@ -22,6 +22,8 @@ from recap.exceptions import (
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.resource import (
+    ResourceCopyChanges,
+    ResourceCopyOptions,
     ResourceSchema,
     ResourceTemplateRef,
     ResourceTemplateSchema,
@@ -219,6 +221,21 @@ class ResourceBuilder:
     def persist(self):
         if self._resource is None:
             raise RuntimeError("Resource not initialized")
+        if self._resource.status is not LifecycleStatus.MUTABLE:
+            changes = {}
+            for prop in self._resource.properties.values():
+                changes[prop.template.name] = {
+                    name: value.value for name, value in prop.items()
+                }
+            self._resource = self.backend.copy_resource(
+                self._resource.id,
+                self.namespace_id,
+                ResourceCopyOptions(
+                    name=self._resource.name,
+                    changes=ResourceCopyChanges(properties=changes),
+                ),
+            )
+            return self
         self._resource = self.backend.update_resource(self._resource)
         return self
 
