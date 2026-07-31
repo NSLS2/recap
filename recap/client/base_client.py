@@ -212,6 +212,11 @@ class RecapClient:
             raise RuntimeError("Permissions API requires a remote read backend")
         return read_backend.permissions(namespace_path)
 
+    def namespace(self, path: str):
+        from recap.client.namespace_client import NamespaceClient
+
+        return NamespaceClient(self, path.strip("/"))
+
     @classmethod
     def from_sqlite(
         cls, path: str | Path | None = None, echo: bool = False
@@ -943,12 +948,17 @@ class RecapClient:
     def query_maker(
         self,
         *,
-        context: NamespaceContext,
+        context: NamespaceContext | None = None,
+        namespace: str | None = None,
         on_unloaded: str = "warn",
     ):
         """Return a query DSL scoped to explicit Namespace context."""
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
+        if context is None:
+            if namespace is None:
+                raise TypeError("context or namespace is required")
+            context = NamespaceContext(id=UUID(int=0), path=namespace.strip("/"))
 
         read_backend = getattr(self, "_read_backend", self.backend) or self.backend
         if read_backend is None:
