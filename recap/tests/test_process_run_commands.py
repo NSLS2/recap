@@ -16,8 +16,14 @@ def test_process_run_builder_command_mode_submits_namespace_owned_command():
 
     backend = Backend()
     builder = ProcessRunBuilder(
-        "run", "description", None, uuid4(), backend, template_id=uuid4(),
-        namespace_path="beamline/amx", command_context=object(),
+        "run",
+        "description",
+        None,
+        uuid4(),
+        backend,
+        template_id=uuid4(),
+        namespace_path="beamline/amx",
+        command_context=object(),
     )
     builder.save()
     assert backend.command.draft.name == "run"

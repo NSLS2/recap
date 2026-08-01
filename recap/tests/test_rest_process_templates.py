@@ -13,7 +13,9 @@ def auth_header():
 
 @pytest.fixture
 def client(tmp_path):
-    with TestClient(create_app(tmp_path / "rest-process.db", api_key="secret")) as client:
+    with TestClient(
+        create_app(tmp_path / "rest-process.db", api_key="secret")
+    ) as client:
         yield client
 
 
@@ -71,7 +73,10 @@ def test_post_and_patch_process_template_routes(client, auth_header):
 
     assert created.status_code == 201
     UUID(created.json()["id"])
-    assert created.json()["step_templates"]["collect"]["resource_slots"]["source"]["name"] == "sample"
+    assert (
+        created.json()["step_templates"]["collect"]["resource_slots"]["source"]["name"]
+        == "sample"
+    )
     assert created.headers["ETag"] == '"1"'
 
     updated = client.patch(
@@ -94,12 +99,8 @@ def test_process_template_route_replay_and_validation(client, auth_header):
         "headers": {**auth_header, "Idempotency-Key": "template-1"},
         "json": draft(),
     }
-    first = client.post(
-        "/api/v1/namespaces/beamline/amx/process-templates", **request
-    )
-    replay = client.post(
-        "/api/v1/namespaces/beamline/amx/process-templates", **request
-    )
+    first = client.post("/api/v1/namespaces/beamline/amx/process-templates", **request)
+    replay = client.post("/api/v1/namespaces/beamline/amx/process-templates", **request)
     invalid = draft()
     invalid["steps"][0]["role_bindings"] = {"source": "missing"}
     rejected = client.post(

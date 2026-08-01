@@ -28,7 +28,11 @@ def test_process_run_create_update_finalize_and_replay(tmp_path):
                             {
                                 "name": "settings",
                                 "attributes": [
-                                    {"name": "exposure", "type": "float", "default": 0.1}
+                                    {
+                                        "name": "exposure",
+                                        "type": "float",
+                                        "default": 0.1,
+                                    }
                                 ],
                             }
                         ],
@@ -53,11 +57,14 @@ def test_process_run_create_update_finalize_and_replay(tmp_path):
         assert UUID(created.json()["id"])
         assert "collect" in created.json()["steps"]
         assert created.headers["ETag"] == '"1"'
-        assert client.post(
-            "/api/v1/process-runs/beamline/amx",
-            headers={**auth, "Idempotency-Key": "run"},
-            json=body,
-        ).json() == created.json()
+        assert (
+            client.post(
+                "/api/v1/process-runs/beamline/amx",
+                headers={**auth, "Idempotency-Key": "run"},
+                json=body,
+            ).json()
+            == created.json()
+        )
 
         updated = client.patch(
             f"/api/v1/process-runs/{created.json()['id']}",
@@ -73,7 +80,9 @@ def test_process_run_create_update_finalize_and_replay(tmp_path):
 def test_process_run_create_rolls_back_on_bad_parameter(tmp_path):
     with TestClient(create_app(tmp_path / "rollback.db", api_key="secret")) as client:
         auth = {"Authorization": "Apikey secret"}
-        client.put("/api/v1/namespaces/n", headers={**auth, "Idempotency-Key": "ns"}, json={})
+        client.put(
+            "/api/v1/namespaces/n", headers={**auth, "Idempotency-Key": "ns"}, json={}
+        )
         template = client.post(
             "/api/v1/namespaces/n/process-templates",
             headers={**auth, "Idempotency-Key": "pt"},
@@ -90,13 +99,16 @@ def test_process_run_create_rolls_back_on_bad_parameter(tmp_path):
             },
         )
         assert response.status_code == 422
-        assert client.post(
-            "/api/v1/process-runs/n",
-            headers={**auth, "Idempotency-Key": "run-2"},
-            json={
-                "name": "bad",
-                "description": "bad",
-                "template_id": template.json()["id"],
-                "steps": {},
-            },
-        ).status_code == 201
+        assert (
+            client.post(
+                "/api/v1/process-runs/n",
+                headers={**auth, "Idempotency-Key": "run-2"},
+                json={
+                    "name": "bad",
+                    "description": "bad",
+                    "template_id": template.json()["id"],
+                    "steps": {},
+                },
+            ).status_code
+            == 201
+        )

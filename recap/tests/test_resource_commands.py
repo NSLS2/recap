@@ -64,7 +64,9 @@ def _template(factory, path="beamline"):
 def _property_template(factory, path="beamline/properties"):
     with factory.begin() as session:
         namespace = Namespace(path=path)
-        template = ResourceTemplate(name="property-plate", version="1", namespace=namespace)
+        template = ResourceTemplate(
+            name="property-plate", version="1", namespace=namespace
+        )
         group = AttributeGroupTemplate(name="measurements", resource_template=template)
         AttributeTemplate(
             name="dose",
@@ -105,7 +107,10 @@ def test_resource_create_update_revision_and_frozen_patch(command_setup):
             name="plate-3",
         )
     with factory() as session:
-        assert session.scalar(select(Resource).where(Resource.id == created.id)).status is LifecycleStatus.ACTIVE
+        assert (
+            session.scalar(select(Resource).where(Resource.id == created.id)).status
+            is LifecycleStatus.ACTIVE
+        )
     assert audit.records[-1].outcome is AuditOutcome.ERROR
 
 
@@ -119,12 +124,18 @@ def test_resource_create_and_update_apply_complete_property_payload(command_setu
         template_id=template_id,
         properties={
             "measurements": {
-                "dose": {"value": 12, "unit": "mg", "metadata_json": {"source": "builder"}}
+                "dose": {
+                    "value": 12,
+                    "unit": "mg",
+                    "metadata_json": {"source": "builder"},
+                }
             }
         },
     )
     assert created.properties["measurements"].values["dose"].value == 12
-    assert created.properties["measurements"].values["dose"].metadata_json == {"source": "builder"}
+    assert created.properties["measurements"].values["dose"].metadata_json == {
+        "source": "builder"
+    }
 
     updated = service.update_resource(
         replace(context, idempotency_key="resource-property-update"),

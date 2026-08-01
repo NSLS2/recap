@@ -194,7 +194,9 @@ class CommandService:
             canonical_path = canonicalize_namespace_path(namespace_path)
         except ValueError as error:
             raise CommandValidationError(str(error)) from error
-        self._authorize_scope(context, canonical_path, Scope.RESOURCE_WRITE, "create_resource")
+        self._authorize_scope(
+            context, canonical_path, Scope.RESOURCE_WRITE, "create_resource"
+        )
         fingerprint = command_fingerprint(
             method="POST",
             route_template="/api/v1/resources/{namespace_path:path}",
@@ -209,7 +211,9 @@ class CommandService:
         )
         try:
             with self._session_factory.begin() as session:
-                namespace = session.scalar(select(Namespace).where(Namespace.path == canonical_path))
+                namespace = session.scalar(
+                    select(Namespace).where(Namespace.path == canonical_path)
+                )
                 if namespace is None:
                     raise CommandNotFoundError("Namespace not found")
                 template = session.get(ResourceTemplate, template_id)
@@ -219,9 +223,13 @@ class CommandService:
                 if parent_id and parent is None:
                     raise CommandNotFoundError("Parent resource not found")
                 if parent and parent.namespace_id != namespace.id:
-                    raise CommandValidationError("Parent resource belongs to another namespace")
+                    raise CommandValidationError(
+                        "Parent resource belongs to another namespace"
+                    )
                 idempotency = IdempotencyRepository(session)
-                decision = self._claim(idempotency, context, fingerprint, lambda _id: None)
+                decision = self._claim(
+                    idempotency, context, fingerprint, lambda _id: None
+                )
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
                     return ResourceSchema.model_validate(decision.response)
@@ -238,15 +246,27 @@ class CommandService:
                 result = ResourceSchema.model_validate(resource)
                 response = result.model_dump(mode="json")
                 if decision is not None:
-                    idempotency.complete(decision, target_id=str(resource.id), response=response)
-                self._emit_success(session, context, "create_resource", str(resource.id), resource_type="resource")
+                    idempotency.complete(
+                        decision, target_id=str(resource.id), response=response
+                    )
+                self._emit_success(
+                    session,
+                    context,
+                    "create_resource",
+                    str(resource.id),
+                    resource_type="resource",
+                )
                 return result
         except IntegrityError as error:
             mapped = CommandConflictError("Resource name already exists under parent")
-            self._emit_failure(context, "create_resource", None, mapped, resource_type="resource")
+            self._emit_failure(
+                context, "create_resource", None, mapped, resource_type="resource"
+            )
             raise mapped from error
         except Exception as error:
-            self._emit_failure(context, "create_resource", None, error, resource_type="resource")
+            self._emit_failure(
+                context, "create_resource", None, error, resource_type="resource"
+            )
             raise
 
     def update_resource(  # noqa: C901
@@ -263,43 +283,80 @@ class CommandService:
         if name is None and not properties:
             raise CommandValidationError("Resource update is empty")
         fingerprint = command_fingerprint(
-            method="PATCH", route_template="/api/v1/resources/{resource_id}",
-            namespace_path=None, source_id=resource_id,
-            body=_UpdateResourceFingerprint(name=name, properties=properties, expected_revision=expected_revision),
+            method="PATCH",
+            route_template="/api/v1/resources/{resource_id}",
+            namespace_path=None,
+            source_id=resource_id,
+            body=_UpdateResourceFingerprint(
+                name=name, properties=properties, expected_revision=expected_revision
+            ),
         )
         try:
             with self._session_factory.begin() as session:
                 resource = session.get(Resource, resource_id)
                 if resource is None:
                     raise CommandNotFoundError("Resource not found")
-                self._authorize_scope(context, resource.namespace.path, Scope.RESOURCE_WRITE, "update_resource")
+                self._authorize_scope(
+                    context,
+                    resource.namespace.path,
+                    Scope.RESOURCE_WRITE,
+                    "update_resource",
+                )
                 idempotency = IdempotencyRepository(session)
-                decision = self._claim(idempotency, context, fingerprint, lambda _id: None)
+                decision = self._claim(
+                    idempotency, context, fingerprint, lambda _id: None
+                )
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
                     return ResourceSchema.model_validate(decision.response)
                 if resource.status is not LifecycleStatus.MUTABLE:
                     raise CommandConflictError("Cannot update an active resource")
                 if name is not None:
-                    duplicate = session.scalar(select(Resource.id).where(
-                        Resource.parent_id == resource.parent_id, Resource.name == name, Resource.id != resource.id
-                    ))
+                    duplicate = session.scalar(
+                        select(Resource.id).where(
+                            Resource.parent_id == resource.parent_id,
+                            Resource.name == name,
+                            Resource.id != resource.id,
+                        )
+                    )
                     if duplicate is not None:
-                        raise CommandConflictError("Resource name already exists under parent")
+                        raise CommandConflictError(
+                            "Resource name already exists under parent"
+                        )
                     resource.name = name
                 if properties:
                     self._apply_resource_changes(resource, properties)
-                compare_and_swap_revision(session, Resource, resource_id, expected_revision=expected_revision, values={})
+                compare_and_swap_revision(
+                    session,
+                    Resource,
+                    resource_id,
+                    expected_revision=expected_revision,
+                    values={},
+                )
                 session.flush()
                 session.refresh(resource)
                 result = ResourceSchema.model_validate(resource)
                 response = result.model_dump(mode="json")
                 if decision is not None:
-                    idempotency.complete(decision, target_id=str(resource.id), response=response)
-                self._emit_success(session, context, "update_resource", str(resource.id), resource_type="resource")
+                    idempotency.complete(
+                        decision, target_id=str(resource.id), response=response
+                    )
+                self._emit_success(
+                    session,
+                    context,
+                    "update_resource",
+                    str(resource.id),
+                    resource_type="resource",
+                )
                 return result
         except Exception as error:
-            self._emit_failure(context, "update_resource", str(resource_id), error, resource_type="resource")
+            self._emit_failure(
+                context,
+                "update_resource",
+                str(resource_id),
+                error,
+                resource_type="resource",
+            )
             raise
 
     def copy_resource(  # noqa: C901
@@ -316,25 +373,44 @@ class CommandService:
         except ValueError as error:
             raise CommandValidationError(str(error)) from error
         fingerprint = command_fingerprint(
-            method="POST", route_template="/api/v1/resources/{source_resource_id}/copies/{destination_namespace_path:path}",
-            namespace_path=destination_path, source_id=source_resource_id, body=options,
+            method="POST",
+            route_template="/api/v1/resources/{source_resource_id}/copies/{destination_namespace_path:path}",
+            namespace_path=destination_path,
+            source_id=source_resource_id,
+            body=options,
         )
         try:
             with self._session_factory.begin() as session:
                 source = session.get(Resource, source_resource_id)
                 if source is None:
                     raise CommandNotFoundError("Resource not found")
-                destination = session.scalar(select(Namespace).where(Namespace.path == destination_path))
+                destination = session.scalar(
+                    select(Namespace).where(Namespace.path == destination_path)
+                )
                 if destination is None:
                     raise CommandNotFoundError("Destination namespace not found")
-                self._authorize_scope(context, source.namespace.path, Scope.RESOURCE_READ, "copy_resource")
-                self._authorize_scope(context, destination.path, Scope.RESOURCE_WRITE, "copy_resource", audit_denial=False)
+                self._authorize_scope(
+                    context, source.namespace.path, Scope.RESOURCE_READ, "copy_resource"
+                )
+                self._authorize_scope(
+                    context,
+                    destination.path,
+                    Scope.RESOURCE_WRITE,
+                    "copy_resource",
+                    audit_denial=False,
+                )
                 if source.parent_id is not None:
-                    raise CommandValidationError("Source resource must be a resource graph root")
+                    raise CommandValidationError(
+                        "Source resource must be a resource graph root"
+                    )
                 if not is_namespace_ancestor(source.namespace.path, destination.path):
-                    raise CommandValidationError("Destination namespace must be the source namespace or its descendant")
+                    raise CommandValidationError(
+                        "Destination namespace must be the source namespace or its descendant"
+                    )
                 idempotency = IdempotencyRepository(session)
-                decision = self._claim(idempotency, context, fingerprint, lambda _id: None)
+                decision = self._claim(
+                    idempotency, context, fingerprint, lambda _id: None
+                )
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
                     return ResourceSchema.model_validate(decision.response)
@@ -343,12 +419,24 @@ class CommandService:
                 for item in flat:
                     if item.parent_id is not None:
                         children.setdefault(item.parent_id, []).append(item)
+
                 def clone(original, parent=None):
-                    result = Resource(id=uuid4(), name=original.name, template=original.template,
-                                      namespace=destination, parent=parent, status=LifecycleStatus.MUTABLE,
-                                      revision=1, _init_children=False)
+                    result = Resource(
+                        id=uuid4(),
+                        name=original.name,
+                        template=original.template,
+                        namespace=destination,
+                        parent=parent,
+                        status=LifecycleStatus.MUTABLE,
+                        revision=1,
+                        _init_children=False,
+                    )
                     for original_property in original.properties.values():
-                        copied = Property(id=uuid4(), template=original_property.template, resource=result)
+                        copied = Property(
+                            id=uuid4(),
+                            template=original_property.template,
+                            resource=result,
+                        )
                         for key, value in original_property._values.items():
                             target = copied._values[key]
                             target.id = uuid4()
@@ -358,6 +446,7 @@ class CommandService:
                     for child in children.get(original.id, []):
                         clone(child, result)
                     return result
+
                 copied = clone(source)
                 copied.copied_from = source
                 if options.name is not None:
@@ -370,11 +459,25 @@ class CommandService:
                 result = ResourceSchema.model_validate(copied)
                 response = result.model_dump(mode="json")
                 if decision is not None:
-                    idempotency.complete(decision, target_id=str(copied.id), response=response)
-                self._emit_success(session, context, "copy_resource", str(copied.id), resource_type="resource")
+                    idempotency.complete(
+                        decision, target_id=str(copied.id), response=response
+                    )
+                self._emit_success(
+                    session,
+                    context,
+                    "copy_resource",
+                    str(copied.id),
+                    resource_type="resource",
+                )
                 return result
         except Exception as error:
-            self._emit_failure(context, "copy_resource", str(source_resource_id), error, resource_type="resource")
+            self._emit_failure(
+                context,
+                "copy_resource",
+                str(source_resource_id),
+                error,
+                resource_type="resource",
+            )
             raise
 
     @staticmethod
@@ -382,7 +485,11 @@ class CommandService:
         result = [root]
         pending = [root.id]
         while pending:
-            children = list(session.scalars(select(Resource).where(Resource.parent_id.in_(pending))).all())
+            children = list(
+                session.scalars(
+                    select(Resource).where(Resource.parent_id.in_(pending))
+                ).all()
+            )
             result.extend(children)
             pending = [child.id for child in children]
         return result
@@ -390,15 +497,31 @@ class CommandService:
     @staticmethod
     def _apply_resource_changes(resource, changes):
         for group_name, values in changes.items():
-            prop = next((item for item in resource.properties.values()
-                         if group_name in {item.template.name, item.template.slug}), None)
+            prop = next(
+                (
+                    item
+                    for item in resource.properties.values()
+                    if group_name in {item.template.name, item.template.slug}
+                ),
+                None,
+            )
             if prop is None:
-                raise CommandValidationError(f"Copied resource has no property group {group_name!r}")
+                raise CommandValidationError(
+                    f"Copied resource has no property group {group_name!r}"
+                )
             for attribute_name, raw_value in values.items():
-                value = next((item for item in prop._values.values()
-                              if attribute_name in {item.template.name, item.template.slug}), None)
+                value = next(
+                    (
+                        item
+                        for item in prop._values.values()
+                        if attribute_name in {item.template.name, item.template.slug}
+                    ),
+                    None,
+                )
                 if value is None:
-                    raise CommandValidationError(f"Property {attribute_name!r} not found in group {group_name!r}")
+                    raise CommandValidationError(
+                        f"Property {attribute_name!r} not found in group {group_name!r}"
+                    )
                 if isinstance(raw_value, dict):
                     value.set_value(deepcopy(raw_value.get("value")))
                     if "unit" in raw_value:
@@ -895,29 +1018,53 @@ class CommandService:
             )
             raise
 
-    def create_process_run(self, context: CommandContext, *, namespace_path: str, draft: ProcessRunDraft):
+    def create_process_run(
+        self, context: CommandContext, *, namespace_path: str, draft: ProcessRunDraft
+    ):
         try:
             target_path = canonicalize_namespace_path(namespace_path)
         except ValueError as error:
             raise CommandValidationError(str(error)) from error
-        self._authorize_scope(context, target_path, Scope.PROCESS_RUN_WRITE, "create_process_run")
+        self._authorize_scope(
+            context, target_path, Scope.PROCESS_RUN_WRITE, "create_process_run"
+        )
         fingerprint = command_fingerprint(
-            method="POST", route_template="/api/v1/process-runs/{namespace_path:path}",
-            namespace_path=target_path, source_id=None, body=draft,
+            method="POST",
+            route_template="/api/v1/process-runs/{namespace_path:path}",
+            namespace_path=target_path,
+            source_id=None,
+            body=draft,
         )
         try:
             with self._session_factory.begin() as session:
-                namespace = session.scalar(select(Namespace).where(Namespace.path == target_path))
+                namespace = session.scalar(
+                    select(Namespace).where(Namespace.path == target_path)
+                )
                 if namespace is None:
                     raise CommandNotFoundError("Namespace not found")
                 template = session.get(ProcessTemplate, draft.template_id)
                 if template is None:
                     raise CommandNotFoundError("Process template not found")
-                self._authorize_scope(context, template.namespace.path, Scope.PROCESS_TEMPLATE_READ, "create_process_run")
-                decision = self._claim(IdempotencyRepository(session), context, fingerprint, lambda _id: None)
+                self._authorize_scope(
+                    context,
+                    template.namespace.path,
+                    Scope.PROCESS_TEMPLATE_READ,
+                    "create_process_run",
+                )
+                decision = self._claim(
+                    IdempotencyRepository(session),
+                    context,
+                    fingerprint,
+                    lambda _id: None,
+                )
                 if decision is not None and decision.replayed:
                     return ProcessRunSchema.model_validate(decision.response)
-                run = ProcessRun(namespace=namespace, name=draft.name, description=draft.description, template=template)
+                run = ProcessRun(
+                    namespace=namespace,
+                    name=draft.name,
+                    description=draft.description,
+                    template=template,
+                )
                 session.add(run)
                 session.flush()
                 self._apply_run_assignments(session, run, draft.assignments, context)
@@ -928,42 +1075,88 @@ class CommandService:
                 result = self._process_run_schema(run)
                 if decision is not None:
                     idempotency = IdempotencyRepository(session)
-                    idempotency.complete(decision, target_id=str(run.id), response=result.model_dump(mode="json"))
-                self._emit_success(session, context, "create_process_run", str(run.id), resource_type="process_run")
+                    idempotency.complete(
+                        decision,
+                        target_id=str(run.id),
+                        response=result.model_dump(mode="json"),
+                    )
+                self._emit_success(
+                    session,
+                    context,
+                    "create_process_run",
+                    str(run.id),
+                    resource_type="process_run",
+                )
                 return result
         except IntegrityError as error:
             mapped = CommandConflictError("Process run already exists in namespace")
-            self._emit_failure(context, "create_process_run", None, mapped, resource_type="process_run")
+            self._emit_failure(
+                context, "create_process_run", None, mapped, resource_type="process_run"
+            )
             raise mapped from error
         except Exception as error:
-            self._emit_failure(context, "create_process_run", None, error, resource_type="process_run")
+            self._emit_failure(
+                context, "create_process_run", None, error, resource_type="process_run"
+            )
             raise
 
-    def update_process_run(self, context: CommandContext, *, process_run_id: UUID, expected_revision: int,  # noqa: C901
-                           description: str | None = None, status: str | None = None,
-                           assignments: dict[str, UUID] | None = None,
-                           steps: dict[str, dict[str, dict[str, object]]] | None = None):
+    def update_process_run(
+        self,
+        context: CommandContext,
+        *,
+        process_run_id: UUID,
+        expected_revision: int,  # noqa: C901
+        description: str | None = None,
+        status: str | None = None,
+        assignments: dict[str, UUID] | None = None,
+        steps: dict[str, dict[str, dict[str, object]]] | None = None,
+    ):
         if expected_revision < 1:
             raise CommandValidationError("Expected revision must be positive")
         fingerprint = command_fingerprint(
-            method="PATCH", route_template="/api/v1/process-runs/{process_run_id}",
-            namespace_path=None, source_id=process_run_id,
-            body=_UpdateProcessRunFingerprint(description=description, status=status,
-                                               assignments=assignments, steps=steps,
-                                               expected_revision=expected_revision),
+            method="PATCH",
+            route_template="/api/v1/process-runs/{process_run_id}",
+            namespace_path=None,
+            source_id=process_run_id,
+            body=_UpdateProcessRunFingerprint(
+                description=description,
+                status=status,
+                assignments=assignments,
+                steps=steps,
+                expected_revision=expected_revision,
+            ),
         )
         try:
             with self._session_factory.begin() as session:
                 run = session.get(ProcessRun, process_run_id)
                 if run is None:
                     raise CommandNotFoundError("Process run not found")
-                self._authorize_scope(context, run.namespace.path, Scope.PROCESS_RUN_WRITE, "update_process_run")
-                decision = self._claim(IdempotencyRepository(session), context, fingerprint, lambda _id: None)
+                self._authorize_scope(
+                    context,
+                    run.namespace.path,
+                    Scope.PROCESS_RUN_WRITE,
+                    "update_process_run",
+                )
+                decision = self._claim(
+                    IdempotencyRepository(session),
+                    context,
+                    fingerprint,
+                    lambda _id: None,
+                )
                 if decision is not None and decision.replayed:
                     return ProcessRunSchema.model_validate(decision.response)
-                if description is None and status is None and assignments is None and steps is None:
+                if (
+                    description is None
+                    and status is None
+                    and assignments is None
+                    and steps is None
+                ):
                     raise CommandValidationError("Process run update is empty")
-                if run.status is not LifecycleStatus.MUTABLE and (description is not None or assignments is not None or steps is not None):
+                if run.status is not LifecycleStatus.MUTABLE and (
+                    description is not None
+                    or assignments is not None
+                    or steps is not None
+                ):
                     raise CommandConflictError("Cannot update a finalized process run")
                 if assignments is not None:
                     self._apply_run_assignments(session, run, assignments, context)
@@ -982,19 +1175,40 @@ class CommandService:
                             values["status"] = target_status
                     except ValueError as error:
                         raise CommandValidationError(str(error)) from error
-                compare_and_swap_revision(session, ProcessRun, process_run_id,
-                                          expected_revision=expected_revision, values=values)
+                compare_and_swap_revision(
+                    session,
+                    ProcessRun,
+                    process_run_id,
+                    expected_revision=expected_revision,
+                    values=values,
+                )
                 session.flush()
                 session.expire_all()
                 run = session.get(ProcessRun, process_run_id)
                 session.refresh(run)
                 result = self._process_run_schema(run)
                 if decision is not None:
-                    IdempotencyRepository(session).complete(decision, target_id=str(run.id), response=result.model_dump(mode="json"))
-                self._emit_success(session, context, "update_process_run", str(run.id), resource_type="process_run")
+                    IdempotencyRepository(session).complete(
+                        decision,
+                        target_id=str(run.id),
+                        response=result.model_dump(mode="json"),
+                    )
+                self._emit_success(
+                    session,
+                    context,
+                    "update_process_run",
+                    str(run.id),
+                    resource_type="process_run",
+                )
                 return result
         except Exception as error:
-            self._emit_failure(context, "update_process_run", str(process_run_id), error, resource_type="process_run")
+            self._emit_failure(
+                context,
+                "update_process_run",
+                str(process_run_id),
+                error,
+                resource_type="process_run",
+            )
             raise
 
     @staticmethod
@@ -1004,16 +1218,18 @@ class CommandService:
             current = result.steps[orm_step.name]
             if orm_step.parameters:
                 parameters = {
-                    name: ParameterSchema.model_validate({
-                        "id": parameter.id,
-                        "create_date": parameter.create_date,
-                        "modified_date": parameter.modified_date,
-                        "template": parameter.template,
-                        "values": {
-                            value_name: {"value": value.value, "unit": value.unit}
-                            for value_name, value in parameter._values.items()
-                        },
-                    })
+                    name: ParameterSchema.model_validate(
+                        {
+                            "id": parameter.id,
+                            "create_date": parameter.create_date,
+                            "modified_date": parameter.modified_date,
+                            "template": parameter.template,
+                            "values": {
+                                value_name: {"value": value.value, "unit": value.unit}
+                                for value_name, value in parameter._values.items()
+                            },
+                        }
+                    )
                     for name, parameter in orm_step.parameters.items()
                 }
                 payload = current.model_dump()
@@ -1024,13 +1240,25 @@ class CommandService:
     @staticmethod
     def _apply_run_assignments(session, run, assignments, context):
         for slot_name, resource_id in assignments.items():
-            slot = next((item for item in run.template.resource_slots if item.name == slot_name), None)
+            slot = next(
+                (
+                    item
+                    for item in run.template.resource_slots
+                    if item.name == slot_name
+                ),
+                None,
+            )
             if slot is None:
                 raise CommandValidationError(f"Resource slot {slot_name!r} not found")
             resource = session.get(Resource, resource_id)
             if resource is None:
                 raise CommandNotFoundError("Resource not found")
-            CommandService._authorize_scope(context, resource.namespace.path, Scope.RESOURCE_READ, "create_process_run")
+            CommandService._authorize_scope(
+                context,
+                resource.namespace.path,
+                Scope.RESOURCE_READ,
+                "create_process_run",
+            )
             run.resources[slot] = resource
 
     @staticmethod
@@ -1042,13 +1270,24 @@ class CommandService:
             for group_name, values in (step_data.parameters or {}).items():
                 param = step.parameters.get(group_name)
                 if param is None:
-                    raise CommandValidationError(f"Parameter group {group_name!r} not found")
+                    raise CommandValidationError(
+                        f"Parameter group {group_name!r} not found"
+                    )
                 for attr_name, raw in values.items():
                     value = param._values.get(attr_name)
                     if value is None:
-                        value = next((item for key, item in param._values.items() if item.template.slug == attr_name), None)
+                        value = next(
+                            (
+                                item
+                                for key, item in param._values.items()
+                                if item.template.slug == attr_name
+                            ),
+                            None,
+                        )
                     if value is None:
-                        raise CommandValidationError(f"Parameter {attr_name!r} not found")
+                        raise CommandValidationError(
+                            f"Parameter {attr_name!r} not found"
+                        )
                     if isinstance(raw, dict):
                         value.set_value(raw.get("value"))
                         if "unit" in raw:
@@ -1247,8 +1486,12 @@ class CommandService:
         if audit_denial:
             context.audit_sink.emit(
                 CommandService._audit_record(
-                    context, mutation, None, AuditOutcome.DENIED,
-                    DenialCode.INSUFFICIENT_SCOPE, resource_type="resource"
+                    context,
+                    mutation,
+                    None,
+                    AuditOutcome.DENIED,
+                    DenialCode.INSUFFICIENT_SCOPE,
+                    resource_type="resource",
                 )
             )
         raise AuthorizationDenied()

@@ -496,8 +496,12 @@ class ProcessRunBuilder:
         self._submitted = False
         self._draft_assignments: dict[str, UUID] = {}
         if self._command_mode:
-            if namespace_path is None or (template_id is None and process_run_id is None):
-                raise ValueError("namespace_path and template_id or process_run_id are required for command-backed builders")
+            if namespace_path is None or (
+                template_id is None and process_run_id is None
+            ):
+                raise ValueError(
+                    "namespace_path and template_id or process_run_id are required for command-backed builders"
+                )
             self._process_run = (
                 self._reload_process_run(process_run_id)
                 if process_run_id is not None

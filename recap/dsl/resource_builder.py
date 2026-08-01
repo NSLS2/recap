@@ -79,7 +79,9 @@ class ResourceBuilder:
         self._configure_backend(backend)
         if self._command_mode:
             if namespace_path is None:
-                raise ValueError("namespace_path is required for command-backed builders")
+                raise ValueError(
+                    "namespace_path is required for command-backed builders"
+                )
             if resource_id is not None:
                 self._load_existing_resource(resource_id)
             else:
@@ -186,7 +188,9 @@ class ResourceBuilder:
             )
             if matches:
                 if self.on_existing == "raise":
-                    raise ExistingResourceError(f"Resource {self.name!r} already exists")
+                    raise ExistingResourceError(
+                        f"Resource {self.name!r} already exists"
+                    )
                 if self.on_existing == "warn":
                     warnings.warn(
                         f"Resource {self.name!r} already exists and will be reused; no new resource will be created.",
@@ -218,8 +222,7 @@ class ResourceBuilder:
             template=template,
             children={},
             properties={
-                name: self._property_schema(value)
-                for name, value in properties.items()
+                name: self._property_schema(value) for name, value in properties.items()
             },
             namespace_id=self.namespace_id,
             revision=1,
@@ -337,9 +340,7 @@ class ResourceBuilder:
                 value_name: {
                     "value": getattr(prop.values, value_name).value,
                     "unit": getattr(prop.values, value_name).unit,
-                    "metadata_json": getattr(
-                        prop.values, value_name
-                    ).metadata_json,
+                    "metadata_json": getattr(prop.values, value_name).metadata_json,
                 }
                 for value_name in value_names
             }

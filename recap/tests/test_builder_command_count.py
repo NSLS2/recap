@@ -47,6 +47,8 @@ def test_repeated_save_uses_latest_revision():
     builder.save()
 
     assert len(backend.commands) == 2
-    assert all(isinstance(command, UpdateProcessTemplate) for command in backend.commands)
+    assert all(
+        isinstance(command, UpdateProcessTemplate) for command in backend.commands
+    )
     assert backend.commands[0].expected_revision == 3
     assert backend.commands[1].expected_revision == 4

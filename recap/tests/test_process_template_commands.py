@@ -65,7 +65,13 @@ def command_setup(tmp_path):
     )
     service = CommandService(factory)
     namespace = service.create_namespace(context, path="beamline/amx", metadata={})
-    return service, factory, replace(context, idempotency_key="template-1"), namespace, audit
+    return (
+        service,
+        factory,
+        replace(context, idempotency_key="template-1"),
+        namespace,
+        audit,
+    )
 
 
 def process_draft(*, labels=None):
@@ -154,7 +160,10 @@ def test_create_persists_complete_graph_replays_and_audits(command_setup):
     assert len(audit.records) == 2  # namespace create plus one non-replayed mutation
     with factory() as session:
         assert len(session.scalars(select(ProcessTemplate)).all()) == 1
-        assert session.scalars(select(MutationAudit)).all()[-1].resource_type == "process_template"
+        assert (
+            session.scalars(select(MutationAudit)).all()[-1].resource_type
+            == "process_template"
+        )
 
 
 def test_duplicate_identity_conflicts(command_setup):

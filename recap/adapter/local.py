@@ -750,7 +750,9 @@ class LocalBackend(Backend):
                     if "unit" in raw_value:
                         copied_value.unit = raw_value["unit"]
                     if "metadata_json" in raw_value:
-                        copied_value.metadata_json = deepcopy(raw_value["metadata_json"])
+                        copied_value.metadata_json = deepcopy(
+                            raw_value["metadata_json"]
+                        )
                 else:
                     copied_value.set_value(deepcopy(raw_value))
 
