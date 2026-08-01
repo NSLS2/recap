@@ -1100,12 +1100,12 @@ class CommandService:
             )
             raise
 
-    def update_process_run(
+    def update_process_run(  # noqa: C901
         self,
         context: CommandContext,
         *,
         process_run_id: UUID,
-        expected_revision: int,  # noqa: C901
+        expected_revision: int,
         description: str | None = None,
         status: str | None = None,
         assignments: dict[str, UUID] | None = None,
