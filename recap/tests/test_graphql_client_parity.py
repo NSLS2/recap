@@ -1,5 +1,4 @@
 from contextlib import ExitStack, nullcontext
-from urllib.parse import urlparse
 
 import httpx2
 import pytest
@@ -106,15 +105,10 @@ def parity_clients(tmp_path, monkeypatch):
             TestClient(create_app(db_path, api_key=api_key))
         )
 
-        def get(url, *args, **kwargs):
-            assert urlparse(url).path == "/db_path"
-            return app_client.get("/db_path", *args, **kwargs)
-
         def post(_client, url, *, json, **kwargs):
-            assert urlparse(url).path == "/graphql"
+            assert url.endswith("/graphql")
             return app_client.post("/graphql", json=json, **kwargs)
 
-        monkeypatch.setattr(httpx2, "get", get)
         monkeypatch.setattr(httpx2.Client, "post", post)
         remote = stack.enter_context(
             RecapClient.from_url("http://recap.test", api_key=api_key)

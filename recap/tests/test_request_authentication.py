@@ -32,7 +32,7 @@ def test_valid_api_key_authenticates(test_client, configured_key):
 
 
 def test_api_key_authentication_applies_to_non_graphql_routes(test_client):
-    response = test_client.get("/db_path")
+    response = test_client.put("/api/v1/namespaces/test", json={})
 
     assert response.status_code == 401
     assert response.headers["WWW-Authenticate"] == "Apikey"

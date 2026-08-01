@@ -51,17 +51,6 @@ def _select_database(
     return None, database_uri
 
 
-def _register_db_path_endpoint(app: FastAPI, path: Path | None) -> None:
-    if path is None:
-        return
-
-    @app.get("/db_path", summary="Get database path")
-    def get_db_path() -> dict[str, str]:
-        """Return path used for legacy direct SQLite clients."""
-
-        return {"db_path": str(path.resolve())}
-
-
 def create_app(
     db_path: str | Path | None = None,
     *,
@@ -76,9 +65,9 @@ def create_app(
         api_key: Optional key that enables authentication on every route.
 
     Returns:
-        Configured FastAPI application with /graphql and /db_path endpoints.
+        Configured FastAPI application with /graphql and REST command endpoints.
     """
-    path, database_url = _select_database(db_path, database_uri)
+    _, database_url = _select_database(db_path, database_uri)
     database_config = _DatabaseConfiguration(database_url)
     apply_migrations(database_url)
     engine, session_factory = create_engine_and_session_factory(database_config)
@@ -169,7 +158,5 @@ def create_app(
 
     app.include_router(graphql_router, prefix="/graphql")
     app.include_router(rest_router)
-
-    _register_db_path_endpoint(app, path)
 
     return app

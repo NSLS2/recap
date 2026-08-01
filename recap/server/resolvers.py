@@ -9,7 +9,7 @@ import strawberry
 from pydantic import BaseModel, ValidationError
 from strawberry.scalars import JSON
 
-from recap.adapter.local import LocalBackend
+from recap.adapter import ReadBackend
 from recap.adapter.transport import QueryResult, serialize_model
 from recap.authorization.query import AuthorizedQuery
 from recap.dsl.query import QuerySpec
@@ -57,7 +57,7 @@ _SCHEMA_REGISTRY: Mapping[str, type[BaseModel]] = MappingProxyType(
 
 def _backend_and_authorization(
     info: strawberry.types.Info, namespace_path: str
-) -> tuple[LocalBackend, AuthorizedQuery | None]:
+) -> tuple[ReadBackend, AuthorizedQuery | None]:
     context = info.context
     if isinstance(context, StrawberryGraphQLContext):
         return context.backend, AuthorizedQuery.from_policy(

@@ -78,8 +78,7 @@ class GraphQLAdapter:
 
     Sends QuerySpec through the transport codec and hydrates returned schemas.
 
-    Phase 1 constraint: read-only. Write methods raise NotImplementedError.
-    Use LocalBackend (via RecapClient.from_url()) for writes.
+    Read-only transport. Remote writes use RESTAdapter.
     """
 
     def __init__(

@@ -19,7 +19,7 @@ def test_success_has_server_generated_uuid4_that_cannot_be_spoofed(tmp_path):
     from recap.server.app import create_app
 
     client = TestClient(create_app(tmp_path / "test.db"))
-    response = client.get("/db_path", headers={"X-Request-ID": "caller-id"})
+    response = client.get("/graphql", headers={"X-Request-ID": "caller-id"})
 
     assert response.status_code == 200
     request_id = response.headers["X-Request-ID"]
@@ -33,7 +33,7 @@ def test_authentication_failure_uses_safe_stable_envelope(tmp_path):
     secret = "correct-horse-battery-staple"
     client = TestClient(create_app(tmp_path / "test.db", api_key=secret))
     response = client.get(
-        "/db_path",
+        "/graphql",
         headers={"Authorization": f"Apikey wrong-{secret}", "X-Request-ID": "spoof"},
     )
 

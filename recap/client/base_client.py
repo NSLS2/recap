@@ -132,18 +132,13 @@ class RecapClient:
 
     @classmethod
     def from_url(
-        cls, url: str, *, api_key: str, unscoped: bool = False
+        cls, url: str, *, api_key: str, timeout: float = 30.0, unscoped: bool = False
     ) -> "RecapClient":
         """Connect to a recap GraphQL server.
 
-        Fetches ``/db_path`` from the server to obtain the SQLite file path,
-        then uses :class:`~recap.adapter.graphql.GraphQLAdapter` for reads and
-        :class:`~recap.adapter.local.LocalBackend` for direct writes.
-
-        Phase 1 constraint: requires a shared filesystem between client and
-        server — the server's ``db_path`` must be accessible from the client
-        machine.  This constraint is removed in Phase 2 when writes route
-        through REST.
+        Uses :class:`~recap.adapter.graphql.GraphQLAdapter` for reads and
+        :class:`~recap.adapter.rest.RESTAdapter` for writes. The client does
+        not require access to the server's database filesystem.
 
         Args:
             url: Base URL of the recap server, e.g. ``"http://localhost:8000"``.
@@ -155,55 +150,21 @@ class RecapClient:
             RecapConnectionError: If the server is unreachable or returns an
                 HTTP error response.
         """
-        import httpx2
-
         from recap.adapter.graphql import GraphQLAdapter, _RedactedAuthHeaders
-        from recap.exceptions import RecapConnectionError
+        from recap.adapter.rest import RESTAdapter
 
         if unscoped:
             raise ValueError("Remote clients do not support unscoped=True")
 
         base = url.rstrip("/")
         header_provider = _RedactedAuthHeaders(api_key)
-        try:
-            response = httpx2.get(f"{base}/db_path", headers=header_provider.as_dict())
-            response.raise_for_status()
-        except httpx2.ConnectError as exc:
-            raise RecapConnectionError(
-                url, message=header_provider.redact(str(exc))
-            ) from None
-        except httpx2.TimeoutException as exc:
-            raise RecapConnectionError(
-                url, message=header_provider.redact(str(exc))
-            ) from None
-        except httpx2.HTTPStatusError as exc:
-            raise RecapConnectionError(
-                url, status_code=exc.response.status_code
-            ) from None
-
-        db_path = response.json()["db_path"]
-
-        from recap.utils.migrations import apply_migrations
-
-        db_url = f"sqlite:///{db_path}"
-        apply_migrations(db_url)
-
-        from sqlalchemy import create_engine
-        from sqlalchemy.orm import sessionmaker
-
-        engine = create_engine(db_url, echo=False)
-        sm = sessionmaker(bind=engine, expire_on_commit=False, future=True)
-        write_backend = LocalBackend(sm)
         read_backend = GraphQLAdapter(
             graphql_url=f"{base}/graphql", _header_provider=header_provider
         )
-
-        instance = cls._from_backends(
+        write_backend = RESTAdapter(base_url=base, api_key=api_key, timeout=timeout)
+        return cls._from_backends(
             read_backend=read_backend, write_backend=write_backend
         )
-        instance.database_path = None  # server-side path, not local
-        instance.engine = engine
-        return instance
 
     def permissions(self, namespace_path: str) -> ActorPermissions:
         """Return typed effective permissions for current remote actor."""
@@ -894,6 +855,15 @@ class RecapClient:
         """Create a namespace and make it active for subsequent writes."""
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
+        if self.backend.__class__.__name__ == "RESTAdapter":
+            from recap.schemas.namespace import NamespaceSchema
+
+            result = self.backend.create_namespace(path, metadata)
+            namespace = NamespaceSchema.model_validate(result.entity)
+            self._namespace_context = NamespaceContext(
+                id=namespace.id, path=namespace.path
+            )
+            return self._namespace_context
         uow = self.backend.begin()
         try:
             self._namespace_context = self.backend.create_namespace(path, metadata)

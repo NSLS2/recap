@@ -8,7 +8,7 @@ from strawberry.fastapi import GraphQLRouter
 from strawberry.scalars import JSON
 from strawberry.schema.config import StrawberryConfig
 
-from recap.adapter.local import LocalBackend
+from recap.adapter import ReadBackend
 from recap.server.context import StrawberryGraphQLContext, graphql_context
 from recap.server.dependencies import get_local_backend
 from recap.server.resolvers import (
@@ -65,7 +65,7 @@ class Query:
     )
 
 
-def build_schema(backend: LocalBackend) -> strawberry.Schema:
+def build_schema(backend: ReadBackend) -> strawberry.Schema:
     """Build a Strawberry schema for introspection or testing only.
 
     For serving with FastAPI, use ``build_router()`` which properly injects
@@ -83,7 +83,7 @@ def build_router() -> GraphQLRouter:
 
     async def get_context(
         request: Request,
-        backend: Annotated[LocalBackend, Depends(get_local_backend)],
+        backend: Annotated[ReadBackend, Depends(get_local_backend)],
         authorization: Annotated[str | None, Header()] = None,
     ) -> StrawberryGraphQLContext:
         return await graphql_context(request, backend, authorization)

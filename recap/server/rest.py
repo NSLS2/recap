@@ -20,7 +20,11 @@ from recap.dsl.drafts import (
 )
 from recap.schemas.namespace import NamespaceSchema
 from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
-from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
+from recap.schemas.resource import (
+    ResourceCopyOptions,
+    ResourceSchema,
+    ResourceTemplateSchema,
+)
 from recap.server.audit import AuditRecord
 from recap.server.errors import request_id_from
 from recap.server.rest_models import (
@@ -198,8 +202,33 @@ def update_resource_template(
 
 
 @router.post(
-    "/resources/{namespace_path:path}", response_model=None, status_code=201
+    "/resources/{source_resource_id}/copies/{destination_namespace_path:path}",
+    response_model=None,
+    status_code=201,
 )
+def copy_resource(
+    source_resource_id: UUID,
+    destination_namespace_path: str,
+    body: CopyResourceRequest,
+    request: Request,
+    response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+) -> ResourceSchema:
+    from recap.commands.models import CopyResource
+
+    result = CommandService(request.app.state.session_factory).execute(
+        CopyResource(
+            source_resource_id=source_resource_id,
+            destination_namespace_path=destination_namespace_path,
+            options=ResourceCopyOptions.model_validate(body.model_dump()),
+        ),
+        _context(request, actor, idempotency_key),
+    )
+    return _set_etag(response, result)
+
+
+@router.post("/resources/{namespace_path:path}", response_model=None, status_code=201)
 def create_resource(
     namespace_path: str,
     body: CreateResourceRequest,
@@ -248,39 +277,18 @@ def update_resource(
 
 
 @router.post(
-    "/resources/{source_resource_id}/copies/{destination_namespace_path:path}",
-    response_model=None,
-    status_code=201,
+    "/process-runs/{namespace_path:path}", response_model=None, status_code=201
 )
-def copy_resource(
-    source_resource_id: UUID,
-    destination_namespace_path: str,
-    body: CopyResourceRequest,
+def create_process_run(
+    namespace_path: str,
+    body: ProcessRunDraft,
     request: Request,
     response: Response,
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
-) -> ResourceSchema:
-    from recap.commands.models import CopyResource
-
-    result = CommandService(request.app.state.session_factory).execute(
-        CopyResource(
-            source_resource_id=source_resource_id,
-            destination_namespace_path=destination_namespace_path,
-            options=body,
-        ),
-        _context(request, actor, idempotency_key),
-    )
-    return _set_etag(response, result)
-
-
-@router.post("/process-runs/{namespace_path:path}", response_model=None, status_code=201)
-def create_process_run(
-    namespace_path: str, body: ProcessRunDraft, request: Request, response: Response,
-    actor: Annotated[RequestActor, Depends(authenticate_request)],
-    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
 ) -> ProcessRunSchema:
     from recap.commands.models import CreateProcessRun
+
     result = CommandService(request.app.state.session_factory).execute(
         CreateProcessRun(namespace_path=namespace_path, draft=body),
         _context(request, actor, idempotency_key),
@@ -290,14 +298,22 @@ def create_process_run(
 
 @router.patch("/process-runs/{process_run_id}", response_model=None)
 def update_process_run(
-    process_run_id: UUID, body: dict, request: Request, response: Response,
+    process_run_id: UUID,
+    body: dict,
+    request: Request,
+    response: Response,
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
     if_match: Annotated[str, Header(alias="If-Match")],
 ) -> ProcessRunSchema:
     from recap.commands.models import UpdateProcessRun
+
     result = CommandService(request.app.state.session_factory).execute(
-        UpdateProcessRun(process_run_id=process_run_id, expected_revision=_parse_if_match(if_match), **body),
+        UpdateProcessRun(
+            process_run_id=process_run_id,
+            expected_revision=_parse_if_match(if_match),
+            **body,
+        ),
         _context(request, actor, idempotency_key),
     )
     return _set_etag(response, result)

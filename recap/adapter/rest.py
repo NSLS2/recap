@@ -12,13 +12,19 @@ from pydantic import SecretStr
 
 from recap.commands.models import (
     CommandModel,
+    CopyResource,
+    CreateProcessRun,
     CreateProcessTemplate,
     CreateResource,
     CreateResourceTemplate,
+    UpdateProcessRun,
     UpdateProcessTemplate,
+    UpdateResource,
     UpdateResourceTemplate,
 )
 from recap.exceptions import RecapConnectionError, RecapHTTPError
+from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
+from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,9 +139,14 @@ class RESTAdapter:
         *,
         idempotency_key=None,
     ):
+        route = (
+            f"/api/v1/namespaces/{namespace_path.strip('/')}/{resource}"
+            if resource in {"process-templates", "resource-templates"}
+            else f"/api/v1/{resource}/{namespace_path.strip('/')}"
+        )
         return self._request(
             "POST",
-            f"/api/v1/{resource}/{namespace_path.strip('/')}",
+            route,
             body=body,
             idempotency_key=idempotency_key,
         )
@@ -176,35 +187,93 @@ class RESTAdapter:
         """Submit command DTO using its canonical REST route."""
         data = command.model_dump(mode="json")
         key = getattr(context, "idempotency_key", None)
+        if isinstance(command, CopyResource):
+            return self.copy_resource(
+                command.source_resource_id,
+                command.destination_namespace_path,
+                changes=command.options.model_dump(mode="json"),
+                idempotency_key=key,
+            ).entity
+        if isinstance(command, CreateProcessRun):
+            return ProcessRunSchema.model_validate(
+                self.create(
+                    "process-runs",
+                    command.namespace_path,
+                    data["draft"],
+                    idempotency_key=key,
+                ).entity
+            )
+        if isinstance(command, UpdateProcessRun):
+            return ProcessRunSchema.model_validate(
+                self.update(
+                    "process-runs",
+                    command.process_run_id,
+                    {
+                        key: value
+                        for key, value in data.items()
+                        if key != "process_run_id"
+                    },
+                    etag=f'"{command.expected_revision}"',
+                    idempotency_key=key,
+                ).entity
+            )
+        if isinstance(command, UpdateResource):
+            return self.update(
+                "resources",
+                command.resource_id,
+                {key: value for key, value in data.items() if key != "resource_id"},
+                etag=f'"{command.expected_revision}"',
+                idempotency_key=key,
+            ).entity
         if isinstance(command, CreateProcessTemplate):
-            return self.create(
-                "process-templates",
-                command.namespace_path,
-                data["draft"],
-                idempotency_key=key,
-            ).entity
+            return ProcessTemplateSchema.model_validate(
+                self.create(
+                    "process-templates",
+                    command.namespace_path,
+                    data["draft"],
+                    idempotency_key=key,
+                ).entity
+            )
         if isinstance(command, CreateResourceTemplate):
-            return self.create(
-                "resource-templates",
-                command.namespace_path,
-                data["draft"],
-                idempotency_key=key,
-            ).entity
+            return ResourceTemplateSchema.model_validate(
+                self.create(
+                    "resource-templates",
+                    command.namespace_path,
+                    data["draft"],
+                    idempotency_key=key,
+                ).entity
+            )
         if isinstance(command, CreateResource):
-            return self.create(
-                "resources", command.namespace_path, data, idempotency_key=key
-            ).entity
+            return ResourceSchema.model_validate(
+                self.create(
+                    "resources",
+                    command.namespace_path,
+                    {
+                        key: value
+                        for key, value in data.items()
+                        if key != "namespace_path"
+                    },
+                    idempotency_key=key,
+                ).entity
+            )
         if isinstance(command, UpdateProcessTemplate | UpdateResourceTemplate):
             resource = (
                 "process-templates"
                 if isinstance(command, UpdateProcessTemplate)
                 else "resource-templates"
             )
-            return self.update(
-                resource,
-                command.template_id,
-                data["draft"],
-                etag=f'"{command.expected_revision}"',
-                idempotency_key=key,
-            ).entity
+            schema = (
+                ProcessTemplateSchema
+                if isinstance(command, UpdateProcessTemplate)
+                else ResourceTemplateSchema
+            )
+            return schema.model_validate(
+                self.update(
+                    resource,
+                    command.template_id,
+                    data["draft"],
+                    etag=f'"{command.expected_revision}"',
+                    idempotency_key=key,
+                ).entity
+            )
         raise TypeError(f"Unsupported REST command: {type(command).__name__}")

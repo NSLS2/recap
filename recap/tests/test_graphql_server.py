@@ -60,14 +60,11 @@ def seed_namespace(db_path):
     return path
 
 
-def test_db_path_endpoint(tmp_path):
+def test_db_path_endpoint_is_removed(tmp_path):
     app = make_test_app(tmp_path)
     client = TestClient(app)
     resp = client.get("/db_path")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "db_path" in data
-    assert "test.db" in data["db_path"]
+    assert resp.status_code == 404
 
 
 def test_graphql_endpoint_responds(tmp_path):

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from fastapi import Request
 from strawberry.fastapi import BaseContext
 
-from recap.adapter.local import LocalBackend
+from recap.adapter import ReadBackend
 from recap.authentication.models import ActorKind, ProviderIdentity, RequestActor
 from recap.authorization.policy import (
     SnapshotNamespacePolicy,
@@ -19,7 +19,7 @@ from recap.server.security import authenticate_request
 
 @dataclass(frozen=True, slots=True)
 class GraphQLContext:
-    backend: LocalBackend
+    backend: ReadBackend
     actor: RequestActor
     policy: NamespacePolicy
     request_id: str
@@ -33,7 +33,7 @@ class StrawberryGraphQLContext(BaseContext):
         self.graphql = graphql
 
     @property
-    def backend(self) -> LocalBackend:
+    def backend(self) -> ReadBackend:
         return self.graphql.backend
 
     @property
@@ -60,7 +60,7 @@ _LOCAL_ACTOR = RequestActor(
 
 
 async def graphql_context(
-    request: Request, backend: LocalBackend, authorization: str | None
+    request: Request, backend: ReadBackend, authorization: str | None
 ) -> StrawberryGraphQLContext:
     authenticator = getattr(request.app.state, "request_authenticator", None)
     actor = (
