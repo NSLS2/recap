@@ -1,13 +1,16 @@
 from contextlib import ExitStack, nullcontext
-from urllib.parse import urlparse
 
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 
 from recap.client import RecapClient
+from recap.db.process import ProcessRun, ProcessTemplate
+from recap.db.resource import Resource, ResourceTemplate
 from recap.dsl.query import Field
 from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
+from recap.lifecycle import LifecycleStatus
 from recap.schemas.process import ProcessRunRef, ProcessTemplateRef
 from recap.schemas.resource import ResourceRef, ResourceTemplateRef
 from recap.server.app import create_app
@@ -26,8 +29,9 @@ def _public_dump(value):
 
 def _assert_query_parity(clients, query):
     local, remote = clients
-    local_result = query(local.query_maker(unscoped=True))
-    remote_result = query(remote.query_maker(unscoped=True))
+    context = local.namespace_context
+    local_result = query(local.query_maker(context=context))
+    remote_result = query(remote.query_maker(context=context))
     assert _public_dump(remote_result) == _public_dump(local_result)
     return local_result, remote_result
 
@@ -38,12 +42,7 @@ def parity_clients(tmp_path, monkeypatch):
     with ExitStack() as stack:
         local = stack.enter_context(RecapClient.from_sqlite(db_path))
 
-        local.create_campaign(
-            "MX parity campaign",
-            "PROPOSAL-42",
-            saf="SAF-7",
-            metadata={"beamline": "AMX"},
-        )
+        local.create_namespace("test/mx-parity", metadata={"beamline": "AMX"})
         with local.build_resource_template(
             name="Parity plate", type_names=["container", "plate"]
         ) as template:
@@ -65,6 +64,11 @@ def parity_clients(tmp_path, monkeypatch):
                 model = builder.get_model()
                 model.properties.metrics.rating = rating
                 builder.set_model(model)
+        uow = local.backend.begin()
+        local.backend.session.execute(
+            update(Resource).values(status=LifecycleStatus.ACTIVE)
+        )
+        uow.commit()
 
         with local.build_process_template("Parity workflow", "1.0") as template:
             template.add_resource_slot("plate", "container", Direction.input)
@@ -89,19 +93,26 @@ def parity_clients(tmp_path, monkeypatch):
                 parameters.exposure.dwell = dwell
                 run.set_params(parameters)
 
-        app_client = stack.enter_context(TestClient(create_app(db_path)))
+        uow = local.backend.begin()
+        for model in (ProcessTemplate, ProcessRun, ResourceTemplate, Resource):
+            local.backend.session.execute(
+                update(model).values(status=LifecycleStatus.ACTIVE)
+            )
+        uow.commit()
 
-        def get(url, *args, **kwargs):
-            assert urlparse(url).path == "/db_path"
-            return app_client.get("/db_path", *args, **kwargs)
+        api_key = "parity-secret"
+        app_client = stack.enter_context(
+            TestClient(create_app(db_path, api_key=api_key))
+        )
 
         def post(_client, url, *, json, **kwargs):
-            assert urlparse(url).path == "/graphql"
+            assert url.endswith("/graphql")
             return app_client.post("/graphql", json=json, **kwargs)
 
-        monkeypatch.setattr(httpx2, "get", get)
         monkeypatch.setattr(httpx2.Client, "post", post)
-        remote = stack.enter_context(RecapClient.from_url("http://recap.test"))
+        remote = stack.enter_context(
+            RecapClient.from_url("http://recap.test", api_key=api_key)
+        )
         yield local, remote
 
 
@@ -142,9 +153,9 @@ def test_process_run_loading_parity(parity_clients, query):
     assert [item.id for item in remote] == [item.id for item in local]
 
 
-def test_campaign_and_template_loading_parity(parity_clients):
+def test_namespace_and_template_loading_parity(parity_clients):
     queries = [
-        lambda q: q.campaigns().include_process_runs().all(),
+        lambda q: q.namespaces().all(),
         lambda q: q.resource_templates().all(),
         lambda q: (
             q.resource_templates()
@@ -160,6 +171,18 @@ def test_campaign_and_template_loading_parity(parity_clients):
     ]
     for query in queries:
         _assert_query_parity(parity_clients, query)
+
+
+def test_current_actor_permissions_are_typed(parity_clients):
+    from recap.authorization.scopes import Scope
+    from recap.client.permissions import ActorPermissions
+
+    local, remote = parity_clients
+    permissions = remote.permissions(local.namespace_context.path)
+
+    assert isinstance(permissions, ActorPermissions)
+    assert Scope.RESOURCE_READ in permissions.effective_scopes
+    assert permissions.identities[0].subject == "single-user"
 
 
 @pytest.mark.parametrize(
@@ -180,7 +203,7 @@ def test_reference_shape_parity(parity_clients, query, expected_type):
 def test_filters_scopes_pagination_and_count_parity(parity_clients):
     local, remote = parity_clients
     parent = (
-        local.query_maker(unscoped=True)
+        local.query_maker(context=local.namespace_context)
         .resources()
         .filter(name="plate-1")
         .include("children")
@@ -205,8 +228,8 @@ def test_filters_scopes_pagination_and_count_parity(parity_clients):
     for query in queries:
         _assert_query_parity(parity_clients, query)
 
-    local_q = local.query_maker(unscoped=True)
-    remote_q = remote.query_maker(unscoped=True)
+    local_q = local.query_maker(context=local.namespace_context)
+    remote_q = remote.query_maker(context=local.namespace_context)
     count_queries = [
         lambda q: q.resources().count(),
         lambda q: q.resources().filter_property("rating", gt=10).count(),
@@ -227,7 +250,7 @@ def test_filters_scopes_pagination_and_count_parity(parity_clients):
         ),
         pytest.param(
             lambda q: q.process_runs()
-            .where(Field("campaign.proposal") == "PROPOSAL-42")
+            .where(Field("namespace.path") == "test/mx-parity")
             .all(),
             id="relationship-equality",
         ),
@@ -303,7 +326,7 @@ def test_field_ordering_parity(parity_clients, ordering):
 @pytest.mark.parametrize("field", ["id", "create_date"])
 def test_transport_scalar_predicate_coercion_parity(parity_clients, field):
     local, _ = parity_clients
-    target = local.query_maker(unscoped=True).process_runs().first()
+    target = local.query_maker(context=local.namespace_context).process_runs().first()
 
     local_result, remote_result = _assert_query_parity(
         parity_clients,
@@ -344,6 +367,8 @@ def _access_outcome(model, field, policy):
 def test_on_unloaded_access_behavior_parity(parity_clients, policy, query, field):
     outcomes = []
     for client in parity_clients:
-        model = query(client.query_maker(unscoped=True), policy).first()
+        model = query(
+            client.query_maker(context=parity_clients[0].namespace_context), policy
+        ).first()
         outcomes.append(_access_outcome(model, field, policy))
     assert outcomes[1] == outcomes[0]

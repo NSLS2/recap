@@ -354,6 +354,12 @@ All query types expose generic helpers:
 Use `Field` to build backend-independent predicates and orderings. Structured
 `Field` expressions work through both local SQLite and remote GraphQL clients:
 
+Remote clients use GraphQL for reads and authenticated REST for writes. Construct
+one with `RecapClient.from_url(url, api_key=...)`; REST requests carry the
+`Authorization: Apikey ...` header. Namespace creation and builder mutations
+must use an explicit namespace context. Remote clients do not expose or require
+the server's database path, so client and server can run without shared storage.
+
 ```python
 from recap.dsl.query import Field
 

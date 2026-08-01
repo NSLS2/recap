@@ -31,7 +31,12 @@ from recap.schemas.attribute import (
     AttributeTemplateValidator,
     AttributeValueSchema,
 )
-from recap.schemas.common import SIMPLE_FIELD, CommonFields
+from recap.schemas.common import (
+    SIMPLE_FIELD,
+    CommonFields,
+    NamespaceOwnedFields,
+    NormalizedLabels,
+)
 from recap.utils.dsl import build_param_values_model, build_property_groups_model
 from recap.utils.general import Direction
 
@@ -103,7 +108,11 @@ class PropertySchema(CommonFields):
             )
             values_model = build_param_values_model(tmpl.slug or tmpl.name, tmpl_key)
             raw_values = {
-                av.template.name: {"value": av.value, "unit": av.unit}
+                av.template.name: {
+                    "value": av.value,
+                    "unit": av.unit,
+                    "metadata_json": av.metadata_json,
+                }
                 for av in data._values.values()
             }
             return {
@@ -163,9 +172,11 @@ class PropertySchema(CommonFields):
             attr_tmpl = tmpl_by_name[name]
             if isinstance(raw_value, dict):
                 raw_unit = raw_value.get("unit")
+                raw_metadata = raw_value.get("metadata_json", {})
                 raw_value = raw_value.get("value")
             else:
                 raw_unit = None
+                raw_metadata = {}
 
             validator = AttributeTemplateValidator(
                 name=attr_tmpl.name,
@@ -177,6 +188,7 @@ class PropertySchema(CommonFields):
             coerced[name] = {
                 "value": validator.default,
                 "unit": attr_tmpl.unit if raw_unit is None else raw_unit,
+                "metadata_json": raw_metadata,
             }
 
         self.values = self.values.__class__.model_validate(coerced)
@@ -285,7 +297,16 @@ class ResourceTypeSchema(CommonFields):
     name: Annotated[str, SIMPLE_FIELD]
 
 
-class ResourceTemplateRef(CommonFields):
+class ResourceCopyChanges(BaseModel):
+    properties: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class ResourceCopyOptions(BaseModel):
+    name: str | None = None
+    changes: ResourceCopyChanges = Field(default_factory=ResourceCopyChanges)
+
+
+class ResourceTemplateRef(NamespaceOwnedFields):
     """Lightweight reference to a resource template, without child or property detail.
 
     Used when a full :class:`ResourceTemplateSchema` is not required, e.g.
@@ -304,11 +325,12 @@ class ResourceTemplateRef(CommonFields):
     name: Annotated[str, SIMPLE_FIELD]
     slug: Annotated[str | None, SIMPLE_FIELD]
     version: Annotated[str, SIMPLE_FIELD]
+    labels: NormalizedLabels
     parent: Self | None = Field(default=None, exclude=True)
     types: list[ResourceTypeSchema] = Field(default_factory=list)
 
 
-class ResourceTemplateSchema(CommonFields):
+class ResourceTemplateSchema(NamespaceOwnedFields):
     """Full blueprint for a category of resources.
 
     Defines the complete structure of a resource: its type tags, optional
@@ -331,6 +353,7 @@ class ResourceTemplateSchema(CommonFields):
     name: Annotated[str, SIMPLE_FIELD]
     slug: Annotated[str | None, SIMPLE_FIELD]
     version: Annotated[str, SIMPLE_FIELD]
+    labels: NormalizedLabels
     types: list[ResourceTypeSchema] = Field(default_factory=list)
     parent: ResourceTemplateRef | None = Field(default=None, exclude=True)
     children: dict[str, Self] = Field(default_factory=dict)
@@ -361,7 +384,7 @@ class ResourceSlotSchema(CommonFields):
     required: Annotated[bool, SIMPLE_FIELD] = True
 
 
-class ResourceSchema(CommonFields):
+class ResourceSchema(NamespaceOwnedFields):
     """A concrete resource instance created from a :class:`ResourceTemplateSchema`.
 
     Resources are the primary trackable entities in RECAP.  They can represent
@@ -394,6 +417,7 @@ class ResourceSchema(CommonFields):
     """
 
     name: Annotated[str, SIMPLE_FIELD]
+    copied_from_id: Annotated[UUID | None, SIMPLE_FIELD] = None
     template: ResourceTemplateSchema
     parent: "ResourceRef | None" = Field(default=None, exclude=True)
     children: dict[str, Self]
@@ -467,7 +491,7 @@ class ResourceSchema(CommonFields):
         return self
 
 
-class ResourceRef(CommonFields):
+class ResourceRef(NamespaceOwnedFields):
     """Lightweight reference to a resource, containing only identity and template info.
 
     Used to represent parent/ancestor relationships without embedding the full
@@ -480,6 +504,7 @@ class ResourceRef(CommonFields):
     """
 
     name: Annotated[str, SIMPLE_FIELD]
+    copied_from_id: Annotated[UUID | None, SIMPLE_FIELD] = None
     template: ResourceTemplateRef
 
 

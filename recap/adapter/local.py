@@ -2,12 +2,23 @@ import json
 import warnings
 from collections.abc import Sequence
 from contextlib import contextmanager
+from copy import deepcopy
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, TypeAdapter, create_model
 from pydantic import ValidationError as PydanticError
-from sqlalchemy import Float, Integer, Select, String, cast, insert, select
+from sqlalchemy import (
+    Float,
+    Integer,
+    Select,
+    String,
+    cast,
+    exists,
+    func,
+    insert,
+    select,
+)
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import and_, or_
@@ -20,10 +31,11 @@ from recap.adapter.query_loaders import (
     resolve_loader_options,
 )
 from recap.adapter.resource_construct import ResourceSchemaHydrator
+from recap.authorization.query import AuthorizedQuery
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate, AttributeValue
 from recap.db.base import Base
-from recap.db.campaign import Campaign
 from recap.db.exceptions import ValidationError
+from recap.db.namespace import Namespace, NamespaceRepository
 from recap.db.process import (
     Direction,
     ProcessRun,
@@ -41,18 +53,20 @@ from recap.db.resource import (
 from recap.db.step import Parameter, Step, StepTemplate, StepTemplateResourceSlotBinding
 from recap.dsl.query import FieldOrdering, FieldPredicate, QuerySpec, SchemaT
 from recap.exceptions import ExistingResourceError, ExistingResourceWarning
+from recap.lifecycle import LifecycleStatus
 from recap.schemas.attribute import (
     AttributeGroupRef,
     AttributeTemplateSchema,
 )
+from recap.schemas.namespace import NamespaceContext, NamespaceSchema
 from recap.schemas.process import (
-    CampaignSchema,
     ProcessRunRef,
     ProcessRunSchema,
     ProcessTemplateRef,
     ProcessTemplateSchema,
 )
 from recap.schemas.resource import (
+    ResourceCopyOptions,
     ResourceRef,
     ResourceSchema,
     ResourceSlotSchema,
@@ -69,9 +83,10 @@ from recap.utils.database import get_or_create, load_single
 from recap.utils.dsl import AliasMixin, build_param_values_model, resolve_path
 from recap.utils.general import make_slug, to_json_compatible
 from recap.utils.loaders import chain_load
+from recap.utils.namespace import is_namespace_ancestor, namespace_ancestors
 
 SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
-    CampaignSchema: Campaign,
+    NamespaceSchema: Namespace,
     ResourceTemplateSchema: ResourceTemplate,
     ResourceTemplateRef: ResourceTemplate,
     ProcessRunRef: ProcessRun,
@@ -223,63 +238,43 @@ class LocalBackend(Backend):
         self._session = session
         return SQLUnitOfWork(self, session, tx)
 
-    def create_campaign(
-        self,
-        name: str,
-        proposal: str,
-        saf: str | None,
-        metadata: dict[str, Any] | None = None,
-    ) -> CampaignSchema:
-        self._campaign = Campaign(
-            name=name,
-            proposal=str(proposal),
-            saf=saf,
-            meta_data=metadata,
-        )
-        self.session.add(self._campaign)
+    def create_namespace(
+        self, path: str, metadata: dict[str, Any] | None = None
+    ) -> NamespaceContext:
+        namespace = NamespaceRepository(self.session).create(path, metadata)
+        namespace.status = LifecycleStatus.ACTIVE
         self.session.flush()
-        return CampaignSchema.model_validate(self._campaign)
+        return NamespaceContext.model_validate(namespace)
 
-    def set_campaign(self, id: UUID) -> CampaignSchema:
-        # The backend never short-circuits: a REST backend's campaign endpoint
-        # always returns fresh data per request, so caching is a client-side
-        # concern. ``RecapClient.set_campaign`` owns the cache + ``force`` flag.
-        statement = select(Campaign).filter_by(id=id)
-        self._campaign = self.session.execute(statement).scalar_one_or_none()
-        if self._campaign is None:
-            raise ValueError(f"Campaign with ID {id} not found")
-        return CampaignSchema.model_validate(self._campaign)
-
-    def update_campaign(self, campaign: CampaignSchema) -> CampaignSchema:
-        statement = select(Campaign).filter_by(id=campaign.id)
-        model = self.session.execute(statement).scalar_one_or_none()
-        if model is None:
-            raise ValueError(f"Campaign with ID {campaign.id} not found")
-        model.name = campaign.name
-        model.proposal = str(campaign.proposal)
-        model.saf = campaign.saf
-        model.meta_data = campaign.meta_data
-        self._campaign = model
-        self.session.flush()
-        return CampaignSchema.model_validate(model)
+    def set_namespace(self, id: UUID) -> NamespaceContext:
+        namespace = self.session.get(Namespace, id)
+        if namespace is None:
+            raise ValueError(f"Namespace with ID {id} not found")
+        return NamespaceContext.model_validate(namespace)
 
     def create_process_template(
-        self, name: str, version: str
+        self, namespace_id: UUID, name: str, version: str
     ) -> ProcessTemplateRef | None:
         template, created = get_or_create(
-            self.session, ProcessTemplate, {"name": name, "version": version}, {}
+            self.session,
+            ProcessTemplate,
+            {"namespace_id": namespace_id, "name": name, "version": version},
+            {},
         )
         if created:
             return ProcessTemplateRef.model_validate(template)
 
     def get_process_template(
         self,
+        namespace_id: UUID,
         name: str | None,
         version: str | None,
         expand: bool = False,
         id: UUID | str | None = None,
     ) -> ProcessTemplateRef | ProcessTemplateSchema:
-        statement = select(ProcessTemplate)
+        statement = select(ProcessTemplate).where(
+            ProcessTemplate.namespace_id == namespace_id
+        )
         if name:
             statement = statement.where(ProcessTemplate.name == name)
         if version:
@@ -462,9 +457,14 @@ class LocalBackend(Backend):
         return resource_type_schemas
 
     def add_resource_template(
-        self, name: str, types: list[ResourceTypeSchema], version: str = "1.0"
+        self,
+        namespace_id: UUID,
+        name: str,
+        types: list[ResourceTypeSchema],
+        version: str = "1.0",
     ) -> ResourceTemplateRef:
         template = ResourceTemplate(
+            namespace_id=namespace_id,
             name=name,
             version=version,
             # types=types,
@@ -498,6 +498,7 @@ class LocalBackend(Backend):
             name=name,
             version=version,
             types=resource_type_results,
+            namespace_id=parent_resource_template.namespace_id,
         )
         parent_template = self.session.get(
             ResourceTemplate, parent_resource_template.id
@@ -529,13 +530,16 @@ class LocalBackend(Backend):
 
     def get_resource_template(
         self,
+        namespace_id: UUID,
         name: str | None,
         version: str | None = None,
         id: UUID | str | None = None,
         parent: ResourceTemplateRef | ResourceTemplate | None = None,
         expand: bool = False,
     ) -> ResourceTemplateRef | ResourceTemplateSchema:
-        statement = select(ResourceTemplate)
+        statement = select(ResourceTemplate).where(
+            ResourceTemplate.namespace_id == namespace_id
+        )
         if name:
             statement = statement.where(ResourceTemplate.name == name)
         if version:
@@ -563,6 +567,7 @@ class LocalBackend(Backend):
 
     def find_resources_by_identity(
         self,
+        namespace_id: UUID,
         name: str,
         parent_id: UUID | None,
         template_id: UUID,
@@ -579,6 +584,7 @@ class LocalBackend(Backend):
             select(Resource)
             .where(
                 parent_clause,
+                Resource.namespace_id == namespace_id,
                 Resource.name == name,
                 Resource.resource_template_id == template_id,
             )
@@ -588,6 +594,7 @@ class LocalBackend(Backend):
 
     def create_resource(
         self,
+        namespace_id: UUID,
         name: str,
         resource_template: ResourceTemplateRef | ResourceTemplateSchema,
         parent_resource: ResourceRef | ResourceSchema | None = None,
@@ -599,7 +606,7 @@ class LocalBackend(Backend):
 
         if on_existing != "create":
             matches = self.find_resources_by_identity(
-                name, parent_id, resource_template.id
+                namespace_id, name, parent_id, resource_template.id
             )
             if matches:
                 existing = matches[0]
@@ -617,6 +624,7 @@ class LocalBackend(Backend):
                 return ResourceRef.model_validate(existing)
 
         resource = Resource(
+            namespace=self.session.get(Namespace, namespace_id),
             name=name,
             resource_template_id=resource_template.id,
             parent_id=parent_id,
@@ -646,8 +654,116 @@ class LocalBackend(Backend):
             return ResourceSchema.model_validate(resource)
         return ResourceRef.model_validate(resource)
 
+    def copy_resource(  # noqa: C901
+        self,
+        source_resource_id: UUID,
+        destination_namespace_id: UUID,
+        options: ResourceCopyOptions,
+    ) -> ResourceSchema:
+        source_resources = self._load_resource_subtrees(
+            self.session, [source_resource_id]
+        )
+        if not source_resources:
+            raise LookupError(f"Resource does not exist: {source_resource_id}")
+
+        source_by_id = {resource.id: resource for resource in source_resources}
+        source = source_by_id[source_resource_id]
+        if source.parent_id is not None:
+            raise ValueError("Source resource must be a resource graph root")
+
+        destination = self.session.get(Namespace, destination_namespace_id)
+        if destination is None:
+            raise LookupError(
+                f"Destination namespace does not exist: {destination_namespace_id}"
+            )
+        if not is_namespace_ancestor(source.namespace.path, destination.path):
+            raise ValueError(
+                "Destination namespace must be the source namespace or its descendant"
+            )
+
+        children_by_parent: dict[UUID, list[Resource]] = {}
+        for resource in source_resources:
+            if resource.parent_id is not None:
+                children_by_parent.setdefault(resource.parent_id, []).append(resource)
+
+        def clone_resource(
+            original: Resource, parent: Resource | None = None
+        ) -> Resource:
+            clone = Resource(
+                id=uuid4(),
+                name=original.name,
+                template=original.template,
+                namespace=destination,
+                parent=parent,
+                status=LifecycleStatus.MUTABLE,
+                revision=1,
+                _init_children=False,
+            )
+            for original_property in original.properties.values():
+                copied_property = Property(
+                    id=uuid4(), template=original_property.template, resource=clone
+                )
+                for name, original_value in original_property._values.items():
+                    copied_value = copied_property._values[name]
+                    copied_value.id = uuid4()
+                    copied_value.value_json = deepcopy(original_value.value_json)
+                    copied_value.unit = original_value.unit
+                    copied_value.metadata_json = deepcopy(original_value.metadata_json)
+            for child in children_by_parent.get(original.id, []):
+                clone_resource(child, clone)
+            return clone
+
+        copied_root = clone_resource(source)
+        copied_root.copied_from = source
+        self.session.add(copied_root)
+
+        if options.name is not None:
+            copied_root.name = options.name
+        for group_name, changes in options.changes.properties.items():
+            copied_property = next(
+                (
+                    prop
+                    for prop in copied_root.properties.values()
+                    if group_name in {prop.template.name, prop.template.slug}
+                ),
+                None,
+            )
+            if copied_property is None:
+                raise ValueError(
+                    f"Copied resource has no property group {group_name!r}"
+                )
+            for attribute_name, raw_value in changes.items():
+                copied_value = next(
+                    (
+                        value
+                        for value in copied_property._values.values()
+                        if attribute_name in {value.template.name, value.template.slug}
+                    ),
+                    None,
+                )
+                if copied_value is None:
+                    raise ValueError(
+                        f"Property {attribute_name!r} not found in group {group_name!r}"
+                    )
+                if isinstance(raw_value, dict):
+                    copied_value.set_value(deepcopy(raw_value.get("value")))
+                    if "unit" in raw_value:
+                        copied_value.unit = raw_value["unit"]
+                    if "metadata_json" in raw_value:
+                        copied_value.metadata_json = deepcopy(
+                            raw_value["metadata_json"]
+                        )
+                else:
+                    copied_value.set_value(deepcopy(raw_value))
+
+        if source.status is LifecycleStatus.MUTABLE:
+            source.activate()
+        self.session.flush()
+        return ResourceSchema.model_validate(copied_root)
+
     def get_resource(
         self,
+        namespace_id: UUID,
         name: str,
         template_name: str,
         template_version: str | None = "1.0",
@@ -658,9 +774,9 @@ class LocalBackend(Backend):
             .join(Resource.template)
             .where(
                 Resource.name == name,
+                Resource.namespace_id == namespace_id,
                 ResourceTemplate.name == template_name,
                 ResourceTemplate.version == template_version,
-                Resource.active.is_(True),
             )
         )
         with self._session_scope() as session:
@@ -689,10 +805,10 @@ class LocalBackend(Backend):
 
     def create_process_run(
         self,
+        namespace_id: UUID,
         name: str,
         description: str,
         process_template: ProcessTemplateRef | ProcessTemplateSchema,
-        campaign: CampaignSchema,
     ) -> ProcessRunSchema:
         statement = select(ProcessTemplate).where(
             ProcessTemplate.id == process_template.id
@@ -701,10 +817,10 @@ class LocalBackend(Backend):
             self.session, statement, label="ProcessTemplate"
         )
         process_run = ProcessRun(
+            namespace_id=namespace_id,
             name=name,
             description=description,
             template=process_template_model,
-            campaign_id=campaign.id,
         )
         self.session.add(process_run)
         self.session.flush()
@@ -753,9 +869,6 @@ class LocalBackend(Backend):
                 f"Resource {resource_model.name!r} must have a template with types"
             )
 
-        if not resource_model.active:
-            raise ValueError(f"Resource {resource_model.name!r} is inactive")
-
         template_type_ids = {rt.id for rt in resource_model.template.types}
         if resource_slot_model.resource_type_id not in template_type_ids:
             raise ValueError(
@@ -779,6 +892,31 @@ class LocalBackend(Backend):
             ) from exc
 
         return ProcessRunSchema.model_validate(process_run_model)
+
+    def set_process_template_status(self, template_id: UUID, status: LifecycleStatus):
+        self._set_lifecycle_status(ProcessTemplate, template_id, status)
+
+    def set_process_run_status(self, run_id: UUID, status: LifecycleStatus):
+        self._set_lifecycle_status(ProcessRun, run_id, status)
+
+    def set_resource_template_status(self, template_id: UUID, status: LifecycleStatus):
+        self._set_lifecycle_status(ResourceTemplate, template_id, status)
+
+    def set_resource_status(self, resource_id: UUID, status: LifecycleStatus):
+        self._set_lifecycle_status(Resource, resource_id, status)
+
+    def _set_lifecycle_status(self, model, object_id: UUID, status: LifecycleStatus):
+        obj = self.session.get(model, object_id)
+        if obj is None:
+            raise LookupError(f"{model.__name__} does not exist: {object_id}")
+        if status is LifecycleStatus.ACTIVE:
+            if isinstance(obj, ProcessRun):
+                obj.finalize()
+            else:
+                obj.activate()
+        else:
+            obj.archive()
+        self.session.flush()
 
     def check_resource_assignment(
         self,
@@ -1286,37 +1424,115 @@ class LocalBackend(Backend):
                 children_map.setdefault(parent_id, []).append(resource)
         return children_map
 
-    def _apply_campaign_scope(self, model, stmt, spec):
-        if spec.campaign_id is None:
-            return stmt
+    def _namespace_visibility(self, namespace_path: str) -> tuple[UUID, list[UUID]]:
+        paths = namespace_ancestors(namespace_path)
+        with self._session_scope() as session:
+            by_path = {
+                namespace.path: namespace.id
+                for namespace in session.scalars(
+                    select(Namespace).where(Namespace.path.in_(paths))
+                )
+            }
+        try:
+            context_id = by_path[namespace_path]
+        except KeyError as exc:
+            raise LookupError(f"Namespace does not exist: {namespace_path}") from exc
+        return context_id, [by_path[path] for path in paths if path in by_path]
 
-        campaign_id = spec.campaign_id
+    def get_namespace_path(self, namespace_id: UUID) -> str:
+        with self._session_scope() as session:
+            namespace = session.get(Namespace, namespace_id)
+            if namespace is None:
+                raise LookupError(f"Namespace does not exist: {namespace_id}")
+            return namespace.path
+
+    def _apply_namespace_visibility(
+        self, model, stmt, spec: QuerySpec, namespace_path: str
+    ):
+        context_id, ancestor_ids = self._namespace_visibility(namespace_path)
+        statuses = [LifecycleStatus.ACTIVE]
+        if spec.include_mutable:
+            statuses.append(LifecycleStatus.MUTABLE)
+        if spec.include_archived:
+            statuses.append(LifecycleStatus.ARCHIVED)
+
         if model is ProcessRun:
-            return stmt.where(ProcessRun.campaign_id == campaign_id)
-        if model is Resource:
-            assignment_alias = aliased(
-                ResourceAssignment, name="campaign_resource_assignment"
+            return stmt.where(
+                model.namespace_id == context_id,
+                model.status.in_(statuses),
             )
-            pr_alias = aliased(ProcessRun, name="campaign_process_run")
-            stmt = stmt.join(assignment_alias, assignment_alias.resource_id == model.id)
-            stmt = stmt.join(pr_alias, pr_alias.id == assignment_alias.process_run_id)
-            stmt = stmt.where(pr_alias.campaign_id == campaign_id)
-            return stmt.distinct()
+        if model in {ProcessTemplate, ResourceTemplate, Resource}:
+            return stmt.where(
+                model.namespace_id.in_(ancestor_ids),
+                model.status.in_(statuses),
+            )
+        if model is Namespace:
+            return stmt.where(model.id.in_(ancestor_ids), model.status.in_(statuses))
         return stmt
 
-    def _build_select(self, schema: type[SchemaT], spec: QuerySpec) -> Select:
+    def _apply_namespace_metadata(self, stmt, spec: QuerySpec):
+        for key, value in spec.local_metadata_filters.items():
+            stmt = stmt.where(Namespace.metadata_json[key].as_string() == value)
+        if spec.effective_metadata_filters:
+            with self._session_scope() as session:
+                repository = NamespaceRepository(session)
+                candidate_ids = list(
+                    session.scalars(stmt.with_only_columns(Namespace.id))
+                )
+                matching_ids = [
+                    namespace_id
+                    for namespace_id in candidate_ids
+                    if all(
+                        repository.effective_metadata(namespace_id).get(key) == value
+                        for key, value in spec.effective_metadata_filters.items()
+                    )
+                ]
+            stmt = stmt.where(Namespace.id.in_(matching_ids))
+        return stmt
+
+    def _build_select(
+        self,
+        schema: type[SchemaT],
+        spec: QuerySpec,
+        namespace_path: str,
+        authorization: AuthorizedQuery | None = None,
+    ) -> Select:
         model = SCHEMA_MODEL_MAPPING[schema]
         stmt = select(model)
+        if authorization is None:
+            stmt = self._apply_namespace_visibility(model, stmt, spec, namespace_path)
+        else:
+            context_id, ancestor_ids = self._namespace_visibility(namespace_path)
+            stmt = authorization.apply(
+                model,
+                stmt,
+                context_id=context_id,
+                ancestor_ids=ancestor_ids,
+            )
 
         if model is ResourceTemplate and "types__names_in" in spec.filters:
-            type_names = spec.filters.pop("types__names_in")
+            type_names = spec.filters["types__names_in"]
             stmt = (
                 stmt.join(ResourceTemplate.types)
                 .where(ResourceType.name.in_(type_names))
                 .group_by(ResourceTemplate.id)
             )
 
-        filters = dict(spec.filters)
+        filters = {
+            key: value
+            for key, value in spec.filters.items()
+            if key != "types__names_in"
+        }
+        label = filters.pop("labels__contains", None)
+        if label is not None:
+            label_values = func.json_each(model.labels).table_valued("value")
+            stmt = stmt.where(
+                exists(
+                    select(1)
+                    .select_from(label_values)
+                    .where(label_values.c.value == make_slug(label))
+                )
+            )
         joined_paths: dict[tuple[str, ...], type] = {}
         simple_filters: dict[str, object] = {}
 
@@ -1337,11 +1553,40 @@ class LocalBackend(Backend):
         if model is ProcessRun:
             stmt = self._build_select_process_run(model, stmt, spec)
 
-        stmt = self._apply_campaign_scope(model, stmt, spec)
+        if model is Namespace:
+            stmt = self._apply_namespace_metadata(stmt, spec)
         return _apply_field_expressions(model, stmt, spec, joined_paths)
 
-    def query(self, schema: type[SchemaT], spec: QuerySpec) -> list[SchemaT]:
-        stmt = self._build_select(schema, spec)
+    def query(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ) -> list[SchemaT]:
+        return self._query(schema, spec, namespace_path, authorization=None)
+
+    def query_authorized(
+        self,
+        schema: type[SchemaT],
+        spec: QuerySpec,
+        *,
+        authorization: AuthorizedQuery,
+    ) -> list[SchemaT]:
+        return self._query(
+            schema,
+            spec,
+            authorization.namespace_path,
+            authorization=authorization,
+        )
+
+    def _query(
+        self,
+        schema: type[SchemaT],
+        spec: QuerySpec,
+        namespace_path: str,
+        *,
+        authorization: AuthorizedQuery | None,
+    ) -> list[SchemaT]:
+        stmt = self._build_select(
+            schema, spec, namespace_path, authorization=authorization
+        )
 
         # Resource trees with children go through the bulk recursive-CTE path
         # below; the root query then only needs ids, so skip the (one-level,
@@ -1436,9 +1681,36 @@ class LocalBackend(Backend):
                 for obj in list(session.scalars(stmt).unique())
             ]
 
-    def count(self, schema: type[SchemaT], spec: QuerySpec) -> int:
-        # model = SCHEMA_MODEL_MAPPING[schema]
-        stmt = self._build_select(schema, spec)
+    def count(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ) -> int:
+        return self._count(schema, spec, namespace_path, authorization=None)
+
+    def count_authorized(
+        self,
+        schema: type[SchemaT],
+        spec: QuerySpec,
+        *,
+        authorization: AuthorizedQuery,
+    ) -> int:
+        return self._count(
+            schema,
+            spec,
+            authorization.namespace_path,
+            authorization=authorization,
+        )
+
+    def _count(
+        self,
+        schema: type[SchemaT],
+        spec: QuerySpec,
+        namespace_path: str,
+        *,
+        authorization: AuthorizedQuery | None,
+    ) -> int:
+        stmt = self._build_select(
+            schema, spec, namespace_path, authorization=authorization
+        )
 
         with self._session_scope() as session:
             select_stmt = select(count()).select_from(stmt.subquery())

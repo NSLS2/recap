@@ -1,93 +1,65 @@
 """Tests for RecapClient.from_url()."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 
-def test_from_url_returns_recap_client(tmp_path):
-    from recap.client import RecapClient
-
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = {"db_path": str(tmp_path / "recap.db")}
-    mock_resp.raise_for_status = MagicMock()
-
-    with patch("httpx2.get", return_value=mock_resp):
-        client = RecapClient.from_url("http://localhost:8000")
-
-    assert isinstance(client, RecapClient)
-    assert client.backend is not None
-
-
-def test_from_url_uses_graphql_adapter_for_reads(tmp_path):
+def test_from_url_wires_graphql_reads_and_rest_writes_without_db_discovery():
     from recap.adapter.graphql import GraphQLAdapter
+    from recap.adapter.rest import RESTAdapter
     from recap.client import RecapClient
 
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = {"db_path": str(tmp_path / "recap.db")}
-    mock_resp.raise_for_status = MagicMock()
-
-    with patch("httpx2.get", return_value=mock_resp):
-        client = RecapClient.from_url("http://localhost:8000")
+    with patch("httpx2.get") as get:
+        client = RecapClient.from_url(
+            "http://localhost:8000", api_key="secret", timeout=12.5
+        )
 
     assert isinstance(client._read_backend, GraphQLAdapter)
+    assert isinstance(client.backend, RESTAdapter)
+    assert client._read_backend._headers.as_dict() == {"Authorization": "Apikey secret"}
+    assert client.backend._auth.headers() == {"Authorization": "Apikey secret"}
+    assert client.backend._client.timeout.connect == 12.5
+    get.assert_not_called()
+    client.close()
 
 
-def test_from_url_uses_local_backend_for_writes(tmp_path):
-    from recap.adapter.local import LocalBackend
-    from recap.client import RecapClient
-
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = {"db_path": str(tmp_path / "recap.db")}
-    mock_resp.raise_for_status = MagicMock()
-
-    with patch("httpx2.get", return_value=mock_resp):
-        client = RecapClient.from_url("http://localhost:8000")
-
-    assert isinstance(client.backend, LocalBackend)
-
-
-def test_from_url_connection_error():
-    import httpx2
-
-    from recap.client import RecapClient
-    from recap.exceptions import RecapConnectionError
-
-    with (
-        patch("httpx2.get", side_effect=httpx2.ConnectError("refused")),
-        pytest.raises(RecapConnectionError),
-    ):
-        RecapClient.from_url("http://localhost:9999")
-
-
-def test_from_url_bad_status():
-    import httpx2
-
-    from recap.client import RecapClient
-    from recap.exceptions import RecapConnectionError
-
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.side_effect = httpx2.HTTPStatusError(
-        "404", request=MagicMock(), response=MagicMock(status_code=404)
-    )
-    with (
-        patch("httpx2.get", return_value=mock_resp),
-        pytest.raises(RecapConnectionError),
-    ):
-        RecapClient.from_url("http://localhost:8000")
-
-
-def test_from_url_query_maker_uses_read_backend(tmp_path):
+def test_from_url_query_maker_uses_read_backend():
     from recap.adapter.graphql import GraphQLAdapter
     from recap.client import RecapClient
 
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = {"db_path": str(tmp_path / "recap.db")}
-    mock_resp.raise_for_status = MagicMock()
+    client = RecapClient.from_url("http://localhost:8000", api_key="secret")
+    qm = client.query_maker(namespace="test")
 
-    with patch("httpx2.get", return_value=mock_resp):
-        client = RecapClient.from_url("http://localhost:8000")
-
-    qm = client.query_maker(unscoped=True)
-    # QueryDSL stores backend as _backend
     assert isinstance(qm.backend, GraphQLAdapter)
+    client.close()
+
+
+def test_from_url_rejects_unscoped_remote_client_before_http():
+    from recap.client import RecapClient
+
+    with (
+        patch("httpx2.get") as get,
+        pytest.raises(ValueError, match="unscoped"),
+    ):
+        RecapClient.from_url("http://localhost:8000", api_key="secret", unscoped=True)
+
+    get.assert_not_called()
+
+
+def test_from_url_does_not_import_or_construct_sqlite_components():
+    from recap.client import RecapClient
+
+    with (
+        patch("recap.client.base_client.apply_migrations") as migrations,
+        patch("recap.client.base_client.create_engine") as create_engine,
+        patch("recap.client.base_client.sessionmaker") as sessionmaker,
+        patch("recap.client.base_client.LocalBackend") as local_backend,
+    ):
+        client = RecapClient.from_url("http://localhost:8000", api_key="secret")
+
+    migrations.assert_not_called()
+    create_engine.assert_not_called()
+    sessionmaker.assert_not_called()
+    local_backend.assert_not_called()
+    client.close()

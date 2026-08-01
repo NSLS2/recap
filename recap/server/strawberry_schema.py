@@ -1,16 +1,22 @@
 """Root GraphQL Query type and schema builder."""
 
+from typing import Annotated
+
 import strawberry
+from fastapi import Depends, Header, Request
 from strawberry.fastapi import GraphQLRouter
 from strawberry.scalars import JSON
 from strawberry.schema.config import StrawberryConfig
 
-from recap.adapter.local import LocalBackend
+from recap.adapter import ReadBackend
+from recap.server.context import StrawberryGraphQLContext, graphql_context
+from recap.server.dependencies import get_local_backend
 from recap.server.resolvers import (
-    resolve_campaigns,
-    resolve_campaigns_count,
     resolve_execute_count,
     resolve_execute_query,
+    resolve_namespaces,
+    resolve_namespaces_count,
+    resolve_permissions,
     resolve_process_runs,
     resolve_process_runs_count,
     resolve_process_templates,
@@ -21,7 +27,8 @@ from recap.server.resolvers import (
     resolve_resources_count,
 )
 from recap.server.strawberry_types import (
-    CampaignType,
+    NamespaceType,
+    PermissionsType,
     ProcessRunType,
     ProcessTemplateType,
     ResourceTemplateType,
@@ -33,6 +40,7 @@ from recap.server.strawberry_types import (
 class Query:
     execute_query: JSON = strawberry.field(resolver=resolve_execute_query)
     execute_count: int = strawberry.field(resolver=resolve_execute_count)
+    permissions: PermissionsType = strawberry.field(resolver=resolve_permissions)
 
     # List fields
     resources: list[ResourceType] = strawberry.field(resolver=resolve_resources)
@@ -43,12 +51,12 @@ class Query:
     process_templates: list[ProcessTemplateType] = strawberry.field(
         resolver=resolve_process_templates
     )
-    campaigns: list[CampaignType] = strawberry.field(resolver=resolve_campaigns)
+    namespaces: list[NamespaceType] = strawberry.field(resolver=resolve_namespaces)
 
     # Count fields
     resources_count: int = strawberry.field(resolver=resolve_resources_count)
     process_runs_count: int = strawberry.field(resolver=resolve_process_runs_count)
-    campaigns_count: int = strawberry.field(resolver=resolve_campaigns_count)
+    namespaces_count: int = strawberry.field(resolver=resolve_namespaces_count)
     resource_templates_count: int = strawberry.field(
         resolver=resolve_resource_templates_count
     )
@@ -57,7 +65,7 @@ class Query:
     )
 
 
-def build_schema(backend: LocalBackend) -> strawberry.Schema:
+def build_schema(backend: ReadBackend) -> strawberry.Schema:
     """Build a Strawberry schema for introspection or testing only.
 
     For serving with FastAPI, use ``build_router()`` which properly injects
@@ -70,11 +78,15 @@ def build_schema(backend: LocalBackend) -> strawberry.Schema:
     )
 
 
-def build_router(backend: LocalBackend) -> GraphQLRouter:
-    """Build a GraphQLRouter (for mounting in FastAPI) with backend in context."""
+def build_router() -> GraphQLRouter:
+    """Build a GraphQLRouter with request-scoped backend injection."""
 
-    async def get_context() -> dict:
-        return {"backend": backend}
+    async def get_context(
+        request: Request,
+        backend: Annotated[ReadBackend, Depends(get_local_backend)],
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> StrawberryGraphQLContext:
+        return await graphql_context(request, backend, authorization)
 
     schema = strawberry.Schema(
         query=Query, config=StrawberryConfig(auto_camel_case=False)

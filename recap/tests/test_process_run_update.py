@@ -1,5 +1,5 @@
 def test_process_run_update_persists_param_changes(client):
-    client.create_campaign("Campaign", "proposal-1", saf=None)
+    client.create_namespace("process-run-update")
 
     with client.build_process_template("PT-update", "1.0") as ptb:
         (
@@ -16,7 +16,7 @@ def test_process_run_update_persists_param_changes(client):
         template_name="PT-update",
         version="1.0",
     ) as prb:
-        run = prb.process_run
+        run_id = prb.process_run.id
 
         # Mutate typed param values on the pydantic model, then hand the
         # mutated model back via set_model() so __exit__ persists it.
@@ -24,13 +24,8 @@ def test_process_run_update_persists_param_changes(client):
         model.steps["Mix"].parameters.inputs.values.voltage.value = 42
         prb.set_model(model)
 
-    refreshed_run = (
-        client.query_maker()
-        .process_runs()
-        .include_steps(include_parameters=True)
-        .filter(id=run.id)
-        .first()
-    )
+    with client.build_process_run(process_run_id=run_id) as builder:
+        refreshed_run = builder.process_run
     assert refreshed_run is not None
     assert refreshed_run.steps["Mix"].parameters.inputs.values.voltage.value == 42
 
@@ -43,9 +38,9 @@ def test_resource_builder_persists_property_changes(client):
 
     with client.build_resource("R1", "Robot") as rb:
         rb.resource.properties.details.values.serial.value = "xyz"
+        resource_id = rb.resource.id
 
-    refreshed = (
-        client.query_maker().resources().include("properties").filter(name="R1").first()
-    )
+    with client.build_resource(resource_id=resource_id) as builder:
+        refreshed = builder.get_model(update=True)
     assert refreshed is not None
     assert refreshed.properties.details.values.serial.value == "xyz"

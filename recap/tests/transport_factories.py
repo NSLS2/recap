@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from recap.lifecycle import LifecycleStatus
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
     AttributeTemplateSchema,
@@ -28,6 +29,10 @@ def fields(**values):
         "id": uuid4(),
         "create_date": STAMP,
         "modified_date": STAMP,
+        "namespace_id": uuid4(),
+        "status": LifecycleStatus.ACTIVE,
+        "revision": 1,
+        "labels": [],
         **values,
     }
 
@@ -151,7 +156,6 @@ def full_process_run() -> ProcessRunSchema:
             id=run_id,
             name="run-1",
             description="transport round trip",
-            campaign_id=uuid4(),
             template=process_template,
             steps={"Acquire": step},
             assigned_resources={"input": assignment},

@@ -1,4 +1,7 @@
 from .attribute import AttributeGroupTemplate, AttributeTemplate, AttributeValue
+from .audit import MutationAudit
+from .idempotency import IdempotencyRecord
+from .namespace import Namespace
 from .process import ProcessRun, ProcessTemplate
 from .resource import Property, Resource, ResourceTemplate, ResourceType
 from .step import (
@@ -11,10 +14,13 @@ from .step import (
 
 __all__ = [
     "Property",
+    "MutationAudit",
+    "IdempotencyRecord",
     "Parameter",
     "AttributeTemplate",
     "AttributeGroupTemplate",
     "AttributeValue",
+    "Namespace",
     "Step",
     "StepTemplate",
     "StepTemplateEdge",

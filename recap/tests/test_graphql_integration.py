@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 
 def test_write_local_read_graphql(tmp_path):
-    """Write a campaign via LocalBackend directly; read it back via GraphQL."""
+    """Write a namespace via LocalBackend directly; read it back via GraphQL."""
     from recap.client import RecapClient
     from recap.server.app import create_app
 
@@ -12,7 +12,7 @@ def test_write_local_read_graphql(tmp_path):
 
     # Write directly via local client
     local_client = RecapClient.from_sqlite(str(db_path))
-    local_client.create_campaign(name="Test Campaign", proposal="P-001")
+    local_client.create_namespace("test-campaign")
     local_client.close()
 
     # Read via GraphQL server
@@ -20,13 +20,13 @@ def test_write_local_read_graphql(tmp_path):
     test_client = TestClient(app)
 
     resp = test_client.post(
-        "/graphql", json={"query": "{ campaigns { id name proposal } }"}
+        "/graphql",
+        json={"query": '{ namespaces(namespace_path: "test-campaign") { id path } }'},
     )
     assert resp.status_code == 200
-    data = resp.json()["data"]["campaigns"]
+    data = resp.json()["data"]["namespaces"]
     assert len(data) == 1
-    assert data[0]["name"] == "Test Campaign"
-    assert data[0]["proposal"] == "P-001"
+    assert data[0]["path"] == "test-campaign"
 
 
 def test_graphql_resources_after_write(tmp_path):
@@ -36,19 +36,26 @@ def test_graphql_resources_after_write(tmp_path):
 
     db_path = tmp_path / "recap.db"
     local_client = RecapClient.from_sqlite(str(db_path))
+    context = local_client.create_namespace("samples")
 
     with local_client.build_resource_template(name="Sample", type_names=["sample"]):
         pass
 
-    with local_client.build_resource(name="S-001", template_name="Sample"):
-        pass
+    with local_client.build_resource(name="S-001", template_name="Sample") as builder:
+        builder.activate()
 
     local_client.close()
 
     app = create_app(db_path)
     test_client = TestClient(app)
     resp = test_client.post(
-        "/graphql", json={"query": "{ resources { id name } resources_count }"}
+        "/graphql",
+        json={
+            "query": "{ "
+            f'resources(namespace_path: "{context.path}") {{ id name }} '
+            f'resources_count(namespace_path: "{context.path}")'
+            " }"
+        },
     )
     assert resp.status_code == 200
     body = resp.json()["data"]

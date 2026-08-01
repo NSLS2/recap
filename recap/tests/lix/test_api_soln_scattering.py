@@ -103,8 +103,6 @@ def test_client(client):
             "serial_no", "str", "", "xyz"
         ).close_group()
 
-    client.create_campaign(name="Test campaign", proposal="1")
-
     sample_holder = client.create_resource("Test destination plate", "sample holder")
     source_plate = client.create_resource("96 well plate", "96 well plate")
     robot = client.create_resource("LHR", "robot")

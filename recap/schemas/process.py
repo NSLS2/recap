@@ -1,10 +1,7 @@
-"""Pydantic schemas for campaigns, process templates, and process runs.
+"""Pydantic schemas for process templates and process runs.
 
 This module defines the top-level provenance objects:
 
-* :class:`CampaignSchema` — the root grouping for a set of related
-  :class:`ProcessRunSchema` instances (corresponds to a beamtime, project,
-  or experimental campaign).
 * :class:`ProcessTemplateSchema` — the workflow blueprint that declares
   ordered steps and resource slots.
 * :class:`ProcessRunSchema` — a concrete execution of a template, carrying
@@ -14,18 +11,21 @@ This module defines the top-level provenance objects:
 """
 
 import warnings
-from typing import Annotated, Any, Literal
-from uuid import UUID
+from typing import Annotated, Literal
 
 from pydantic import ConfigDict, PrivateAttr, field_validator
 
 from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
-from recap.schemas.common import SIMPLE_FIELD, CommonFields
+from recap.schemas.common import (
+    SIMPLE_FIELD,
+    NamespaceOwnedFields,
+    NormalizedLabels,
+)
 from recap.schemas.resource import ResourceAssignmentSchema, ResourceSlotSchema
 from recap.schemas.step import StepSchema, StepTemplateSchema
 
 
-class ProcessTemplateRef(CommonFields):
+class ProcessTemplateRef(NamespaceOwnedFields):
     """Lightweight reference to a process template.
 
     Used inside :class:`ProcessRunRef` and similar contexts where the full
@@ -39,9 +39,10 @@ class ProcessTemplateRef(CommonFields):
 
     name: Annotated[str, SIMPLE_FIELD]
     version: Annotated[str, SIMPLE_FIELD]
+    labels: NormalizedLabels
 
 
-class ProcessTemplateSchema(CommonFields):
+class ProcessTemplateSchema(NamespaceOwnedFields):
     """Blueprint for a workflow, defining its ordered steps and resource slots.
 
     A :class:`ProcessTemplateSchema` is created once and reused across
@@ -67,12 +68,12 @@ class ProcessTemplateSchema(CommonFields):
 
     name: Annotated[str, SIMPLE_FIELD]
     version: Annotated[str, SIMPLE_FIELD]
-    is_active: Annotated[bool, SIMPLE_FIELD]
+    labels: NormalizedLabels
     step_templates: dict[str, StepTemplateSchema]
     resource_slots: list["ResourceSlotSchema"]
 
 
-class ProcessRunRef(CommonFields):
+class ProcessRunRef(NamespaceOwnedFields):
     """Lightweight reference to a process run.
 
     Used in list views or parent-link contexts where the full
@@ -82,18 +83,17 @@ class ProcessRunRef(CommonFields):
     Attributes:
         name: Display name of the run.
         description: Free-text description.
-        campaign_id: UUID of the owning :class:`CampaignSchema`.
+        namespace_id: UUID of the owning Namespace.
         template: Lightweight :class:`ProcessTemplateRef` identifying which
             template was used.
     """
 
     name: Annotated[str, SIMPLE_FIELD]
     description: Annotated[str, SIMPLE_FIELD]
-    campaign_id: Annotated[UUID, SIMPLE_FIELD]
     template: ProcessTemplateRef
 
 
-class ProcessRunSchema(CommonFields):
+class ProcessRunSchema(NamespaceOwnedFields):
     """A concrete execution of a :class:`ProcessTemplateSchema`.
 
     A :class:`ProcessRunSchema` is the primary provenance record.  It links
@@ -102,7 +102,7 @@ class ProcessRunSchema(CommonFields):
     * The workflow that was executed (``template``).
     * The resources that were used (``assigned_resources``).
     * The parameter values captured at each step (``steps``).
-    * The campaign it belongs to (``campaign_id``).
+    * The namespace it belongs to (``namespace_id``).
 
     Chain multiple process runs by using the output resource of one run as
     the input of the next, creating a queryable provenance graph.
@@ -110,7 +110,7 @@ class ProcessRunSchema(CommonFields):
     Attributes:
         name: Display name for this run (e.g. ``"Run 001"``).
         description: Free-text description of what this run represents.
-        campaign_id: UUID of the owning :class:`CampaignSchema`.
+        namespace_id: UUID of the owning Namespace.
         template: The :class:`ProcessTemplateSchema` this run instantiates.
         steps: Mapping of step name → :class:`~recap.schemas.step.StepSchema`
             with live parameter values.
@@ -124,7 +124,6 @@ class ProcessRunSchema(CommonFields):
 
     name: Annotated[str, SIMPLE_FIELD]
     description: Annotated[str, SIMPLE_FIELD]
-    campaign_id: Annotated[UUID, SIMPLE_FIELD]
     template: ProcessTemplateSchema
     steps: dict[str, StepSchema]
     assigned_resources: dict[str, ResourceAssignmentSchema]
@@ -171,35 +170,3 @@ class ProcessRunSchema(CommonFields):
         elif name == "steps":
             self._handle_unloaded("steps", "include('steps')")
         return super().__getattribute__(name)
-
-
-class CampaignSchema(CommonFields):
-    """Top-level grouping of process runs for a single experimental campaign.
-
-    A campaign corresponds to a discrete period or project of experimental
-    work — for example, a synchrotron beamtime allocation or a drug-screening
-    campaign.  All :class:`ProcessRunSchema` instances belong to exactly one
-    campaign.
-
-    Create a campaign via
-    :meth:`~recap.client.base_client.RecapClient.create_campaign` and activate
-    an existing one via
-    :meth:`~recap.client.base_client.RecapClient.set_campaign` before creating
-    process runs.
-
-    Attributes:
-        name: Human-readable campaign name.
-        proposal: Proposal or project identifier (e.g. ``"MX-2026-001"``).
-        saf: Safety Approval Form or equivalent authorisation reference.
-            ``None`` when not applicable.
-        meta_data: Arbitrary JSON-serialisable key/value pairs stored with
-            the campaign.
-        process_runs: List of :class:`ProcessRunSchema` instances that belong
-            to this campaign.
-    """
-
-    name: Annotated[str, SIMPLE_FIELD]
-    proposal: Annotated[str, SIMPLE_FIELD]
-    saf: Annotated[str | None, SIMPLE_FIELD]
-    meta_data: Annotated[dict[str, Any] | None, SIMPLE_FIELD]
-    process_runs: list["ProcessRunSchema"]

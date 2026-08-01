@@ -1,7 +1,6 @@
 from pydantic import BaseModel
 
 from recap.db.attribute import AttributeGroupTemplate, AttributeValue
-from recap.db.campaign import Campaign
 from recap.db.process import (
     ProcessRun,
     ProcessTemplate,
@@ -11,7 +10,6 @@ from recap.db.process import (
 from recap.db.resource import Property, Resource, ResourceTemplate
 from recap.db.step import Parameter, Step, StepTemplate, StepTemplateResourceSlotBinding
 from recap.schemas.process import (
-    CampaignSchema,
     ProcessRunRef,
     ProcessRunSchema,
     ProcessTemplateSchema,
@@ -84,7 +82,6 @@ PRELOAD_STATEMENTS = {
             AttributeGroupTemplate.attribute_templates,
         ),
     ],
-    (CampaignSchema, "process_run"): [chain_load(Campaign.process_runs)],
     (ProcessTemplateSchema, "step_templates"): [
         chain_load(ProcessTemplate.step_templates)
     ],

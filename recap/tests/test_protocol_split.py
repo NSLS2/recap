@@ -29,6 +29,6 @@ def test_local_backend_satisfies_backend():
         # runtime_checkable would be ideal but Protocol doesn't require it;
         # just verify the key methods exist on both protocols
         assert hasattr(lb, "query")
-        assert hasattr(lb, "create_campaign")
+        assert hasattr(lb, "create_namespace")
         assert hasattr(lb, "count")
         assert hasattr(lb, "create_resource")

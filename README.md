@@ -68,7 +68,7 @@ pip install pyrecap
 
 ## Getting started
 
-As of Dec 2025, Recap clients connect directly to SQLite databases; a REST API backend is on the roadmap.
+Recap clients support local SQLite databases and authenticated remote REST/GraphQL servers.
 
 To create and connect to a temporary SQLite database:
 ```python
@@ -1213,13 +1213,15 @@ local-only; remote clients reject them with `TypeError` before making an HTTP
 request. See [Field Predicates, Ordering, and Pagination](#field-predicates-ordering-and-pagination)
 for supported expressions and migration examples.
 
-Writes do not travel through GraphQL. `from_url()` fetches the database path
-reported by the server and opens that SQLite file directly with `LocalBackend`.
-The client and server must therefore have shared filesystem access, and the
-server-reported path must resolve to the same database from both processes.
+Writes do not travel through GraphQL. `from_url()` sends every mutation through
+the authenticated REST command API; reads continue through GraphQL. Set an
+explicit namespace context before remote writes. Client and server need no
+shared filesystem.
 
 ```python
-client = RecapClient.from_url("http://localhost:8000")
+client = RecapClient.from_url("http://localhost:8000", api_key="secret")
+namespace = client.namespace("projects/amx")
+namespace.create(metadata={"beamline": "amx"})
 ```
 
 ### Caveat: snake_case field names

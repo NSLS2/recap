@@ -2,7 +2,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
-from recap.db.campaign import Campaign
 from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate
@@ -24,7 +23,8 @@ def _make_attr_group(name: str, attrs: list[dict]) -> AttributeGroupTemplate:
     return group
 
 
-def test_platemate_workflow_with_recap(db_session):  # noqa
+def test_platemate_workflow_with_recap(namespaced_session):  # noqa
+    db_session = namespaced_session
     """
     Replicate the PlateMate flow (library plate → xtal plate → puck) using
     Recap's resource/process model. The goal is to prove Recap can capture the
@@ -250,20 +250,14 @@ def test_platemate_workflow_with_recap(db_session):  # noqa
     lib_plate = Resource(name=f"DSI-poised-{suffix}", template=lib_plate_template)
     xtal_plate = Resource(name=f"pmtest-{suffix}", template=xtal_plate_template)
     puck = Resource(name=f"FGZ001-{suffix}", template=puck_template)
-    campaign = Campaign(
-        name=f"Platemate Campaign {suffix}",
-        proposal=f"PM-{suffix}",
-        meta_data={"target": "mpro"},
-    )
     process_run = ProcessRun(
         name=f"pm-run-{suffix}",
         description="Replicated PlateMate flow with Recap",
         template=process_template,
-        campaign=campaign,
     )
     process_run.create_date = base_time
 
-    db_session.add_all([lib_plate, xtal_plate, puck, campaign, process_run])
+    db_session.add_all([lib_plate, xtal_plate, puck, process_run])
     process_run.resources[lib_slot] = lib_plate
     process_run.resources[xtal_slot] = xtal_plate
     process_run.resources[puck_slot] = puck
@@ -303,7 +297,7 @@ def test_platemate_workflow_with_recap(db_session):  # noqa
         harvest.values["departure_time"] = departure
         harvest.values["puck"] = puck.name
         harvest.values["pin_position"] = idx + 1
-        harvest.values["lsdc_name"] = f"{campaign.meta_data['target']}-{idx + 1:02d}"
+        harvest.values["lsdc_name"] = f"mpro-{idx + 1:02d}"
         harvest.values["harvested"] = True
 
         pin = pins[idx]

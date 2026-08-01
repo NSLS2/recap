@@ -89,10 +89,28 @@ class ProcessRunType:
 
 
 @strawberry.type
-class CampaignType:
+class NamespaceType:
     id: strawberry.ID
-    name: str
-    proposal: str | None
+    path: str
+    parent_id: strawberry.ID | None
+    status: str
+    revision: int
+    metadata: JSON
     create_date: datetime
     modified_date: datetime
-    process_runs: list[ProcessRunType] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
+class PermissionIdentityType:
+    provider: str
+    subject: str
+
+
+@strawberry.type
+class PermissionsType:
+    identities: list[PermissionIdentityType]
+    snapshot_generation: str | None
+    effective_scopes: list[str]
+    matched_namespace_paths: list[str]
+    groups: list[str]
+    roles: list[str]

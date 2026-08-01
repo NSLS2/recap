@@ -1,12 +1,12 @@
 from sqlalchemy import select
 
-from recap.db.campaign import Campaign
 from recap.db.step import StepTemplate
 from recap.utils.database import get_or_create
 from recap.utils.general import generate_uppercase_alphabets
 
 
-def test_fragment_screening(db_session):
+def test_fragment_screening(namespaced_session):
+    db_session = namespaced_session
     from recap.db.attribute import (
         AttributeGroupTemplate,
         AttributeTemplate,
@@ -330,12 +330,8 @@ def test_fragment_screening(db_session):
     db_session.add(process_template)
     db_session.commit()
 
-    campaign = Campaign(name="Test campaign", proposal="111")
-
     #     - Create Process from template
-    process_run = ProcessRun(
-        name="FS1", description="Test", template=process_template, campaign=campaign
-    )
+    process_run = ProcessRun(name="FS1", description="Test", template=process_template)
     db_session.add(process_run)
     #     - Add resources to the process
     for resource in [

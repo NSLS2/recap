@@ -19,15 +19,22 @@ _SCALAR_TAG = "__recap_transport_scalar_v1__"
 
 class QueryRequest(BaseModel):
     schema_name: str
+    namespace_path: str
     spec: dict[str, Any]
 
     @classmethod
-    def from_query(cls, schema: type[BaseModel], spec: QuerySpec) -> QueryRequest:
+    def from_query(
+        cls, schema: type[BaseModel], spec: QuerySpec, *, namespace_path: str
+    ) -> QueryRequest:
         if not all(isinstance(item, FieldPredicate) for item in spec.predicates):
             raise TypeError("Remote query predicates must use Field(...)")
         if not all(isinstance(item, FieldOrdering) for item in spec.orderings):
             raise TypeError("Remote query orderings must use Field(...)")
-        return cls(schema_name=schema.__name__, spec=spec.model_dump(mode="json"))
+        return cls(
+            schema_name=schema.__name__,
+            namespace_path=namespace_path,
+            spec=spec.model_dump(mode="json"),
+        )
 
 
 class QueryResult(BaseModel):
