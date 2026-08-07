@@ -175,6 +175,7 @@ cython_debug/
 
 # Built docs
 site/
+great-docs/
 
 # Git worktrees
 .worktrees/
