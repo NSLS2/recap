@@ -374,7 +374,7 @@ class CommandService:
             raise CommandValidationError(str(error)) from error
         fingerprint = command_fingerprint(
             method="POST",
-            route_template="/api/v1/resources/{source_resource_id}/copies/{destination_namespace_path:path}",
+            route_template="/api/v1/resources/{source_resource_id}/copies",
             namespace_path=destination_path,
             source_id=source_resource_id,
             body=options,
@@ -682,9 +682,7 @@ class CommandService:
         self._authorize(context, canonical_path, mutation="create_process_template")
         fingerprint = command_fingerprint(
             method="POST",
-            route_template=(
-                "/api/v1/namespaces/{namespace_path:path}/process-templates"
-            ),
+            route_template=("/api/v1/process-templates/{namespace_path:path}"),
             namespace_path=canonical_path,
             source_id=None,
             body=draft,
@@ -855,7 +853,7 @@ class CommandService:
         self._authorize(context, canonical_path, mutation="create_resource_template")
         fingerprint = command_fingerprint(
             method="POST",
-            route_template="/api/v1/namespaces/{namespace_path:path}/resource-templates",
+            route_template="/api/v1/resource-templates/{namespace_path:path}",
             namespace_path=canonical_path,
             source_id=None,
             body=draft,

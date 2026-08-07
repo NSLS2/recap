@@ -43,7 +43,7 @@ def create_namespace(client):
 def test_post_and_patch_resource_template_aggregate(client):
     create_namespace(client)
     created = client.post(
-        "/api/v1/namespaces/beamline/amx/resource-templates",
+        "/api/v1/resource-templates/beamline/amx",
         headers=headers("template-1"),
         json=draft(),
     )
@@ -64,10 +64,8 @@ def test_post_and_patch_resource_template_aggregate(client):
 def test_resource_template_route_replays_and_has_no_granular_child_route(client):
     create_namespace(client)
     request = {"headers": headers("template-1"), "json": draft()}
-    first = client.post("/api/v1/namespaces/beamline/amx/resource-templates", **request)
-    replay = client.post(
-        "/api/v1/namespaces/beamline/amx/resource-templates", **request
-    )
+    first = client.post("/api/v1/resource-templates/beamline/amx", **request)
+    replay = client.post("/api/v1/resource-templates/beamline/amx", **request)
     assert replay.json() == first.json()
     assert (
         client.post(
@@ -75,5 +73,5 @@ def test_resource_template_route_replays_and_has_no_granular_child_route(client)
             headers=headers("child-1"),
             json={},
         ).status_code
-        == 404
+        == 422
     )

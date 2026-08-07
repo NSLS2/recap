@@ -64,8 +64,12 @@ def test_update_and_copy_send_preconditions_and_destination_path():
     assert calls[0].kwargs["headers"]["Idempotency-Key"]
     assert calls[1].args[:2] == (
         "POST",
-        f"https://recap.test/api/v1/resources/{source}/copies/beamline/amx",
+        f"https://recap.test/api/v1/resources/{source}/copies",
     )
+    assert calls[1].kwargs["json"] == {
+        "destination_namespace": "beamline/amx",
+        "name": "copy",
+    }
     assert calls[1].kwargs["headers"]["Idempotency-Key"]
 
 

@@ -139,11 +139,7 @@ class RESTAdapter:
         *,
         idempotency_key=None,
     ):
-        route = (
-            f"/api/v1/namespaces/{namespace_path.strip('/')}/{resource}"
-            if resource in {"process-templates", "resource-templates"}
-            else f"/api/v1/{resource}/{namespace_path.strip('/')}"
-        )
+        route = f"/api/v1/{resource}/{namespace_path.strip('/')}"
         return self._request(
             "POST",
             route,
@@ -178,8 +174,11 @@ class RESTAdapter:
     ):
         return self._request(
             "POST",
-            f"/api/v1/resources/{source_resource_id}/copies/{destination_namespace_path.strip('/')}",
-            body=changes or {},
+            f"/api/v1/resources/{source_resource_id}/copies",
+            body={
+                "destination_namespace": destination_namespace_path.strip("/"),
+                **(changes or {}),
+            },
             idempotency_key=idempotency_key,
         )
 

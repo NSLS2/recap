@@ -46,4 +46,4 @@ class UpdateResourceRequest(RestModel):
 
 
 class CopyResourceRequest(RestModel, ResourceCopyOptions):
-    pass
+    destination_namespace: str

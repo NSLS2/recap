@@ -15,7 +15,7 @@ def test_process_run_create_update_finalize_and_replay(tmp_path):
         )
         assert namespace.status_code == 201
         template = client.post(
-            "/api/v1/namespaces/beamline/amx/process-templates",
+            "/api/v1/process-templates/beamline/amx",
             headers={**auth, "Idempotency-Key": "pt"},
             json={
                 "name": "screen",
@@ -84,7 +84,7 @@ def test_process_run_create_rolls_back_on_bad_parameter(tmp_path):
             "/api/v1/namespaces/n", headers={**auth, "Idempotency-Key": "ns"}, json={}
         )
         template = client.post(
-            "/api/v1/namespaces/n/process-templates",
+            "/api/v1/process-templates/n",
             headers={**auth, "Idempotency-Key": "pt"},
             json={"name": "pt", "version": "1", "resource_slots": [], "steps": []},
         )

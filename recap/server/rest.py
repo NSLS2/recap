@@ -120,7 +120,7 @@ def update_namespace(
 
 
 @router.post(
-    "/namespaces/{namespace_path:path}/process-templates",
+    "/process-templates/{namespace_path:path}",
     response_model=ProcessTemplateSchema,
     status_code=201,
 )
@@ -160,7 +160,7 @@ def update_process_template(
 
 
 @router.post(
-    "/namespaces/{namespace_path:path}/resource-templates",
+    "/resource-templates/{namespace_path:path}",
     response_model=ResourceTemplateSchema,
     status_code=201,
 )
@@ -202,13 +202,12 @@ def update_resource_template(
 
 
 @router.post(
-    "/resources/{source_resource_id}/copies/{destination_namespace_path:path}",
+    "/resources/{source_resource_id}/copies",
     response_model=None,
     status_code=201,
 )
 def copy_resource(
     source_resource_id: UUID,
-    destination_namespace_path: str,
     body: CopyResourceRequest,
     request: Request,
     response: Response,
@@ -220,8 +219,10 @@ def copy_resource(
     result = CommandService(request.app.state.session_factory).execute(
         CopyResource(
             source_resource_id=source_resource_id,
-            destination_namespace_path=destination_namespace_path,
-            options=ResourceCopyOptions.model_validate(body.model_dump()),
+            destination_namespace_path=body.destination_namespace,
+            options=ResourceCopyOptions.model_validate(
+                body.model_dump(exclude={"destination_namespace"})
+            ),
         ),
         _context(request, actor, idempotency_key),
     )

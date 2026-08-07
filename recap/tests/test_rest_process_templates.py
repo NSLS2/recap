@@ -66,7 +66,7 @@ def create_namespace(client, auth_header):
 def test_post_and_patch_process_template_routes(client, auth_header):
     create_namespace(client, auth_header)
     created = client.post(
-        "/api/v1/namespaces/beamline/amx/process-templates",
+        "/api/v1/process-templates/beamline/amx",
         headers={**auth_header, "Idempotency-Key": "template-1"},
         json=draft(),
     )
@@ -99,12 +99,12 @@ def test_process_template_route_replay_and_validation(client, auth_header):
         "headers": {**auth_header, "Idempotency-Key": "template-1"},
         "json": draft(),
     }
-    first = client.post("/api/v1/namespaces/beamline/amx/process-templates", **request)
-    replay = client.post("/api/v1/namespaces/beamline/amx/process-templates", **request)
+    first = client.post("/api/v1/process-templates/beamline/amx", **request)
+    replay = client.post("/api/v1/process-templates/beamline/amx", **request)
     invalid = draft()
     invalid["steps"][0]["role_bindings"] = {"source": "missing"}
     rejected = client.post(
-        "/api/v1/namespaces/beamline/amx/process-templates",
+        "/api/v1/process-templates/beamline/amx",
         headers={**auth_header, "Idempotency-Key": "template-2"},
         json=invalid,
     )
