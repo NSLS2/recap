@@ -1,0 +1,12 @@
+---
+title: Examples
+---
+
+# Examples
+
+Examples show complete domain models and applied workflows. They are separate
+from tutorials so readers can browse concrete patterns without following a
+linear learning path.
+
+Existing resource examples remain available while they are moved into this
+section.

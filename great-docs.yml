@@ -55,6 +55,26 @@ authors:
     # orcid: 
     # homepage: 
 
+# Diataxis Content Sections
+# -------------------------
+user_guide: user_guide
+
+sections:
+  - title: How-To Guides
+    dir: how-to
+  - title: Explanation
+    dir: explanation
+  - title: Examples
+    dir: examples
+
+navbar_order:
+  - User Guide
+  - How-To Guides
+  - Explanation
+  - Examples
+  - Reference
+  - Changelog
+
 # Funding / Copyright Holder
 # --------------------------
 # Credit the organization that funds or holds copyright for this package.

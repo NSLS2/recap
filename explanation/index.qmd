@@ -1,0 +1,9 @@
+---
+title: Explanation
+---
+
+# Explanation
+
+Explanation pages describe how RECAP works and why its design matters. They
+cover namespaces, provenance, lifecycle and freezing, local/remote transport,
+authentication, authorization, and command processing.

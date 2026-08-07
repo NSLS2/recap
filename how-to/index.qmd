@@ -1,0 +1,11 @@
+---
+title: How-To Guides
+---
+
+# How-To Guides
+
+How-to guides solve focused RECAP tasks. They assume readers know the relevant
+concepts and prioritize an actionable procedure over broad explanation.
+
+Planned recipes include creating templates, running workflows, querying data,
+using remote clients, configuring authentication, and copying frozen resources.
