@@ -119,7 +119,6 @@ httpx2 = ">=2.0"
 [tool.pixi.environments]
 default = { solve-group = "default" }
 dev = { features = ["lint", "test", "server"], solve-group = "default" }
-docs = { features = ["docs"], solve-group = "default" }
 build = { features = [ "build" ], solve-group = "default"}
 
 [tool.pixi.feature.server.pypi-dependencies]
@@ -144,15 +143,6 @@ check-build = { cmd = ["twine", "check", "dist/*"] }
 
 [tool.pixi.feature.lint.tasks]
 lint = { cmd = ["pre-commit", "run", "--all-files"] }
-
-[tool.pixi.feature.docs.dependencies]
-mkdocs-material = "*"
-mkdocstrings = "*"
-pymdown-extensions = "*"
-
-[tool.pixi.feature.docs.tasks]
-docs-build = { cmd = ["mkdocs", "build", "--strict"] }
-docs-deploy = { cmd = ["mkdocs", "gh-deploy", "--force"] }
 
 [tool.pixi.feature.test.tasks]
 test = { cmd = ["pytest", "-s", "-ra", "recap/tests"] }
