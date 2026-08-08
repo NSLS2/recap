@@ -1,0 +1,19 @@
+---
+title: Local and Remote Architecture
+---
+
+# Local and Remote Architecture
+
+`RecapClient` presents one Python API over two backend arrangements.
+
+Local clients use SQLite and `LocalBackend` for reads and writes. Remote clients
+use GraphQL for reads and `RESTAdapter` for writes. Both arrangements preserve
+the same schemas, namespace context, builder API, and command semantics.
+Calling `client.namespace(path)` creates a scoped `RecapClient` view without
+opening a second backend connection; views share connection state and can be
+closed independently.
+
+Remote writes enter through thin FastAPI routes and then pass through
+`CommandService`. The command layer owns authorization, one transaction,
+optimistic revision checks, idempotency, and audit outcomes. This keeps HTTP
+transport separate from mutation behavior.

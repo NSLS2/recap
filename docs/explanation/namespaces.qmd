@@ -1,0 +1,83 @@
+---
+title: Namespaces and Visibility
+---
+
+# Namespaces and Visibility
+
+Namespaces provide ownership, query context, lifecycle metadata, and the
+authorization boundary for RECAP data.
+
+## Hierarchical paths
+
+Namespace paths use slash-separated segments:
+
+```text
+beamline
+└── beamline/amx
+    └── beamline/amx/proposal/312345
+```
+
+Paths are canonicalized before lookup. A namespace has one parent, a unique
+path, mutable metadata, lifecycle status, and a revision. Ancestor metadata can
+contribute effective context to a child namespace.
+
+## Ownership
+
+Provenance aggregates are namespace-owned:
+
+- Process templates are identified by namespace, name, and version.
+- Resource templates are identified by namespace, name, and version.
+- Process runs are identified by namespace and name.
+- Top-level resources use UUID identity; names may repeat across a namespace.
+
+The namespace remains immutable for an aggregate after creation. Moving an
+aggregate is not an ordinary update operation.
+
+## Lifecycle
+
+Namespace and provenance aggregate lifecycle follows forward-only transitions:
+
+```{mermaid}
+%%| fig-cap: "Forward-only RECAP lifecycle transitions"
+stateDiagram-v2
+    [*] --> MUTABLE
+    MUTABLE --> ACTIVE
+    MUTABLE --> ARCHIVED
+    ACTIVE --> ARCHIVED
+    ARCHIVED --> [*]
+```
+
+The diagram shows that records can move from mutable to active or archived, and
+active records can move to archived; unavailable transitions have no arrows.
+Same-state transitions are accepted. Archived records remain resolvable by
+identity and historical relationships but are excluded from default discovery.
+Templates and resources become immutable after stable references; changing an
+immutable resource creates a derived copy.
+
+## Query context
+
+`RecapClient.namespace()` returns another `RecapClient` bound to one namespace
+path. The scoped view shares connection state with its source client, so local
+SQLite resources or authenticated remote transports are opened once and safely
+remain available while either view is in use. Bracket access is an additive
+alias for the same operation:
+
+```python
+namespace = client.namespace("beamline/amx")
+same_namespace = client["beamline/amx"]
+resources = namespace.query_maker().resources().all()
+```
+
+For remote work, scope the client directly when its lifetime matches one
+namespace:
+
+```python
+with RecapClient.from_url("http://localhost:8000", api_key=API_KEY).namespace(
+    "beamline/amx"
+) as client:
+    client.query_maker().resources().all()
+```
+
+The namespace path travels beside the serialized query specification. It is not
+embedded in predicates, which allows the same query shape to work locally and
+through the remote GraphQL read backend.

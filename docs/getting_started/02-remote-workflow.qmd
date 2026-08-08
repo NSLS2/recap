@@ -1,0 +1,54 @@
+---
+title: Use a Remote RECAP Server
+---
+
+# Use a Remote RECAP Server
+
+Remote clients use one authenticated connection for both transports:
+GraphQL serves reads, while REST serves create, update, and copy commands.
+The client never opens the server's database file.
+
+## Connect with an API key
+
+```python
+from recap.client import RecapClient
+
+client = RecapClient.from_url(
+    "https://recap.example.org",
+    api_key="your-api-key",
+)
+namespace = client.namespace("beamline/amx")
+```
+
+Keep API keys outside source control. The client sends them as
+`Authorization: Apikey ...` and redacts credentials from transport errors and
+representations.
+
+## Read and write through a scoped `RecapClient`
+
+```python
+permissions = client.permissions("beamline/amx")
+
+with namespace.build_resource_template(
+    name="Sample Plate",
+    type_names=["container", "plate"],
+) as template:
+    template.add_properties({
+        "dimensions": [
+            {"name": "rows", "type": "int", "default": 8},
+            {"name": "columns", "type": "int", "default": 12},
+        ]
+    })
+```
+
+`namespace` is another `RecapClient` view sharing `client`'s authenticated
+connection state. Builders accumulate an aggregate draft and submit one
+command. Updates use optimistic revisions; the REST adapter sends `If-Match`
+and receives an `ETag`.
+Creates and copies use idempotency keys.
+
+## Next steps
+
+- [Query remote data](../how-to/query-resources.qmd).
+- [Set up a RECAP server](../how-to/setup-recap-server.qmd).
+- [Understand local and remote transport](../explanation/local-remote-architecture.qmd).
