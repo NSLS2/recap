@@ -7,13 +7,14 @@ from recap.client.base_client import RecapClient
 from recap.schemas.namespace import NamespaceContext
 
 
-def test_build_process_run_resolves_root_namespace(client):
-    client._namespace_context = None
-    with client.build_process_template("tmpl", "1.0") as template:
-        template.get_model()
+def test_build_process_run_resolves_root_namespace(tmp_path):
+    with RecapClient.from_sqlite(tmp_path / "recap.db") as client:
+        client._namespace_context = None
+        with client.build_process_template("tmpl", "1.0") as template:
+            template.get_model()
 
-    with client.build_process_run("run", "desc", "tmpl", "1.0") as builder:
-        assert builder.namespace_path == ""
+        with client.build_process_run("run", "desc", "tmpl", "1.0") as builder:
+            assert builder.namespace_path == ""
 
 
 def test_from_sqlite_returns_root_recap_client(tmp_path):
