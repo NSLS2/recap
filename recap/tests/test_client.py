@@ -7,10 +7,13 @@ from recap.client.base_client import RecapClient
 from recap.schemas.namespace import NamespaceContext
 
 
-def test_build_process_run_requires_namespace(client):
+def test_build_process_run_resolves_root_namespace(client):
     client._namespace_context = None
-    with pytest.raises(ValueError):
-        client.build_process_run("run", "desc", "tmpl", "1.0")
+    with client.build_process_template("tmpl", "1.0") as template:
+        template.get_model()
+
+    with client.build_process_run("run", "desc", "tmpl", "1.0") as builder:
+        assert builder.namespace_path == ""
 
 
 def test_from_sqlite_returns_root_recap_client(tmp_path):
