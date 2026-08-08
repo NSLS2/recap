@@ -112,12 +112,8 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
             },
         )
 
-    campaign_path = "beamline/amx"
-    apply_migrations(
-        db_url,
-        campaign_namespace_paths={campaign_id: campaign_path},
-        base_namespace_path="",
-    )
+    campaign_path = f"campaign/{campaign_id}"
+    apply_migrations(db_url)
 
     with engine.connect() as connection:
         namespace = (
@@ -193,6 +189,9 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
     assert namespace["id"] == campaign_id.hex
     assert namespace["parent_id"] == root_id
     assert process_run["namespace_id"] == namespace["id"]
+    assert templates["process_namespace_id"] == root_id
+    assert templates["resource_namespace_id"] == root_id
+    assert resources[unassigned_resource_id.hex]["namespace_id"] == root_id
     assert resources[assigned_resource_id.hex]["status"] == "ACTIVE"
     assert resources[unassigned_resource_id.hex]["status"] == "MUTABLE"
     assert assignment == {
@@ -205,7 +204,6 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
     assert metadata["nsls2.proposal"] == "312345"
     assert metadata["nsls2.saf"] == "310000"
     assert metadata["recap.campaign.metadata"] == {"sample": "Ni"}
-    assert templates["process_namespace_id"] == templates["resource_namespace_id"]
     assert resources[assigned_resource_id.hex]["revision"] == 1
 
     inspector = inspect(engine)
