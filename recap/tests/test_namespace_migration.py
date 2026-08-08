@@ -112,11 +112,11 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
             },
         )
 
-    campaign_path = f"default/campaign/{campaign_id}"
+    campaign_path = f"campaign/{campaign_id}"
     apply_migrations(
         db_url,
         campaign_namespace_paths={campaign_id: campaign_path},
-        base_namespace_path="default",
+        base_namespace_path="",
     )
 
     with engine.connect() as connection:
@@ -208,3 +208,17 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
     assert "campaign_id" not in {
         column["name"] for column in inspector.get_columns("process_run")
     }
+
+
+def test_fresh_database_uses_empty_root_namespace(tmp_path):
+    db_path = tmp_path / "fresh.db"
+    db_url = f"sqlite:///{db_path}"
+    apply_migrations(db_url)
+
+    with create_engine(db_url).connect() as connection:
+        root = connection.execute(
+            text("SELECT path, parent_id FROM namespace WHERE path = ''")
+        ).mappings().one()
+
+    assert root["path"] == ""
+    assert root["parent_id"] is None
