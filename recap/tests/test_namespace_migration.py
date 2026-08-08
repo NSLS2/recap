@@ -191,6 +191,7 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
     assert process_run["namespace_id"] == namespace["id"]
     assert templates["process_namespace_id"] == root_id
     assert templates["resource_namespace_id"] == root_id
+    assert templates["process_namespace_id"] == templates["resource_namespace_id"]
     assert resources[unassigned_resource_id.hex]["namespace_id"] == root_id
     assert resources[assigned_resource_id.hex]["status"] == "ACTIVE"
     assert resources[unassigned_resource_id.hex]["status"] == "MUTABLE"
@@ -225,3 +226,37 @@ def test_fresh_database_uses_empty_root_namespace(tmp_path):
 
     assert root["path"] == ""
     assert root["parent_id"] is None
+
+
+def test_explicit_campaign_namespace_path_is_unchanged_with_empty_base(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 'migration.db'}"
+    campaign_id = uuid4()
+
+    apply_migrations(db_url, revision="f11ecd5c55cf")
+    engine = create_engine(db_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO campaign (id, name, proposal, saf, meta_data)
+                VALUES (:id, 'Run 2026-1', '312345', '310000', '{}')
+                """
+            ),
+            {"id": campaign_id.hex},
+        )
+
+    apply_migrations(
+        db_url,
+        campaign_namespace_paths={campaign_id: "beamline/amx"},
+        base_namespace_path="",
+    )
+
+    with engine.connect() as connection:
+        campaign = connection.execute(
+            text("SELECT path, parent_id FROM namespace WHERE id = :id"),
+            {"id": campaign_id.hex},
+        ).mappings().one()
+        root_id = connection.scalar(text("SELECT id FROM namespace WHERE path = ''"))
+
+    assert campaign["path"] == "beamline/amx"
+    assert campaign["parent_id"] == root_id
