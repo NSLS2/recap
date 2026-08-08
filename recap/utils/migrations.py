@@ -26,9 +26,14 @@ def apply_migrations(
     revision: str = "head",
     *,
     campaign_namespace_paths: Mapping[UUID | str, str] | None = None,
-    base_namespace_path: str = "default",
+    base_namespace_path: str = "",
 ) -> None:
-    """Apply all migrations up to the requested revision for the given database."""
+    """Apply migrations, using the canonical root and campaign path defaults.
+
+    An empty ``base_namespace_path`` represents the canonical root namespace.
+    Campaign paths default to ``campaign/<uuid>`` when no explicit mapping is
+    provided.
+    """
     config = build_alembic_config(db_url)
     config.attributes["campaign_namespace_paths"] = {
         str(campaign_id): path
