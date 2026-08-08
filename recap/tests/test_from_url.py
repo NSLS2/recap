@@ -57,7 +57,7 @@ def test_from_url_query_maker_uses_read_backend():
     from recap.client import RecapClient
 
     client = RecapClient.from_url("http://localhost:8000", api_key="secret")
-    qm = client.query_maker(namespace="test")
+    qm = client.namespace("test").query_maker()
 
     assert isinstance(qm.backend, GraphQLAdapter)
     client.close()

@@ -177,12 +177,12 @@ class RecapClient:
         )
         return client
 
-    def permissions(self, namespace_path: str) -> ActorPermissions:
-        """Return typed effective permissions for current remote actor."""
+    def permissions(self) -> ActorPermissions:
+        """Return typed effective permissions for this client's namespace."""
         read_backend = getattr(self, "_read_backend", None)
         if read_backend is None or not hasattr(read_backend, "permissions"):
             raise RuntimeError("Permissions API requires a remote read backend")
-        return read_backend.permissions(namespace_path)
+        return read_backend.permissions(self.namespace_path)
 
     def namespace(self, path: str) -> "RecapClient":
         """Return a view scoped to an additive namespace path."""
@@ -319,7 +319,6 @@ class RecapClient:
         *args,
         process_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
-        namespace_path: str | None = None,
         **kwargs,
     ) -> ProcessTemplateBuilder:
         """Open a builder for a :class:`~recap.dsl.process_builder.ProcessTemplateBuilder`.
@@ -359,7 +358,7 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        namespace_context = self._resolve_namespace_context(namespace_path)
+        namespace_context = self._resolve_namespace_context()
 
         if process_template_id is not None:
             if args or kwargs:
@@ -411,7 +410,6 @@ class RecapClient:
         *args,
         process_run_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
-        namespace_path: str | None = None,
         **kwargs,
     ) -> ProcessRunBuilder:
         """Open a builder for a :class:`~recap.dsl.process_builder.ProcessRunBuilder`.
@@ -455,7 +453,7 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        namespace_context = self._resolve_namespace_context(namespace_path)
+        namespace_context = self._resolve_namespace_context()
 
         if process_run_id is not None:
             if args or kwargs:
@@ -522,7 +520,6 @@ class RecapClient:
         version: str = "1.0",
         resource_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
-        namespace_path: str | None = None,
     ):
         """Open a builder for a :class:`~recap.dsl.resource_builder.ResourceTemplateBuilder`.
 
@@ -566,7 +563,7 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        namespace_context = self._resolve_namespace_context(namespace_path)
+        namespace_context = self._resolve_namespace_context()
 
         if resource_template_id is not None:
             if name is not None or type_names is not None:
@@ -619,7 +616,6 @@ class RecapClient:
         resource_id: UUID | None = None,
         on_existing: Literal["create", "silent", "warn", "raise"] = "warn",
         parent: "ResourceSchema | UUID | None" = None,
-        namespace_path: str | None = None,
         **kwargs,
     ):
         """Open a builder for a :class:`~recap.dsl.resource_builder.ResourceBuilder`.
@@ -670,7 +666,7 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        namespace_context = self._resolve_namespace_context(namespace_path)
+        namespace_context = self._resolve_namespace_context()
 
         if resource_id is not None:
             if args or kwargs:
@@ -812,36 +808,30 @@ class RecapClient:
     def copy_resource(
         self,
         source_resource_id: UUID,
-        destination_namespace_id: UUID | None = None,
         options: ResourceCopyOptions | None = None,
-        *,
-        destination_namespace_path: str | None = None,
     ) -> ResourceSchema:
         """Copy resource across namespaces and commit or roll back atomically.
 
-        Local clients require a destination UUID or active namespace context;
-        remote clients use destination path. Returns persisted full schema and
-        propagates backend validation or authorization errors.
+        Destination namespace comes from this client's scope. Returns persisted
+        full schema and propagates backend validation or authorization errors.
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        if destination_namespace_path is not None:
-            if (
-                self._namespace_context is None
-                or self._namespace_context.path != destination_namespace_path
-            ):
-                raise ValueError("Destination Namespace context is required")
-            destination_namespace_id = self._namespace_context.id
-        if destination_namespace_id is None:
-            raise TypeError(
-                "destination_namespace_id or destination_namespace_path is required"
+        namespace_context = self._resolve_namespace_context()
+        copy_options = options or ResourceCopyOptions()
+        if self.backend.__class__.__name__ == "RESTAdapter":
+            result = self.backend.copy_resource(
+                source_resource_id,
+                self.namespace_path,
+                changes=copy_options.model_dump(mode="json"),
             )
+            return ResourceSchema.model_validate(result.entity)
         uow = self.backend.begin()
         try:
             copied = self.backend.copy_resource(
                 source_resource_id,
-                destination_namespace_id,
-                options or ResourceCopyOptions(),
+                namespace_context.id,
+                copy_options,
             )
             uow.commit()
             return copied
@@ -970,15 +960,12 @@ class RecapClient:
     def query_maker(
         self,
         *,
-        context: NamespaceContext | None = None,
-        namespace: str | None = None,
         on_unloaded: str = "warn",
     ):
-        """Return a query DSL scoped to explicit Namespace context."""
+        """Return a query DSL scoped to this client's namespace."""
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        if context is None:
-            context = self._resolve_namespace_context(namespace)
+        context = self._resolve_namespace_context()
 
         read_backend = getattr(self, "_read_backend", self.backend) or self.backend
         if read_backend is None:

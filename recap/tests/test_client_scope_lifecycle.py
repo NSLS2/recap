@@ -1,3 +1,5 @@
+import inspect
+
 import pytest
 
 from recap.client.base_client import RecapClient
@@ -177,3 +179,31 @@ def test_scoped_local_builder_resolves_namespace_path_without_active_context(tmp
 
     scoped.close()
     root.close()
+
+
+def test_scoped_query_does_not_require_namespace_argument():
+    client = RecapClient.from_url(
+        "http://recap.test", api_key="secret", namespace="beamline/amx"
+    )
+
+    query = client.query_maker()
+
+    assert query.namespace_path == "beamline/amx"
+    client.close()
+
+
+def test_scoped_client_rejects_redundant_namespace_override():
+    client = RecapClient.from_url(
+        "http://recap.test", api_key="secret", namespace="beamline/amx"
+    )
+
+    with pytest.raises(TypeError):
+        client.query_maker(namespace="other")
+
+    client.close()
+
+
+def test_scoped_builder_signature_has_no_namespace_path_argument():
+    parameters = inspect.signature(RecapClient.build_resource).parameters
+
+    assert "namespace_path" not in parameters

@@ -60,15 +60,16 @@ def test_from_sqlite_reuses_existing_file(tmp_path):
         existing_id = client.namespace_context.id
 
     with RecapClient.from_sqlite(db_file) as client:
-        client.set_namespace(existing_id)
-        assert client.namespace_context.id == existing_id
+        scoped = client.namespace("name")
+        assert scoped.namespace_path == "name"
+        scoped.close()
         assert client.database_path == db_file
 
 
-def test_query_maker_uses_explicit_namespace_context(apply_migrations, db_path):
+def test_query_maker_uses_client_namespace_scope(apply_migrations, db_path):
     with RecapClient.from_sqlite(db_path) as client:
         context = client.create_namespace("query-name")
-        qm = client.query_maker(context=context)
+        qm = client.namespace(context.path).query_maker()
 
         assert qm.process_runs()._context == context
         assert qm.resources()._context == context
@@ -76,12 +77,11 @@ def test_query_maker_uses_explicit_namespace_context(apply_migrations, db_path):
         assert qm.process_runs()._spec.on_unloaded == "warn"
 
 
-def test_query_maker_can_use_another_namespace(apply_migrations, db_path):
+def test_query_maker_uses_scoped_namespace_view(apply_migrations, db_path):
     with RecapClient.from_sqlite(db_path) as client:
         default = client.create_namespace("client-default")
         other = client.create_namespace("client-other")
-        client.set_namespace(default.id)
-        qm = client.query_maker(context=other)
+        qm = client.namespace(other.path).query_maker()
 
         assert qm.process_runs()._context == other
         assert qm.resources()._context == other
@@ -90,7 +90,7 @@ def test_query_maker_can_use_another_namespace(apply_migrations, db_path):
 def test_query_maker_can_set_on_unloaded_policy(apply_migrations, db_path):
     with RecapClient.from_sqlite(db_path) as client:
         context = client.create_namespace("name-policy")
-        qm = client.query_maker(context=context, on_unloaded="raise")
+        qm = client.namespace(context.path).query_maker(on_unloaded="raise")
         assert qm.process_runs()._spec.on_unloaded == "raise"
 
 
@@ -100,6 +100,21 @@ def test_root_query_maker_uses_root_scope_remotely():
     query = client.query_maker().resources()
 
     assert query._context.path == ""
+    client.close()
+
+
+def test_scoped_permissions_use_client_namespace(monkeypatch):
+    client = RecapClient.from_url("http://recap.test", api_key="secret")
+    calls = []
+    monkeypatch.setattr(
+        client._read_backend,
+        "permissions",
+        lambda path: calls.append(path) or object(),
+    )
+
+    client.namespace("beamline/amx").permissions()
+
+    assert calls == ["beamline/amx"]
     client.close()
 
 
@@ -114,9 +129,9 @@ def test_scoped_remote_query_uses_view_namespace():
     client.close()
 
 
-def test_builder_namespace_argument_cannot_escape_view_scope(tmp_path):
+def test_builder_namespace_argument_is_rejected(tmp_path):
     with RecapClient.from_sqlite(tmp_path / "recap.db", namespace="beamline/amx") as client:
-        with pytest.raises(ValueError, match="match client view scope"):
+        with pytest.raises(TypeError):
             client.build_resource_template(
                 name="Sample",
                 type_names=["sample"],

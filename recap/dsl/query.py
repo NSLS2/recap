@@ -89,6 +89,8 @@ def _validate_field_path(path: str) -> str:
 
 
 class FieldPredicate(BaseModel):
+    """Serializable field comparison used by :meth:`BaseQuery.where`."""
+
     field: str
     op: FieldOperator
     value: Any
@@ -103,6 +105,8 @@ class FieldPredicate(BaseModel):
 
 
 class FieldOrdering(BaseModel):
+    """Serializable ascending or descending field ordering."""
+
     field: str
     direction: Literal["asc", "desc"] = "asc"
 
@@ -110,6 +114,13 @@ class FieldOrdering(BaseModel):
 
 
 class Field:
+    """Typed query-field expression builder.
+
+    Comparisons create immutable :class:`FieldPredicate` values; ``asc`` and
+    ``desc`` create :class:`FieldOrdering` values. Use query ``where`` calls
+    for AND semantics instead of Python ``and``/``or``.
+    """
+
     def __init__(self, path: str):
         self.path = _validate_field_path(path)
 
@@ -117,27 +128,35 @@ class Field:
         return FieldPredicate(field=self.path, op=op, value=value)
 
     def __eq__(self, value: Any) -> FieldPredicate:  # type: ignore[override]
+        """Create equality predicate ``path == value``."""
         return self._predicate("eq", value)
 
     def __ne__(self, value: Any) -> FieldPredicate:  # type: ignore[override]
+        """Create inequality predicate."""
         return self._predicate("ne", value)
 
     def __lt__(self, value: Any) -> FieldPredicate:
+        """Create less-than predicate."""
         return self._predicate("lt", value)
 
     def __le__(self, value: Any) -> FieldPredicate:
+        """Create less-than-or-equal predicate."""
         return self._predicate("lte", value)
 
     def __gt__(self, value: Any) -> FieldPredicate:
+        """Create greater-than predicate."""
         return self._predicate("gt", value)
 
     def __ge__(self, value: Any) -> FieldPredicate:
+        """Create greater-than-or-equal predicate."""
         return self._predicate("gte", value)
 
     def in_(self, values: Sequence[Any]) -> FieldPredicate:
+        """Create membership predicate; strings are rejected as sequences."""
         return self._membership_predicate("in", values)
 
     def not_in(self, values: Sequence[Any]) -> FieldPredicate:
+        """Create non-membership predicate."""
         return self._membership_predicate("not_in", values)
 
     def _membership_predicate(
@@ -148,18 +167,23 @@ class Field:
         return self._predicate(op, list(values))
 
     def contains(self, value: str) -> FieldPredicate:
+        """Create substring containment predicate."""
         return self._predicate("contains", value)
 
     def starts_with(self, value: str) -> FieldPredicate:
+        """Create prefix predicate."""
         return self._predicate("starts_with", value)
 
     def ends_with(self, value: str) -> FieldPredicate:
+        """Create suffix predicate."""
         return self._predicate("ends_with", value)
 
     def asc(self) -> FieldOrdering:
+        """Order ascending by this field."""
         return FieldOrdering(field=self.path, direction="asc")
 
     def desc(self) -> FieldOrdering:
+        """Order descending by this field."""
         return FieldOrdering(field=self.path, direction="desc")
 
 
@@ -241,6 +265,8 @@ class QuerySpec(BaseModel):
 
 
 class BaseQuery(Generic[SchemaT]):
+    """Immutable query base with filtering, pagination, loading, and execution."""
+
     schema: type[SchemaT]
 
     def __init__(
@@ -323,11 +349,13 @@ class BaseQuery(Generic[SchemaT]):
         return clone
 
     def filter(self, **kwargs) -> "Self":
+        """Return clone with equality filters merged."""
         new_filters = dict(self._filters)
         new_filters.update(kwargs)
         return self._clone(filters=new_filters)
 
     def where(self, *predicates) -> "Self":
+        """Return clone with predicates appended using AND semantics."""
         for predicate in predicates:
             if not isinstance(predicate, FieldPredicate):
                 warnings.warn(
@@ -338,6 +366,7 @@ class BaseQuery(Generic[SchemaT]):
         return self._clone(predicates=self._predicates + list(predicates))
 
     def order_by(self, *orderings) -> "Self":
+        """Return clone with orderings appended."""
         normalized = []
         for ordering in orderings:
             if isinstance(ordering, Field):
@@ -353,15 +382,19 @@ class BaseQuery(Generic[SchemaT]):
         return self._clone(orderings=self._orderings + normalized)
 
     def limit(self, value: int) -> "Self":
+        """Return clone constrained to at most ``value`` rows."""
         return self._clone(limit=value)
 
     def offset(self, value: int) -> "Self":
+        """Return clone skipping ``value`` rows."""
         return self._clone(offset=value)
 
     def include_archived(self) -> "Self":
+        """Return clone including archived entities."""
         return self._clone(include_archived=True)
 
     def include(self, relation_names: str | Sequence[str]) -> "Self":
+        """Return clone requesting relation preloads."""
         names = (
             [relation_names]
             if isinstance(relation_names, str)
@@ -399,32 +432,41 @@ class BaseQuery(Generic[SchemaT]):
         return rows
 
     def all(self) -> Sequence[SchemaT] | Sequence[BaseModel]:
+        """Execute query and return all matching models or references."""
         return self._execute()
 
     def first(self) -> SchemaT | None:
+        """Execute query and return first match, or ``None``."""
         return next(iter(self.limit(1)._execute()), None)
 
     def count(self) -> int:
+        """Return matching row count without materializing rows."""
         return self._backend.count(
             self.model, self._spec, namespace_path=self._context.path
         )
 
 
 class NamespaceQuery(BaseQuery[NamespaceSchema]):
+    """Query namespaces, including local and effective metadata filters."""
+
     model = NamespaceSchema
 
     def filter_local_metadata(self, **metadata: Any) -> "NamespaceQuery":
+        """Return clone filtering metadata stored directly on namespaces."""
         values = dict(self._local_metadata_filters)
         values.update(metadata)
         return self._clone(local_metadata_filters=values)
 
     def filter_effective_metadata(self, **metadata: Any) -> "NamespaceQuery":
+        """Return clone filtering metadata inherited through namespace ancestry."""
         values = dict(self._effective_metadata_filters)
         values.update(metadata)
         return self._clone(effective_metadata_filters=values)
 
 
 class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
+    """Query process runs with optional steps, resources, and parameters."""
+
     model = ProcessRunSchema
     default_schema = None
 
@@ -483,6 +525,7 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
         return super().include(relation_names)
 
     def include_steps(self, *, include_parameters: bool = False) -> "ProcessRunQuery":
+        """Return clone preloading run steps and optionally their parameters."""
         if include_parameters:
             return self.include(["steps", "steps.parameters"])
         return self.include("steps")
@@ -502,6 +545,7 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
         in_: Sequence[Any] | None = None,
         value_type: str | None = None,
     ) -> "ProcessRunQuery":
+        """Return clone filtering process-run parameters by name and comparison."""
         comparators = {
             "eq": eq,
             "gt": gt,
@@ -544,10 +588,13 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
         return self._clone(parameter_filters=self._parameter_filters + [pf])
 
     def include_resources(self) -> "ProcessRunQuery":
+        """Return clone preloading assigned process-run resources."""
         return self.include("resources")
 
 
 class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
+    """Query resources, properties, templates, and parent relationships."""
+
     model = ResourceSchema
     default_schema = None
 
@@ -606,6 +653,7 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
         return super().include(relation_names)
 
     def include_template(self) -> "ResourceQuery":
+        """Return clone preloading each resource template."""
         return self.include("template")
 
     def filter_property(
@@ -622,6 +670,7 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
         in_: Sequence[Any] | None = None,
         value_type: str | None = None,
     ) -> "ResourceQuery":
+        """Return clone filtering typed resource properties."""
         comparators = {
             "eq": eq,
             "gt": gt,
@@ -665,6 +714,7 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
     def under_parent(
         self, parent: ResourceRef | ResourceSchema | UUID | str | Any
     ) -> "ResourceQuery":
+        """Return clone restricted to direct children of a parent resource."""
         parent_id: UUID
         if isinstance(parent, ResourceRef | ResourceSchema):
             parent_id = parent.id
@@ -686,6 +736,7 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
         *,
         of_template: UUID | None = None,
     ) -> "ResourceQuery":
+        """Return clone restricted to descendants of a parent resource."""
         """Fetch every resource beneath ``parent`` (all levels) in one bulk
         recursive query, with ``template`` and ``properties`` eagerly loaded.
 
@@ -699,6 +750,8 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
 
 
 class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateRef]):
+    """Query resource templates and optionally hydrate child relationships."""
+
     model = ResourceTemplateSchema
     default_schema = None
 
@@ -757,22 +810,29 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateR
         return super().include(relation_names)
 
     def filter_by_types(self, type_list: list[str]) -> "ResourceTemplateQuery":
+        """Return clone matching templates carrying every requested type."""
         return self.filter(types__names_in=type_list)
 
     def filter_label(self, label: str) -> "ResourceTemplateQuery":
+        """Return clone matching resource-template label."""
         return self.filter(labels__contains=label)
 
     def include_children(self) -> "ResourceTemplateQuery":
+        """Return clone preloading child templates."""
         return self.include("children")
 
     def include_attribute_groups(self) -> "ResourceTemplateQuery":
+        """Return clone preloading attribute-group templates."""
         return self.include("attribute_group_templates")
 
     def include_types(self) -> "ResourceTemplateQuery":
+        """Return clone preloading resource type tags."""
         return self.include("types")
 
 
 class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]):
+    """Query process templates and optionally hydrate steps and slots."""
+
     model = ProcessTemplateSchema
     default_schema = None
 
@@ -831,16 +891,21 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]
         return super().include(relation_names)
 
     def include_step_templates(self) -> "ProcessTemplateQuery":
+        """Return clone preloading process step templates."""
         return self.include("step_templates")
 
     def include_resource_slots(self) -> "ProcessTemplateQuery":
+        """Return clone preloading process resource slots."""
         return self.include("resource_slots")
 
     def filter_label(self, label: str) -> "ProcessTemplateQuery":
+        """Return clone matching process-template label."""
         return self.filter(labels__contains=label)
 
 
 class QueryDSL:
+    """Factory for namespace-scoped query families."""
+
     def __init__(
         self,
         backend: "Backend",
@@ -852,6 +917,7 @@ class QueryDSL:
             raise ValueError("on_unloaded must be one of: 'silent', 'warn', 'raise'")
         self.backend = backend
         self.context = context
+        self.namespace_path = context.path
         self._on_unloaded = on_unloaded
 
     def namespaces(self) -> NamespaceQuery:
