@@ -13,22 +13,33 @@ from recap.schemas.resource import ResourceCopyChanges, ResourceCopyOptions
 
 def _create_source(client):
     suffix = uuid4().hex
+    source_path = f"copy-{suffix}"
+    destination_path = f"{source_path}/destination"
+    sibling_path = f"{source_path}-sibling"
+    prefix_path = f"{source_path}x/destination"
+    namespace_prefix = client.namespace_path
+    source_full_path = "/".join(filter(None, (namespace_prefix, source_path)))
+    destination_full_path = "/".join(
+        filter(None, (namespace_prefix, destination_path))
+    )
+    sibling_full_path = "/".join(filter(None, (namespace_prefix, sibling_path)))
+    prefix_full_path = "/".join(filter(None, (namespace_prefix, prefix_path)))
     uow = client.backend.begin()
     try:
         session = client.backend.session
         source_namespace = Namespace(
-            path=f"copy-{suffix}", status=LifecycleStatus.ACTIVE
+            path=source_full_path, status=LifecycleStatus.ACTIVE
         )
         destination_namespace = Namespace(
-            path=f"copy-{suffix}/destination",
+            path=destination_full_path,
             parent=source_namespace,
             status=LifecycleStatus.ACTIVE,
         )
         sibling_namespace = Namespace(
-            path=f"copy-{suffix}-sibling", status=LifecycleStatus.ACTIVE
+            path=sibling_full_path, status=LifecycleStatus.ACTIVE
         )
         prefix_namespace = Namespace(
-            path=f"copy-{suffix}x/destination", status=LifecycleStatus.ACTIVE
+            path=prefix_full_path, status=LifecycleStatus.ACTIVE
         )
         value_template = AttributeTemplate(
             name="value", value_type="array", default_value="[]"
@@ -78,6 +89,9 @@ def _create_source(client):
             "destination_namespace_id": destination_namespace.id,
             "sibling_namespace_id": sibling_namespace.id,
             "prefix_namespace_id": prefix_namespace.id,
+            "destination_path": destination_path,
+            "sibling_path": sibling_path,
+            "prefix_path": prefix_path,
         }
         uow.commit()
         return result
@@ -118,7 +132,9 @@ def _load_tree(client, root_id):
 def test_copy_resource_deep_copies_full_graph_with_new_ids(client):
     setup = _create_source(client)
 
-    copied = client.copy_resource(setup["source_id"], setup["destination_namespace_id"])
+    copied = client.namespace(setup["destination_path"]).copy_resource(
+        setup["source_id"]
+    )
 
     source = _load_tree(client, setup["source_id"])
     clone = _load_tree(client, copied.id)
@@ -146,9 +162,8 @@ def test_copy_resource_deep_copies_full_graph_with_new_ids(client):
 def test_copy_resource_isolates_mutable_values_and_applies_root_overrides(client):
     setup = _create_source(client)
 
-    copied = client.copy_resource(
+    copied = client.namespace(setup["destination_path"]).copy_resource(
         setup["source_id"],
-        setup["destination_namespace_id"],
         ResourceCopyOptions(
             name="copy",
             changes=ResourceCopyChanges(properties={"details": {"value": [9]}}),
@@ -195,7 +210,9 @@ def test_builder_copy_on_write_preserves_value_metadata(client):
 def test_copy_resource_activates_source_and_owns_clone_in_destination(client):
     setup = _create_source(client)
 
-    copied = client.copy_resource(setup["source_id"], setup["destination_namespace_id"])
+    copied = client.namespace(setup["destination_path"]).copy_resource(
+        setup["source_id"]
+    )
 
     source = _load_tree(client, setup["source_id"])["root"]
     clone = _load_tree(client, copied.id)
@@ -211,7 +228,7 @@ def test_copy_resource_activates_source_and_owns_clone_in_destination(client):
 
 
 @pytest.mark.parametrize(
-    "destination_key", ["sibling_namespace_id", "prefix_namespace_id"]
+    "destination_key", ["sibling_path", "prefix_path"]
 )
 def test_copy_resource_rejects_destination_outside_source_ancestry(
     client, destination_key
@@ -219,23 +236,22 @@ def test_copy_resource_rejects_destination_outside_source_ancestry(
     setup = _create_source(client)
 
     with pytest.raises(ValueError, match="descendant"):
-        client.copy_resource(setup["source_id"], setup[destination_key])
+        client.namespace(setup[destination_key]).copy_resource(setup["source_id"])
 
 
 def test_copy_resource_requires_source_graph_root(client):
     setup = _create_source(client)
 
     with pytest.raises(ValueError, match="root"):
-        client.copy_resource(setup["child_id"], setup["destination_namespace_id"])
+        client.namespace(setup["destination_path"]).copy_resource(setup["child_id"])
 
 
 def test_invalid_copy_changes_roll_back_source_activation_and_clone(client):
     setup = _create_source(client)
 
     with pytest.raises(ValueError, match="missing"):
-        client.copy_resource(
+        client.namespace(setup["destination_path"]).copy_resource(
             setup["source_id"],
-            setup["destination_namespace_id"],
             ResourceCopyOptions(
                 changes=ResourceCopyChanges(properties={"missing": {"value": 9}})
             ),
