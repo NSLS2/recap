@@ -28,35 +28,37 @@ def test_remote_writes_are_visible_to_graphql_and_match_rest_entities(tmp_path):
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
     ):
         namespace = remote.namespace("beamline/amx")
-        namespace_result = namespace.create(metadata={"beamline": "amx"})
+        namespace_result = namespace.create_namespace(
+            namespace.namespace_path, metadata={"beamline": "amx"}
+        )
 
-        resource_template = remote.backend.create(
+        resource_template = namespace.backend.create(
             "resource-templates",
-            namespace.path,
+            namespace.namespace_path,
             {
                 "name": "Sample",
                 "version": "1.0",
                 "type_names": ["sample"],
             },
         ).entity
-        process_template = remote.backend.create(
+        process_template = namespace.backend.create(
             "process-templates",
-            namespace.path,
+            namespace.namespace_path,
             {"name": "Measure", "version": "1.0"},
         ).entity
-        resource = remote.backend.create(
+        resource = namespace.backend.create(
             "resources",
-            namespace.path,
+            namespace.namespace_path,
             {"name": "S-001", "template_id": resource_template["id"]},
         ).entity
-        copied = remote.backend.copy_resource(
+        copied = namespace.backend.copy_resource(
             resource["id"],
-            namespace.path,
+            namespace.namespace_path,
             changes={"name": "S-001-copy", "changes": {"properties": {}}},
         ).entity
-        process_run = remote.backend.create(
+        process_run = namespace.backend.create(
             "process-runs",
-            namespace.path,
+            namespace.namespace_path,
             {
                 "name": "run-001",
                 "description": "remote run",
@@ -66,7 +68,7 @@ def test_remote_writes_are_visible_to_graphql_and_match_rest_entities(tmp_path):
             },
         ).entity
 
-        assert namespace_result.path == namespace.path
+        assert namespace_result.path == namespace.namespace_path
         assert copied["name"] == "S-001-copy"
         assert process_run["name"] == "run-001"
         assert [item.name for item in namespace.query_maker().resources().all()] == [
