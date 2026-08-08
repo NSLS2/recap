@@ -1,7 +1,7 @@
 from collections.abc import Iterable
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Any, Literal, overload, TYPE_CHECKING
+from typing import Any, Literal, overload
 from uuid import UUID, uuid4
 
 from sqlalchemy import create_engine
@@ -17,9 +17,6 @@ from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceCopyOptions, ResourceRef, ResourceSchema
 from recap.utils.migrations import apply_migrations
-
-if TYPE_CHECKING:
-    from recap.client.namespace_client import NamespaceClient
 
 class RecapClient:
     """Primary entry point for interacting with a RECAP provenance database.
@@ -48,6 +45,7 @@ class RecapClient:
         self._namespace_context: NamespaceContext | None = None
         self.namespace_path = self._normalize_namespace(namespace)
         self._connection_state: _ConnectionState | None = None
+        self._closed = False
         self.database_path: Path | None = None
         self.backend: Backend | None = None
 
@@ -61,6 +59,9 @@ class RecapClient:
         Safe to call multiple times.  After calling this method the client
         should no longer be used.
         """
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
         state = getattr(self, "_connection_state", None)
         if state is not None:
             state.release()
@@ -183,11 +184,32 @@ class RecapClient:
             raise RuntimeError("Permissions API requires a remote read backend")
         return read_backend.permissions(namespace_path)
 
-    def namespace(self, path: str):
-        """Return namespace-scoped facade for ``path`` without persisting it."""
-        from recap.client.namespace_client import NamespaceClient
+    def namespace(self, path: str) -> "RecapClient":
+        """Return a view scoped to an additive namespace path."""
+        child_path = self._normalize_namespace(path)
+        namespace_path = "/".join(
+            part for part in (self.namespace_path, child_path) if part
+        )
+        state = self._connection_state
+        if state is None:
+            raise RuntimeError("Connection state is not available")
 
-        return NamespaceClient(self, path.strip("/"))
+        view = self.__class__(namespace=namespace_path)
+        state.acquire()
+        view._connection_state = state
+        view.database_path = self.database_path
+        view.backend = self.backend
+        view._read_backend = getattr(self, "_read_backend", self.backend)
+        if hasattr(self, "engine"):
+            view.engine = self.engine
+        if hasattr(self, "_sessionmaker"):
+            view._sessionmaker = self._sessionmaker
+        return view
+
+    def __getitem__(self, namespace: str) -> "RecapClient":
+        if not isinstance(namespace, str):
+            raise TypeError("namespace key must be a string")
+        return self.namespace(namespace)
 
     @classmethod
     def from_sqlite(
