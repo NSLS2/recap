@@ -29,9 +29,9 @@ def _public_dump(value):
 
 def _assert_query_parity(clients, query):
     local, remote = clients
-    context = local.namespace_context
-    local_result = query(local.query_maker(context=context))
-    remote_result = query(remote.query_maker(context=context))
+    namespace_path = local.namespace_context.path
+    local_result = query(local.namespace(namespace_path).query_maker())
+    remote_result = query(remote.namespace(namespace_path).query_maker())
     assert _public_dump(remote_result) == _public_dump(local_result)
     return local_result, remote_result
 
@@ -203,7 +203,7 @@ def test_reference_shape_parity(parity_clients, query, expected_type):
 def test_filters_scopes_pagination_and_count_parity(parity_clients):
     local, remote = parity_clients
     parent = (
-        local.query_maker(context=local.namespace_context)
+        local.namespace(local.namespace_context.path).query_maker()
         .resources()
         .filter(name="plate-1")
         .include("children")
@@ -228,8 +228,8 @@ def test_filters_scopes_pagination_and_count_parity(parity_clients):
     for query in queries:
         _assert_query_parity(parity_clients, query)
 
-    local_q = local.query_maker(context=local.namespace_context)
-    remote_q = remote.query_maker(context=local.namespace_context)
+    local_q = local.namespace(local.namespace_context.path).query_maker()
+    remote_q = remote.namespace(local.namespace_context.path).query_maker()
     count_queries = [
         lambda q: q.resources().count(),
         lambda q: q.resources().filter_property("rating", gt=10).count(),
@@ -326,7 +326,9 @@ def test_field_ordering_parity(parity_clients, ordering):
 @pytest.mark.parametrize("field", ["id", "create_date"])
 def test_transport_scalar_predicate_coercion_parity(parity_clients, field):
     local, _ = parity_clients
-    target = local.query_maker(context=local.namespace_context).process_runs().first()
+    target = (
+        local.namespace(local.namespace_context.path).query_maker().process_runs().first()
+    )
 
     local_result, remote_result = _assert_query_parity(
         parity_clients,
@@ -368,7 +370,8 @@ def test_on_unloaded_access_behavior_parity(parity_clients, policy, query, field
     outcomes = []
     for client in parity_clients:
         model = query(
-            client.query_maker(context=parity_clients[0].namespace_context), policy
+            client.namespace(parity_clients[0].namespace_context.path).query_maker(),
+            policy,
         ).first()
         outcomes.append(_access_outcome(model, field, policy))
     assert outcomes[1] == outcomes[0]

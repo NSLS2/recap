@@ -26,7 +26,7 @@ class TestArrayDefaultViaLocalBackend:
 
         # Verify template was persisted and is queryable
         tmpl = (
-            client.query_maker(context=client.namespace_context)
+            client.query_maker()
             .resource_templates()
             .filter(name="ArrayTest-T1")
             .first()
@@ -44,7 +44,7 @@ class TestArrayDefaultViaLocalBackend:
             rtb.activate()
 
         tmpl = (
-            client.query_maker(context=client.namespace_context)
+            client.query_maker()
             .resource_templates()
             .filter(name="ArrayTest-T2")
             .first()
@@ -73,7 +73,7 @@ class TestArrayDefaultViaLocalBackend:
 
         # Should still have exactly one attribute template named "items"
         tmpl = (
-            client.query_maker(context=client.namespace_context)
+            client.query_maker()
             .resource_templates()
             .filter(name="ArrayTest-T3")
             .include_attribute_groups()

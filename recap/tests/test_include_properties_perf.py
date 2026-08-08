@@ -46,7 +46,7 @@ def test_build_property_model_after_include_properties_no_lazy_loads(client):
         client.backend.set_resource_status(resource.id, LifecycleStatus.ACTIVE)
         uow.commit()
 
-    qm = client.query_maker(context=client.namespace_context)
+    qm = client.query_maker()
     resources = qm.resources().include(["properties"]).filter(name="incprop-a").all()
 
     # All hydration SQL should have run during .all(); building the dynamic
@@ -84,7 +84,7 @@ def test_include_properties_matches_load_eager_statement_count(client):
     client.backend.set_resource_status(resource.id, LifecycleStatus.ACTIVE)
     uow.commit()
 
-    qm = client.query_maker(context=client.namespace_context)
+    qm = client.query_maker()
 
     with count_statements(client) as c_include:
         inc = qm.resources().include(["properties"]).filter(name="parity-res").all()

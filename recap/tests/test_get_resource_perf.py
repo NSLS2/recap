@@ -93,7 +93,7 @@ def test_get_resource_expand_matches_query_eager(client):
 
     got = client.get_resource("eq-0", "GetResEqT", expand=True)
 
-    qm = client.query_maker(context=client.namespace_context)
+    qm = client.query_maker()
     expected = qm.resources(load="eager").filter(name="eq-0").first()
 
     assert got.id == expected.id

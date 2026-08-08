@@ -69,7 +69,7 @@ def test_load_eager_resource_tree_is_depth_independent(client):
     _make_chain(client, depth=3, prefix="three")
     _make_chain(client, depth=4, prefix="four")
 
-    qm = client.query_maker(context=client.namespace_context)
+    qm = client.query_maker()
 
     with count_statements(client) as counter_3:
         tree_3 = qm.resources(load="eager").filter(name="three-0").first()
@@ -106,7 +106,7 @@ def test_load_eager_resource_tree_bounded_count(client):
     client.backend.set_resource_status(root.id, LifecycleStatus.ACTIVE)
     uow.commit()
 
-    qm = client.query_maker(context=client.namespace_context)
+    qm = client.query_maker()
     with count_statements(client) as counter:
         tree = qm.resources(load="eager").filter(name="bounded-0").first()
 

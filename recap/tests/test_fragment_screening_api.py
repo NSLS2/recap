@@ -50,7 +50,7 @@ def test_fragment_screening_api(client):
         lp.activate()
 
     rt = (
-        client.query_maker(context=client.namespace_context)
+        client.query_maker()
         .resource_templates()
         .filter_by_types(["library_plate"])
         .first()
@@ -99,7 +99,7 @@ def test_fragment_screening_api(client):
         plate.activate()
 
     rt = (
-        client.query_maker(context=client.namespace_context)
+        client.query_maker()
         .resource_templates()
         .filter_by_types(["xtal_plate"])
         .first()
@@ -153,7 +153,7 @@ def test_fragment_screening_api(client):
         ).bind_slot("dest_container", "puck_tray").close_step()
 
     xtal_plate_template = (
-        client.query_maker(context=client.namespace_context)
+        client.query_maker()
         .resource_templates()
         .filter_by_types(["xtal_plate"])
         .first()
@@ -162,7 +162,7 @@ def test_fragment_screening_api(client):
         client.create_resource("Test Xtal plate", xtal_plate_template.name)
 
     library_plate_template = (
-        client.query_maker(context=client.namespace_context)
+        client.query_maker()
         .resource_templates()
         .filter_by_types(["library_plate"])
         .filter(name="Library Plate 1536")
@@ -183,7 +183,7 @@ def test_fragment_screening_api(client):
 
     ## Testing queries
 
-    qm = client.query_maker(context=client.namespace_context)
+    qm = client.query_maker()
     runs = qm.process_runs()
 
     assert runs.count() == 1
