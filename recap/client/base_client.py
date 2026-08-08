@@ -1,8 +1,7 @@
 from collections.abc import Iterable
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Any, Literal, overload
-from urllib.parse import urlparse
+from typing import Any, Literal, overload, TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import create_engine
@@ -10,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from recap.adapter import Backend
 from recap.adapter.local import LocalBackend
+from recap.client.connection_state import _ConnectionState
 from recap.client.permissions import ActorPermissions
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.query import QueryDSL
@@ -18,6 +18,8 @@ from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceCopyOptions, ResourceRef, ResourceSchema
 from recap.utils.migrations import apply_migrations
 
+if TYPE_CHECKING:
+    from recap.client.namespace_client import NamespaceClient
 
 class RecapClient:
     """Primary entry point for interacting with a RECAP provenance database.
@@ -26,60 +28,32 @@ class RecapClient:
     creating and loading the core domain objects: namespaces, resources,
     resource templates, process templates, and process runs.
 
-    Prefer the :meth:`from_sqlite` class method over constructing an instance
-    directly; it handles database creation and schema migrations automatically.
+    Use :meth:`from_sqlite` for local SQLite databases and :meth:`from_url` for
+    remote recap servers. These are the canonical initialization methods.
 
     The client can be used as a context manager, which closes the underlying
-    engine on exit::
+    engine on exit:
 
         with RecapClient.from_sqlite() as client:
             client.create_namespace("projects/my-project")
 
-    Attributes:
-        database_path: Filesystem path to the SQLite database file, or
-            ``None`` when a non-file URL is used.
-        backend: The storage backend used to persist domain objects.
     """
 
-    def __init__(
-        self,
-        url: str | None = None,
-        echo: bool = False,
-    ):
-        """Initialise a client from a database URL.
+    def __init__(self, namespace: str | None = None):
+        """Initialise common empty client state.
 
-        In most cases you should use :meth:`from_sqlite` instead, which also
-        creates the database file and runs pending migrations.
-
-        Args:
-            url: A SQLAlchemy-compatible connection string.  Only
-                ``sqlite:///`` URLs are currently supported.  Pass ``None``
-                to create an uninitialised client (useful for testing).
-            echo: When ``True`` the SQLAlchemy engine will log every SQL
-                statement it executes.  Defaults to ``False``.
-
-        Raises:
-            NotImplementedError: If an ``http://`` or ``https://`` URL is
-                supplied (REST backend is not yet implemented).
-            ValueError: If the URL scheme is not recognised.
+        Use :meth:`from_sqlite` for local clients and :meth:`from_url` for
+        remote clients. These are the canonical initialization methods.
         """
         self._namespace_context: NamespaceContext | None = None
+        self.namespace_path = self._normalize_namespace(namespace)
+        self._connection_state: _ConnectionState | None = None
         self.database_path: Path | None = None
         self.backend: Backend | None = None
-        if url is not None:
-            parsed = urlparse(url)
-            if parsed.scheme in ("http", "https"):
-                raise NotImplementedError("Rest api via HTTP(S) is not yet implemented")
-            elif "sqlite" in parsed.scheme:
-                if parsed.path and parsed.path != "/:memory:":
-                    self.database_path = Path(parsed.path)
-                self.engine = create_engine(url, echo=echo)
-                self._sessionmaker = sessionmaker(
-                    bind=self.engine, expire_on_commit=False, future=True
-                )
-                self.backend = LocalBackend(self._sessionmaker)
-            else:
-                raise ValueError(f"Unknown scheme: {parsed.scheme}")
+
+    @staticmethod
+    def _normalize_namespace(namespace: str | None) -> str:
+        return (namespace or "").strip("/")
 
     def close(self):
         """Close the underlying session and engine to release SQLite locks.
@@ -87,6 +61,11 @@ class RecapClient:
         Safe to call multiple times.  After calling this method the client
         should no longer be used.
         """
+        state = getattr(self, "_connection_state", None)
+        if state is not None:
+            state.release()
+            self._connection_state = None
+            return
         backend = getattr(self, "backend", None)
         if backend and hasattr(backend, "close"):
             backend.close()
@@ -115,6 +94,10 @@ class RecapClient:
         cls,
         read_backend: "Backend",
         write_backend: "Backend",
+        *,
+        namespace: str | None = None,
+        engine: Any = None,
+        sessionmaker_: Any = None,
     ) -> "RecapClient":
         """Construct a RecapClient with split read/write backends.
 
@@ -123,8 +106,15 @@ class RecapClient:
         compatibility with builder methods that reference ``self.backend``.
         ``read_backend`` is stored separately and used by :meth:`query_maker`.
         """
-        instance = cls.__new__(cls)
-        instance._namespace_context = None
+        state = _ConnectionState(
+            read_backend=read_backend,
+            write_backend=write_backend,
+            engine=engine,
+            sessionmaker=sessionmaker_,
+        )
+        instance = cls(namespace=namespace)
+        state.acquire()
+        instance._connection_state = state
         instance.database_path = None
         instance.backend = write_backend
         instance._read_backend = read_backend
@@ -132,23 +122,40 @@ class RecapClient:
 
     @classmethod
     def from_url(
-        cls, url: str, *, api_key: str, timeout: float = 30.0, unscoped: bool = False
+        cls,
+        url: str,
+        *,
+        api_key: str,
+        timeout: float = 30.0,
+        namespace: str | None = None,
+        unscoped: bool = False,
     ) -> "RecapClient":
-        """Connect to a recap GraphQL server.
+        """Connect to a recap webserver.
 
         Uses :class:`~recap.adapter.graphql.GraphQLAdapter` for reads and
         :class:`~recap.adapter.rest.RESTAdapter` for writes. The client does
         not require access to the server's database filesystem.
 
-        Args:
-            url: Base URL of the recap server, e.g. ``"http://localhost:8000"``.
+        Parameters
+        ----------
+        url : str
+            Base URL of the recap server, e.g. ``"http://localhost:8000"``.
+        api_key : str
+            API key used to authenticate requests.
+        timeout : float, default=30.0
+            HTTP request timeout in seconds.
+        namespace : str, default=None
+            Optional namespace to initialize client with
 
-        Returns:
-            A fully initialised :class:`RecapClient`.
+        Returns
+        -------
+        RecapClient
+            Fully initialized client with GraphQL reads and REST writes.
 
-        Raises:
-            RecapConnectionError: If the server is unreachable or returns an
-                HTTP error response.
+        Raises
+        ------
+        RecapConnectionError
+            If the server is unreachable or returns an HTTP error response.
         """
         from recap.adapter.graphql import GraphQLAdapter, _RedactedAuthHeaders
         from recap.adapter.rest import RESTAdapter
@@ -162,9 +169,12 @@ class RecapClient:
             graphql_url=f"{base}/graphql", _header_provider=header_provider
         )
         write_backend = RESTAdapter(base_url=base, api_key=api_key, timeout=timeout)
-        return cls._from_backends(
-            read_backend=read_backend, write_backend=write_backend
+        client = cls._from_backends(
+            read_backend=read_backend,
+            write_backend=write_backend,
+            namespace=namespace,
         )
+        return client
 
     def permissions(self, namespace_path: str) -> ActorPermissions:
         """Return typed effective permissions for current remote actor."""
@@ -174,17 +184,22 @@ class RecapClient:
         return read_backend.permissions(namespace_path)
 
     def namespace(self, path: str):
+        """Return namespace-scoped facade for ``path`` without persisting it."""
         from recap.client.namespace_client import NamespaceClient
 
         return NamespaceClient(self, path.strip("/"))
 
     @classmethod
     def from_sqlite(
-        cls, path: str | Path | None = None, echo: bool = False
+        cls,
+        path: str | Path | None = None,
+        echo: bool = False,
+        *,
+        namespace: str | None = None,
     ) -> "RecapClient":
         """Create or upgrade a local SQLite database and return a connected client.
 
-        This is the recommended way to create a :class:`RecapClient`.  The
+        This is the canonical way to create a :class:`RecapClient`.  The
         method creates the database file (and any missing parent directories)
         if it does not already exist, then runs any pending Alembic migrations
         so the schema is always up to date.
@@ -225,7 +240,20 @@ class RecapClient:
         db_url = f"sqlite:///{target_path}"
         apply_migrations(db_url)
 
-        client = cls(url=db_url, echo=echo)
+        engine = create_engine(db_url, echo=echo)
+        sessionmaker_ = sessionmaker(
+            bind=engine, expire_on_commit=False, future=True
+        )
+        backend = LocalBackend(sessionmaker_)
+        client = cls._from_backends(
+            read_backend=backend,
+            write_backend=backend,
+            namespace=namespace,
+            engine=engine,
+            sessionmaker_=sessionmaker_,
+        )
+        client.engine = engine
+        client._sessionmaker = sessionmaker_
         client.database_path = target_path
         return client
 
@@ -754,6 +782,12 @@ class RecapClient:
         *,
         destination_namespace_path: str | None = None,
     ) -> ResourceSchema:
+        """Copy resource across namespaces and commit or roll back atomically.
+
+        Local clients require a destination UUID or active namespace context;
+        remote clients use destination path. Returns persisted full schema and
+        propagates backend validation or authorization errors.
+        """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
         if destination_namespace_path is not None:

@@ -1,8 +1,36 @@
 """Tests for RecapClient.from_url()."""
 
+import inspect
 from unittest.mock import patch
 
 import pytest
+
+
+def test_from_url_returns_root_recap_client():
+    from recap.client import RecapClient
+
+    client = RecapClient.from_url("http://localhost:8000", api_key="secret")
+
+    assert isinstance(client, RecapClient)
+    assert client.namespace_path == ""
+    client.close()
+
+
+def test_from_url_accepts_initial_namespace_scope():
+    from recap.client import RecapClient
+
+    remote = RecapClient.from_url(
+        "http://localhost:8000", api_key="secret", namespace="beamline/amx"
+    )
+
+    assert remote.namespace_path == "beamline/amx"
+    remote.close()
+
+
+def test_constructor_has_no_database_url_argument():
+    from recap.client import RecapClient
+
+    assert "url" not in inspect.signature(RecapClient).parameters
 
 
 def test_from_url_wires_graphql_reads_and_rest_writes_without_db_discovery():
