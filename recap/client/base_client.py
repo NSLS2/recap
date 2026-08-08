@@ -211,6 +211,31 @@ class RecapClient:
             raise TypeError("namespace key must be a string")
         return self.namespace(namespace)
 
+    def _resolve_namespace_context(
+        self, namespace_path: str | None = None, *, context: NamespaceContext | None = None
+    ) -> NamespaceContext:
+        requested_path = self._normalize_namespace(
+            self.namespace_path if namespace_path is None else namespace_path
+        )
+        if namespace_path is not None and requested_path != self.namespace_path:
+            raise ValueError("Namespace path must match client view scope")
+        if context is not None:
+            if namespace_path is not None and context.path != requested_path:
+                raise ValueError("Namespace context must match namespace path")
+            return context
+        if self._namespace_context is not None:
+            if namespace_path is not None and self._namespace_context.path != requested_path:
+                raise ValueError("Namespace context must match client view scope")
+            return self._namespace_context
+        if isinstance(self.backend, LocalBackend):
+            try:
+                return self.backend.get_namespace_context(requested_path)
+            except LookupError as exc:
+                if not requested_path:
+                    raise ValueError("Namespace context is required") from exc
+                raise
+        return NamespaceContext(id=UUID(int=0), path=requested_path)
+
     @classmethod
     def from_sqlite(
         cls,
@@ -334,11 +359,7 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        if self._namespace_context is None or (
-            namespace_path is not None
-            and self._namespace_context.path != namespace_path
-        ):
-            raise ValueError("Namespace context is required")
+        namespace_context = self._resolve_namespace_context(namespace_path)
 
         if process_template_id is not None:
             if args or kwargs:
@@ -349,7 +370,8 @@ class RecapClient:
                 name=None,
                 version=None,
                 backend=self.backend,
-                namespace_id=self._namespace_context.id,
+                namespace_id=namespace_context.id,
+                namespace_path=namespace_context.path,
                 process_template_id=process_template_id,
                 on_existing=on_existing,
             )
@@ -371,7 +393,8 @@ class RecapClient:
             name=name,
             version=version,
             backend=self.backend,
-            namespace_id=self._namespace_context.id,
+            namespace_id=namespace_context.id,
+            namespace_path=namespace_context.path,
             on_existing=on_existing,
         )
 
@@ -432,11 +455,7 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        if namespace_path is not None and (
-            self._namespace_context is None
-            or self._namespace_context.path != namespace_path
-        ):
-            raise ValueError("Namespace context is required")
+        namespace_context = self._resolve_namespace_context(namespace_path)
 
         if process_run_id is not None:
             if args or kwargs:
@@ -447,11 +466,10 @@ class RecapClient:
                 name=None,
                 description=None,
                 template_name=None,
-                namespace_id=self._namespace_context.id
-                if self._namespace_context
-                else None,
+                namespace_id=namespace_context.id,
                 backend=self.backend,
                 version=None,
+                namespace_path=namespace_context.path,
                 process_run_id=process_run_id,
                 on_existing=on_existing,
             )
@@ -475,16 +493,14 @@ class RecapClient:
             if kwargs:
                 raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
 
-        if self._namespace_context is None:
-            raise ValueError("Namespace context is required")
-
         return ProcessRunBuilder(
             name=name,
             description=description,
             template_name=template_name,
-            namespace_id=self._namespace_context.id,
+            namespace_id=namespace_context.id,
             backend=self.backend,
             version=version,
+            namespace_path=namespace_context.path,
             on_existing=on_existing,
         )
 
@@ -550,11 +566,7 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        if self._namespace_context is None or (
-            namespace_path is not None
-            and self._namespace_context.path != namespace_path
-        ):
-            raise ValueError("Namespace context is required")
+        namespace_context = self._resolve_namespace_context(namespace_path)
 
         if resource_template_id is not None:
             if name is not None or type_names is not None:
@@ -566,7 +578,8 @@ class RecapClient:
                 type_names=None,
                 version=version,
                 backend=self.backend,
-                namespace_id=self._namespace_context.id,
+                namespace_id=namespace_context.id,
+                namespace_path=namespace_context.path,
                 resource_template_id=resource_template_id,
                 on_existing=on_existing,
             )
@@ -583,7 +596,8 @@ class RecapClient:
             type_names=type_names,
             version=version,
             backend=self.backend,
-            namespace_id=self._namespace_context.id,
+            namespace_id=namespace_context.id,
+            namespace_path=namespace_context.path,
             on_existing=on_existing,
         )
 
@@ -656,11 +670,7 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        if self._namespace_context is None or (
-            namespace_path is not None
-            and self._namespace_context.path != namespace_path
-        ):
-            raise ValueError("Namespace context is required")
+        namespace_context = self._resolve_namespace_context(namespace_path)
 
         if resource_id is not None:
             if args or kwargs:
@@ -677,12 +687,13 @@ class RecapClient:
                 template_name=None,
                 template_version="1.0",
                 backend=self.backend,
-                namespace_id=self._namespace_context.id,
+                namespace_id=namespace_context.id,
+                namespace_path=namespace_context.path,
                 resource_id=resource_id,
                 on_existing=on_existing,
             )
 
-        resolved_parent = self._resolve_parent(parent)
+        resolved_parent = self._resolve_parent(parent, namespace_context)
         name, template_name, template_version = self._parse_resource_args(args, kwargs)
 
         return ResourceBuilder(
@@ -690,13 +701,16 @@ class RecapClient:
             template_name=template_name,
             template_version=template_version,
             backend=self.backend,
-            namespace_id=self._namespace_context.id,
+            namespace_id=namespace_context.id,
+            namespace_path=namespace_context.path,
             on_existing=on_existing,
             parent=resolved_parent,
         )
 
     def _resolve_parent(
-        self, parent: "ResourceSchema | UUID | None"
+        self,
+        parent: "ResourceSchema | UUID | None",
+        namespace_context: NamespaceContext | None = None,
     ) -> "ResourceSchema | None":
         """Resolve a parent argument to a ResourceSchema (or None)."""
         if parent is None:
@@ -711,7 +725,7 @@ class RecapClient:
                     preloads=["children", "properties"],
                     include_mutable=True,
                 ),
-                namespace_path=self._namespace_context.path,
+                namespace_path=(namespace_context or self._namespace_context).path,
             )
             if not results:
                 raise ValueError(f"Parent resource with id {parent!r} not found")
@@ -784,14 +798,13 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        if self._namespace_context is None:
-            raise ValueError("Namespace context is required")
+        namespace_context = self._resolve_namespace_context()
         return ResourceBuilder.create(
             name=name,
             template_name=template_name,
             template_version=template_version,
             backend=self.backend,
-            namespace_id=self._namespace_context.id,
+            namespace_id=namespace_context.id,
             parent=parent,
             on_existing=on_existing,
         )
@@ -965,9 +978,7 @@ class RecapClient:
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
         if context is None:
-            if namespace is None:
-                raise TypeError("context or namespace is required")
-            context = NamespaceContext(id=UUID(int=0), path=namespace.strip("/"))
+            context = self._resolve_namespace_context(namespace)
 
         read_backend = getattr(self, "_read_backend", self.backend) or self.backend
         if read_backend is None:

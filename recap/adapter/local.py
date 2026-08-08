@@ -1446,6 +1446,15 @@ class LocalBackend(Backend):
                 raise LookupError(f"Namespace does not exist: {namespace_id}")
             return namespace.path
 
+    def get_namespace_context(self, path: str) -> NamespaceContext:
+        with self._session_scope() as session:
+            namespace = session.scalars(
+                select(Namespace).where(Namespace.path == path)
+            ).one_or_none()
+            if namespace is None:
+                raise LookupError(f"Namespace does not exist: {path}")
+            return NamespaceContext.model_validate(namespace)
+
     def _apply_namespace_visibility(
         self, model, stmt, spec: QuerySpec, namespace_path: str
     ):

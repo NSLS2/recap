@@ -161,3 +161,19 @@ def test_scoped_view_close_is_idempotent(tmp_path):
     assert root._connection_state is not None
     assert root._connection_state._active_views == 1
     root.close()
+
+
+def test_scoped_local_builder_resolves_namespace_path_without_active_context(tmp_path):
+    root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    root.create_namespace("beamline/amx")
+    root._namespace_context = None
+    scoped = root.namespace("beamline/amx")
+
+    builder = scoped.build_resource_template(
+        name="Sample", type_names=["sample"]
+    )
+
+    assert builder.namespace_id
+
+    scoped.close()
+    root.close()

@@ -82,3 +82,14 @@ def test_remote_writes_are_visible_to_graphql_and_match_rest_entities(tmp_path):
         assert [item.name for item in namespace.query_maker().process_runs().all()] == [
             "run-001"
         ]
+
+
+def test_scoped_remote_query_uses_view_namespace():
+    client = RecapClient.from_url("http://recap.test", api_key="secret")
+    scoped = client.namespace("beamline/amx")
+
+    query = scoped.query_maker().resources()
+
+    assert query._context.path == "beamline/amx"
+    scoped.close()
+    client.close()

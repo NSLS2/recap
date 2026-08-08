@@ -92,3 +92,33 @@ def test_query_maker_can_set_on_unloaded_policy(apply_migrations, db_path):
         context = client.create_namespace("name-policy")
         qm = client.query_maker(context=context, on_unloaded="raise")
         assert qm.process_runs()._spec.on_unloaded == "raise"
+
+
+def test_root_query_maker_uses_root_scope_remotely():
+    client = RecapClient.from_url("http://recap.test", api_key="secret")
+
+    query = client.query_maker().resources()
+
+    assert query._context.path == ""
+    client.close()
+
+
+def test_scoped_remote_query_uses_view_namespace():
+    client = RecapClient.from_url("http://recap.test", api_key="secret")
+    scoped = client.namespace("beamline/amx")
+
+    query = scoped.query_maker().resources()
+
+    assert query._context.path == "beamline/amx"
+    scoped.close()
+    client.close()
+
+
+def test_builder_namespace_argument_cannot_escape_view_scope(tmp_path):
+    with RecapClient.from_sqlite(tmp_path / "recap.db", namespace="beamline/amx") as client:
+        with pytest.raises(ValueError, match="match client view scope"):
+            client.build_resource_template(
+                name="Sample",
+                type_names=["sample"],
+                namespace_path="beamline/other",
+            )
