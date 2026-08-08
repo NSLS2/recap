@@ -79,7 +79,7 @@ view shares its source client's authenticated connection state:
 ```python
 from recap.client import RecapClient
 
-client = RecapClient("https://recap.example.org", api_key="...")
+client = RecapClient.from_url("https://recap.example.org", api_key="...")
 namespace = client.namespace("beamline/amx")
 
 with namespace.build_resource(

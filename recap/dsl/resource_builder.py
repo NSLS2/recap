@@ -49,6 +49,7 @@ class ResourceBuilder:
         on_existing: Literal["create", "silent", "warn", "raise"] = "warn",
         namespace_path: str | None = None,
         command_context: CommandContext | None = None,
+        command_backend: Backend | None = None,
     ):
         self.name = name
         self.namespace_id = namespace_id or (
@@ -68,7 +69,8 @@ class ResourceBuilder:
         self.on_existing = on_existing
         self.namespace_path = namespace_path
         self._command_context = command_context
-        self._command_mode = command_context is not None
+        self._command_backend = command_backend or backend
+        self._command_mode = command_context is not None or command_backend is not None
         self._submitted = False
         self._expected_revision = 1
         self._is_new_resource = resource_id is None
@@ -243,6 +245,9 @@ class ResourceBuilder:
         template_version: str,
         backend: Backend,
         namespace_id: UUID,
+        namespace_path: str | None = None,
+        command_backend: Backend | None = None,
+        command_context: CommandContext | None = None,
         parent=None,
         on_existing: Literal["create", "silent", "warn", "raise"] = "create",
     ):
@@ -252,6 +257,9 @@ class ResourceBuilder:
             template_version,
             backend,
             namespace_id=namespace_id,
+            namespace_path=namespace_path,
+            command_backend=command_backend,
+            command_context=command_context,
             parent=parent,
             on_existing=on_existing,
         ) as rb:
@@ -313,7 +321,7 @@ class ResourceBuilder:
                     name=self._resource.name,
                     properties=self._resource_properties_payload(),
                 )
-            result = self.backend.execute(command, self._command_context)
+            result = self._command_backend.execute(command, self._command_context)
             if result is not None:
                 self._resource = result
                 self._expected_revision = result.revision
@@ -430,6 +438,9 @@ class ResourceBuilder:
             name=name,
             template_name=template_name,
             template_version=template_version,
+            namespace_path=self.namespace_path,
+            command_backend=self._command_backend if self._command_mode else None,
+            command_context=self._command_context,
             parent=self,
         )
         return child_builder
@@ -499,12 +510,14 @@ class ResourceTemplateBuilder:
         resource_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
         namespace_path: str | None = None,
+        command_backend: Backend | None = None,
         command_context=None,
     ):
         self._uow = None
         self.namespace_path = namespace_path
         self._command_context = command_context
-        self._command_mode = command_context is not None
+        self._command_backend = command_backend or backend
+        self._command_mode = command_context is not None or command_backend is not None
         self._submitted = False
         self._expected_revision = 1
         self._draft_groups: list[AttributeGroupDraft] = []
@@ -670,7 +683,7 @@ class ResourceTemplateBuilder:
                     expected_revision=self._expected_revision,
                     draft=draft,
                 )
-            result = self.backend.execute(command, self._command_context)
+            result = self._command_backend.execute(command, self._command_context)
             if result is not None:
                 self._template = result
                 self._expected_revision = result.revision
@@ -779,6 +792,7 @@ class ResourceTemplateBuilder:
                 parent=self,
                 namespace_id=self.namespace_id,
                 namespace_path=self.namespace_path,
+                command_backend=self._command_backend,
                 command_context=self._command_context,
             )
             self._draft_children.append(child_builder)

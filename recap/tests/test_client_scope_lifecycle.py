@@ -181,6 +181,23 @@ def test_scoped_local_builder_resolves_namespace_path_without_active_context(tmp
     root.close()
 
 
+def test_scoped_local_get_resource_resolves_namespace_without_active_context(tmp_path):
+    root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    root.create_namespace("beamline/amx")
+    with root.build_resource_template(name="Sample", type_names=["sample"]):
+        pass
+    root.create_resource("S-001", "Sample")
+    root._namespace_context = None
+    scoped = root.namespace("beamline/amx")
+
+    resource = scoped.get_resource("S-001", "Sample")
+
+    assert resource.name == "S-001"
+
+    scoped.close()
+    root.close()
+
+
 def test_scoped_query_does_not_require_namespace_argument():
     client = RecapClient.from_url(
         "http://recap.test", api_key="secret", namespace="beamline/amx"

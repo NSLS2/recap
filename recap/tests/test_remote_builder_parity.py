@@ -5,7 +5,9 @@ from unittest.mock import patch
 import httpx2
 from fastapi.testclient import TestClient
 
+from recap.adapter.graphql import GraphQLAdapter
 from recap.client import RecapClient
+from recap.schemas.resource import ResourceTemplateSchema
 from recap.server.app import create_app
 
 
@@ -95,3 +97,95 @@ def test_scoped_remote_query_uses_view_namespace():
     assert query._context.path == "beamline/amx"
     scoped.close()
     client.close()
+
+
+def test_scoped_remote_public_builders_use_namespace_routes(tmp_path):
+    db_path = tmp_path / "remote-builders.db"
+    api_key = "remote-secret"
+    app_client = TestClient(create_app(db_path, api_key=api_key))
+    request_paths = []
+    template_entity = None
+
+    def request(_client, method, url, **kwargs):
+        nonlocal template_entity
+        path = url.removeprefix("http://recap.test")
+        request_paths.append((method, path))
+        response = app_client.request(method, path, **kwargs)
+        if path == "/api/v1/resource-templates/beamline/amx":
+            template_entity = response.json()
+        return response
+
+    def post(_client, url, **kwargs):
+        return app_client.post("/graphql", **kwargs)
+
+    with (
+        patch.object(httpx2.Client, "request", request),
+        patch.object(httpx2.Client, "post", post),
+        patch.object(
+            GraphQLAdapter,
+            "get_resource_template",
+            side_effect=lambda *args, **kwargs: ResourceTemplateSchema.model_validate(
+                template_entity
+            ),
+        ),
+        patch.object(GraphQLAdapter, "find_resources_by_identity", return_value=[]),
+        RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
+    ):
+        namespace = remote.namespace("beamline/amx")
+        namespace.create_namespace(namespace.namespace_path)
+
+        with namespace.build_resource_template(name="Sample", type_names=["sample"]):
+            pass
+
+        with namespace.build_resource("S-001", "Sample") as resource_builder:
+            resource_id = resource_builder.resource.id
+
+        assert resource_id
+        assert ("POST", "/api/v1/resource-templates/beamline/amx") in request_paths
+        assert ("POST", "/api/v1/resources/beamline/amx") in request_paths
+
+        namespace.close()
+
+
+def test_scoped_remote_create_resource_uses_namespace_route(tmp_path):
+    db_path = tmp_path / "remote-create-resource.db"
+    api_key = "remote-secret"
+    app_client = TestClient(create_app(db_path, api_key=api_key))
+    request_paths = []
+    template_entity = None
+
+    def request(_client, method, url, **kwargs):
+        nonlocal template_entity
+        path = url.removeprefix("http://recap.test")
+        request_paths.append((method, path))
+        response = app_client.request(method, path, **kwargs)
+        if path == "/api/v1/resource-templates/beamline/amx":
+            template_entity = response.json()
+        return response
+
+    def post(_client, url, **kwargs):
+        return app_client.post("/graphql", **kwargs)
+
+    with (
+        patch.object(httpx2.Client, "request", request),
+        patch.object(httpx2.Client, "post", post),
+        patch.object(
+            GraphQLAdapter,
+            "get_resource_template",
+            side_effect=lambda *args, **kwargs: ResourceTemplateSchema.model_validate(
+                template_entity
+            ),
+        ),
+        patch.object(GraphQLAdapter, "find_resources_by_identity", return_value=[]),
+        RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
+    ):
+        namespace = remote.namespace("beamline/amx")
+        namespace.create_namespace(namespace.namespace_path)
+        with namespace.build_resource_template(name="Sample", type_names=["sample"]):
+            pass
+
+        resource = namespace.create_resource("S-001", "Sample")
+
+        assert resource.name == "S-001"
+        assert ("POST", "/api/v1/resources/beamline/amx") in request_paths
+        namespace.close()

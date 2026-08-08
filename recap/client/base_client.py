@@ -564,6 +564,10 @@ class RecapClient:
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
         namespace_context = self._resolve_namespace_context()
+        builder_backend = getattr(self, "_read_backend", self.backend)
+        command_backend = (
+            self.backend if self.backend.__class__.__name__ == "RESTAdapter" else None
+        )
 
         if resource_template_id is not None:
             if name is not None or type_names is not None:
@@ -574,7 +578,8 @@ class RecapClient:
                 name=None,
                 type_names=None,
                 version=version,
-                backend=self.backend,
+                backend=builder_backend,
+                command_backend=command_backend,
                 namespace_id=namespace_context.id,
                 namespace_path=namespace_context.path,
                 resource_template_id=resource_template_id,
@@ -592,7 +597,8 @@ class RecapClient:
             name=name,
             type_names=type_names,
             version=version,
-            backend=self.backend,
+            backend=builder_backend,
+            command_backend=command_backend,
             namespace_id=namespace_context.id,
             namespace_path=namespace_context.path,
             on_existing=on_existing,
@@ -667,6 +673,10 @@ class RecapClient:
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
         namespace_context = self._resolve_namespace_context()
+        builder_backend = getattr(self, "_read_backend", self.backend)
+        command_backend = (
+            self.backend if self.backend.__class__.__name__ == "RESTAdapter" else None
+        )
 
         if resource_id is not None:
             if args or kwargs:
@@ -682,7 +692,8 @@ class RecapClient:
                 name=None,
                 template_name=None,
                 template_version="1.0",
-                backend=self.backend,
+                backend=builder_backend,
+                command_backend=command_backend,
                 namespace_id=namespace_context.id,
                 namespace_path=namespace_context.path,
                 resource_id=resource_id,
@@ -696,7 +707,8 @@ class RecapClient:
             name=name,
             template_name=template_name,
             template_version=template_version,
-            backend=self.backend,
+            backend=builder_backend,
+            command_backend=command_backend,
             namespace_id=namespace_context.id,
             namespace_path=namespace_context.path,
             on_existing=on_existing,
@@ -795,11 +807,17 @@ class RecapClient:
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
         namespace_context = self._resolve_namespace_context()
+        builder_backend = getattr(self, "_read_backend", self.backend)
+        command_backend = (
+            self.backend if self.backend.__class__.__name__ == "RESTAdapter" else None
+        )
         return ResourceBuilder.create(
             name=name,
             template_name=template_name,
             template_version=template_version,
-            backend=self.backend,
+            backend=builder_backend,
+            namespace_path=namespace_context.path,
+            command_backend=command_backend,
             namespace_id=namespace_context.id,
             parent=parent,
             on_existing=on_existing,
@@ -898,10 +916,9 @@ class RecapClient:
         """
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        if self._namespace_context is None:
-            raise ValueError("Namespace context is required")
+        namespace_context = self._resolve_namespace_context()
         return self.backend.get_resource(
-            self._namespace_context.id,
+            namespace_context.id,
             name,
             template_name,
             template_version,
