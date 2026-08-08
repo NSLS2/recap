@@ -113,7 +113,9 @@ def upgrade() -> None:
 
     connection = op.get_bind()
     options = context.get_context().opts
-    base_path = options.get("base_namespace_path") or "default"
+    base_path = options.get("base_namespace_path", "")
+    if base_path is None:
+        base_path = ""
     configured_paths = options.get("campaign_namespace_paths") or {}
     base_id = uuid5(NAMESPACE_URL, f"recap:namespace:{base_path}")
     namespace = sa.table(
@@ -142,6 +144,12 @@ def upgrade() -> None:
     ).mappings()
     for campaign in campaigns:
         campaign_id = UUID(str(campaign["id"]))
+        default_campaign_path = (
+            f"campaign/{campaign_id}"
+            if base_path == ""
+            else f"{base_path}/campaign/{campaign_id}"
+        )
+        campaign_path = configured_paths.get(str(campaign_id), default_campaign_path)
         campaign_metadata = campaign["meta_data"]
         if isinstance(campaign_metadata, str):
             campaign_metadata = json.loads(campaign_metadata)
@@ -155,9 +163,7 @@ def upgrade() -> None:
             namespace.insert(),
             {
                 "id": campaign_id,
-                "path": configured_paths.get(
-                    str(campaign_id), f"{base_path}/campaign/{campaign_id}"
-                ),
+                "path": campaign_path,
                 "parent_id": base_id,
                 "metadata_json": metadata,
                 "status": "ACTIVE",

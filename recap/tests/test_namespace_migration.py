@@ -112,7 +112,7 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
             },
         )
 
-    campaign_path = f"campaign/{campaign_id}"
+    campaign_path = "beamline/amx"
     apply_migrations(
         db_url,
         campaign_namespace_paths={campaign_id: campaign_path},
@@ -122,12 +122,16 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
     with engine.connect() as connection:
         namespace = (
             connection.execute(
-                text("SELECT id, path, metadata_json FROM namespace WHERE id = :id"),
+                text(
+                    "SELECT id, path, parent_id, metadata_json "
+                    "FROM namespace WHERE id = :id"
+                ),
                 {"id": campaign_id.hex},
             )
             .mappings()
             .one()
         )
+        root_id = connection.scalar(text("SELECT id FROM namespace WHERE path = ''"))
         process_run = (
             connection.execute(
                 text("SELECT namespace_id FROM process_run WHERE id = :id"),
@@ -187,6 +191,7 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
     metadata = json.loads(namespace["metadata_json"])
     assert namespace["path"] == campaign_path
     assert namespace["id"] == campaign_id.hex
+    assert namespace["parent_id"] == root_id
     assert process_run["namespace_id"] == namespace["id"]
     assert resources[assigned_resource_id.hex]["status"] == "ACTIVE"
     assert resources[unassigned_resource_id.hex]["status"] == "MUTABLE"
