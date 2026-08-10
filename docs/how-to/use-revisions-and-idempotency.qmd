@@ -1,0 +1,45 @@
+---
+title: Use Revisions and Idempotency
+---
+
+# Use Revisions and Idempotency
+
+REST mutations use optimistic concurrency and replay protection.
+
+## Revision-checked updates
+
+Successful responses include an `ETag` containing the current revision:
+
+```text
+ETag: "3"
+```
+
+Send that value back when updating:
+
+```text
+If-Match: "3"
+```
+
+If another writer has changed the aggregate, the expected revision is stale and
+the update conflicts instead of overwriting the newer state.
+
+## Idempotent creates and copies
+
+Send an idempotency key with creates, updates, and copies:
+
+```text
+Idempotency-Key: sample-plate-create-001
+```
+
+The command fingerprint includes HTTP method, route, namespace, source ID, and
+request body. Repeating the same actor/key/command can replay the original
+result. Reusing a key with a different command conflicts.
+
+Authorization is checked again before a replay is returned, so an old successful
+result cannot bypass a later permission change.
+
+## Atomic mutation behavior
+
+Each command uses one request-scoped database transaction. Domain mutation,
+success audit, and idempotency result commit together. Failed mutations roll
+back; failure audit uses a separate short transaction.

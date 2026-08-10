@@ -1,0 +1,63 @@
+---
+title: Query Templates and Namespaces
+---
+
+# Query Templates and Namespaces
+
+Query templates and namespaces through separate query families. All families
+support `all()`, `first()`, `count()`, ordering, and pagination.
+
+## Query namespaces
+
+```python
+namespaces = (
+    namespace.query_maker()
+    .namespaces()
+    .filter(name="beamline")
+    .filter_effective_metadata(environment="production")
+    .all()
+)
+```
+
+Use `filter_local_metadata()` for values defined directly on a namespace and
+`filter_effective_metadata()` for inherited values.
+
+## Query resource templates
+
+Filter labels and type names, include child templates, and opt into archived
+templates when needed.
+
+```python
+templates = (
+    namespace.query_maker()
+    .resource_templates()
+    .filter_label("sample")
+    .filter_by_types(["sample", "container"])
+    .include_children()
+    .include_archived()
+    .all()
+)
+```
+
+Other relationship helpers are `include_attribute_groups()` and
+`include_types()`. Use `include([...])` for explicit relationship paths.
+
+## Query process templates
+
+```python
+process_templates = (
+    namespace.query_maker()
+    .process_templates()
+    .filter_label("measurement")
+    .include_step_templates()
+    .include_resource_slots()
+    .include_archived()
+    .all()
+)
+```
+
+## Use references for identity-only results
+
+Every template query accepts `shape="ref"` for lightweight identity results.
+Use `shape="full"` when schema fields or included relationships are required.
+See [Choose query shape and loading](choose-query-shape-and-loading.qmd).

@@ -1,0 +1,93 @@
+---
+title: Build Process Runs
+---
+
+# Build Process Runs
+
+Process runs instantiate a process template, assign resources to its slots, and
+record step parameters for one execution.
+
+## Define slots and steps
+
+```python
+from recap.utils.general import Direction
+
+with namespace.build_process_template("Measure Sample", "1.0") as template:
+    template.add_resource_slot("sample", "sample", Direction.input)
+    template.add_resource_slot("result", "file", Direction.output)
+    (
+        template.add_step("Measure")
+        .add_parameters({
+            "acquisition": [
+                {"name": "exposure", "type": "float", "default": 1.0},
+                {"name": "mode", "type": "str", "default": "standard"},
+            ]
+        })
+        .bind_slot("sample", "source")
+        .bind_slot("result", "destination")
+        .close_step()
+    )
+```
+
+Slots declare compatible resource types. Role bindings let a step refer to a
+slot by purpose instead of by a concrete resource name.
+
+## Create and assign a run
+
+```python
+with namespace.build_process_run(
+    name="Run 001",
+    description="Sample measurement",
+    template_name="Measure Sample",
+    version="1.0",
+) as run:
+    run.assign_resource("sample", sample_resource)
+    run.assign_resource("result", result_resource)
+```
+
+The resulting ProcessRun records the template, assignments, ordered steps, and
+parameter values. Use `process_run_id=` when updating a known run to avoid a
+name-based lookup.
+
+## Record dynamic children
+
+When a process produces details that cannot be known when its template is
+defined, add child resources or child steps through the corresponding builder.
+This preserves the stable template while recording run-specific structure.
+
+## Set generated process parameters
+
+Generated parameter models provide typed access to values declared by a process
+step. Read model, mutate it, then submit it back to run:
+
+```python
+with namespace.build_process_run(process_run_id=run.id) as builder:
+    params = builder.get_params("Measure")
+    params.acquisition.exposure = 2.5
+    params.acquisition.mode = "fast"
+    builder.set_params(params)
+```
+
+`set_params()` flushes updated values as part of builder transaction.
+
+## Finalize a completed run
+
+Finalize is separate lifecycle action. Call it after assignments, steps, and
+parameters are complete:
+
+```python
+with namespace.build_process_run(process_run_id=run.id) as builder:
+    builder.finalize()
+```
+
+Finalization marks run active.
+
+## Archive a run
+
+Archive completed runs separately when they should remain queryable but no longer
+be treated as active:
+
+```python
+with namespace.build_process_run(process_run_id=run.id) as builder:
+    builder.archive()
+```

@@ -1,0 +1,37 @@
+---
+title: Getting Started
+---
+
+# Getting Started
+
+RECAP captures experimental provenance through resources, process templates,
+and process runs. Start with the local workflow, then use the remote workflow
+when a RECAP server owns the database.
+
+## Find the right documentation
+
+RECAP documentation is organized around four complementary ways to use the
+documentation:
+
+- **Getting Started** provides guided lessons for learning RECAP by doing. Begin
+  with [Complete Provenance Workflow](04-complete-provenance-workflow.qmd), then
+  use the shorter [Quick Start: Create and Store Data Locally](../how-to/quick-start-create-and-store-data-locally.qmd)
+  when you need a task recipe.
+- **How-To Guides** provide focused procedures for users who need to complete a
+  specific task. Use [How-To Guides](../how-to/index.qmd) for templates,
+  servers, queries, authentication, and provenance operations.
+- **Explanation** describes how RECAP works and why its architecture matters.
+  Read [Explanation](../explanation/index.qmd) when you need concepts before
+  choosing an implementation approach.
+- **Tutorials** show complete domain workflows from setup through working code.
+  Browse [Tutorials](../tutorials/index.qmd) when you want a guided path.
+- **Reference** lists generated public APIs, schemas, query families, and
+  builder methods. Browse [API Reference](/reference/index.html) for exact
+  signatures and model fields.
+
+## Choose a workflow
+
+- [Quick start: create and store data locally](../how-to/quick-start-create-and-store-data-locally.qmd)
+  with SQLite.
+- [Use a remote RECAP server](02-remote-workflow.qmd) with GraphQL reads and
+  REST writes.

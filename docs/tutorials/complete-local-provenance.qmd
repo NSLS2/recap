@@ -1,0 +1,119 @@
+---
+title: Complete Local Provenance
+---
+
+# Complete Local Provenance
+
+This example records a sample-preparation run and queries its resource hierarchy
+and parameters in one local SQLite database. See [create resources](../how-to/create-resources.qmd),
+[build process runs](../how-to/build-process-runs.qmd), and [trace provenance](../how-to/provenance-queries.qmd)
+for focused procedures.
+
+```python
+from recap.client import RecapClient
+from recap.utils.general import Direction
+
+
+with RecapClient.from_sqlite("sample-preparation.db") as client:
+    client.create_namespace(
+        "beamline/sample-preparation",
+        metadata={"experiment": "sample preparation"},
+    )
+    namespace = client.namespace("beamline/sample-preparation")
+
+    with namespace.build_resource_template(
+        name="Sample Carrier",
+        type_names=["container"],
+    ) as template:
+        template.add_properties({
+            "identity": [
+                {"name": "carrier_id", "type": "str", "default": ""},
+            ]
+        })
+
+    with namespace.build_resource_template(
+        name="Prepared Sample",
+        type_names=["sample"],
+    ) as template:
+        template.add_properties({
+            "identity": [
+                {"name": "sample_id", "type": "str", "default": ""},
+            ]
+        })
+
+    with namespace.build_resource(
+        name="Carrier 001",
+        template_name="Sample Carrier",
+    ) as builder:
+        builder.set_props({"identity": {"carrier_id": "C-001"}})
+
+    carrier = (
+        namespace.query_maker()
+        .resources()
+        .filter(name="Carrier 001")
+        .first()
+    )
+    assert carrier is not None
+
+    with namespace.build_resource(
+        name="Sample A",
+        template_name="Prepared Sample",
+        parent=carrier,
+    ) as builder:
+        builder.set_props({"identity": {"sample_id": "S-001"}})
+
+    sample = (
+        namespace.query_maker()
+        .resources()
+        .filter(name="Sample A")
+        .first()
+    )
+    assert sample is not None
+
+    with namespace.build_process_template("Prepare Sample", "1.0") as template:
+        template.add_resource_slot("sample", "sample", Direction.input)
+        (
+            template.add_step("Prepare")
+            .add_parameters({
+                "conditions": [
+                    {"name": "temperature", "type": "float", "default": 20.0, "unit": "degC"},
+                    {"name": "duration", "type": "float", "default": 10.0, "unit": "min"},
+                ]
+            })
+            .bind_slot("source", "sample")
+            .close_step()
+        )
+
+    with namespace.build_process_run(
+        name="Prepare Sample A",
+        description="Prepare sample for measurement",
+        template_name="Prepare Sample",
+        version="1.0",
+    ) as run:
+        run.assign_resource("sample", sample)
+        params = run.get_params("Prepare")
+        params.conditions.temperature = 22.5
+        params.conditions.duration = 12.0
+        run.set_params(params)
+        run.finalize()
+
+    result = (
+        namespace.query_maker()
+        .process_runs()
+        .filter(name="Prepare Sample A")
+        .include_steps(include_parameters=True)
+        .include_resources()
+        .first()
+    )
+    assert result is not None
+    assert result.assigned_resources["sample"].resource.name == "Sample A"
+    assert result.steps["Prepare"].parameters.conditions.temperature.value == 22.5
+    assert result.steps["Prepare"].parameters.conditions.duration.value == 12.0
+
+    print(result.name)
+    print(result.assigned_resources["sample"].resource.name)
+    print(result.steps["Prepare"].parameters.conditions.model_dump())
+```
+
+The query loads assigned resources, step parameters, and the parent-child
+resource graph from the completed run.

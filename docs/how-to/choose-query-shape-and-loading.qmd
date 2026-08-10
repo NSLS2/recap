@@ -1,0 +1,91 @@
+---
+title: Choose Query Shape and Loading
+---
+
+# Choose Query Shape and Loading
+
+Choose result shape and relationship loading independently, then add targeted
+relationship paths when needed.
+
+```{mermaid}
+%%| fig-cap: "Choosing RECAP query shape and relationship loading"
+flowchart TD
+    Start[What data does the task need?]
+    Start --> Identity{Identity and scalar fields only?}
+    Identity -->|Yes| Ref[Reference results: ref shape, no relationship loading]
+    Identity -->|No| Full[Complete schema results]
+    Full --> Complete{Need complete relationship tree?}
+    Complete -->|Yes| Eager[Complete tree: eager loading]
+    Complete -->|No| Targeted[Targeted loading with explicit includes]
+    Targeted --> Bounded[Use explicit relationship paths or descendants]
+```
+
+References cannot use relationship loading. Choose references when identity and
+scalar fields are enough. Otherwise choose a full shape, then use eager loading
+for a complete relationship tree or non-eager explicit includes for targeted
+relationships. Explicit includes require a full shape with non-eager loading.
+
+## Choose a result shape
+
+`shape="ref"` returns lightweight identity-oriented models. `shape="full"`
+returns complete schema models.
+
+```python
+references = namespace.query_maker().resources(shape="ref").all()
+resources = namespace.query_maker().resources(shape="full").all()
+```
+
+Use references for identity, IDs, and scalar fields. Use full models for schema
+fields and relationship access.
+
+## Choose loading mode
+
+`load="none"` avoids relationship hydration. `load="eager"` loads the
+configured relationship tree.
+
+```python
+minimal = namespace.query_maker().resources(shape="full", load="none").all()
+complete = namespace.query_maker().resources(shape="full", load="eager").all()
+```
+
+Use eager loading only when the complete tree is required. For a bounded
+subtree, prefer explicit inclusion or `descendants()`.
+
+## Include targeted relationships
+
+`include(...)` selects explicit relationship paths on full, non-eager queries.
+Convenience methods expand to those paths:
+
+```python
+resources = (
+    namespace.query_maker()
+    .resources(shape="full", load="none")
+    .include(["template", "properties", "children"])
+    .all()
+)
+
+runs = (
+    namespace.query_maker()
+    .process_runs(shape="full", load="none")
+    .include_steps(include_parameters=True)
+    .include_resources()
+    .all()
+)
+```
+
+`include_template()` is the resource shortcut. Process runs provide
+`include_steps()` and `include_resources()`.
+
+## Invalid combinations
+
+Relationship loading is unavailable for references. These combinations raise
+`ValueError`:
+
+```python
+namespace.query_maker().resources(shape="ref", load="eager")
+namespace.query_maker().resources(shape="ref").include("template")
+namespace.query_maker().resources(load="eager").include("children")
+```
+
+Use `shape="full", load="none"` with `include(...)`, or use
+`shape="full", load="eager"` without explicit includes.

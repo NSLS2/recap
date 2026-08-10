@@ -1,0 +1,78 @@
+---
+title: Update and Retire Templates
+---
+
+# Update and Retire Templates
+
+Templates are identified by namespace, name, and version. Load an existing
+template by ID when an update or lifecycle operation must target one exact
+definition.
+
+## Load a template by ID
+
+Pass `resource_template_id` or `process_template_id` to the corresponding
+builder:
+
+```python
+with namespace.build_resource_template(
+    resource_template_id=resource_template.id,
+) as builder:
+    model = builder.get_model(update=True)
+```
+
+```python
+with namespace.build_process_template(
+    process_template_id=process_template.id,
+) as builder:
+    model = builder.get_model(update=True)
+```
+
+`update=True` reloads current backend state before reading the model. Save only
+changes that are safe for that existing version.
+
+## Create a new version
+
+Do not mutate structure referenced by existing resources or process runs. Create
+a new template with the same name and a new version, then define the changed
+structure there:
+
+```python
+with namespace.build_resource_template(
+    name="Detector File",
+    type_names=["file", "detector-data"],
+    version="2.0",
+) as builder:
+    builder.add_properties({
+        "file": [
+            {"name": "path", "type": "str", "default": ""},
+            {"name": "sha256", "type": "str", "default": ""},
+            {"name": "format", "type": "str", "default": "unknown"},
+        ],
+    })
+```
+
+The same rule applies to process templates: bump `version` when changing slots,
+directions, steps, or parameters. Template ID, creation and modification
+timestamps, and version are protected identity fields and cannot be changed
+through the model.
+
+## Activate a template
+
+After checking a definition, mark it active:
+
+```python
+builder.activate()
+```
+
+Activation changes lifecycle status; it does not change template structure.
+
+## Archive a template
+
+Archive versions that should no longer be selected for new work:
+
+```python
+builder.archive()
+```
+
+Archiving preserves historical references and does not delete resources or
+process runs that already use the template.

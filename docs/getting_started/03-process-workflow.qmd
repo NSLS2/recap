@@ -1,0 +1,72 @@
+---
+title: Model a Process Workflow
+---
+
+# Model a Process Workflow
+
+This tutorial shows how a process template becomes a provenance record. A
+template defines slots, steps, role bindings, and parameters; a run supplies
+concrete resources and values.
+
+## Define the workflow
+
+```python
+from recap.utils.general import Direction
+
+with namespace.build_process_template("Measure Plate", "1.0") as template:
+    template.add_resource_slot("input_plate", "plate", Direction.input)
+    template.add_resource_slot("result_file", "file", Direction.output)
+    (
+        template.add_step("Measure")
+        .add_parameters({
+            "acquisition": [
+                {"name": "exposure", "type": "float", "default": 0.1, "unit": "s"},
+                {"name": "mode", "type": "str", "default": "standard"},
+            ]
+        })
+        .bind_slot("input_plate", "source")
+        .bind_slot("result_file", "destination")
+        .close_step()
+    )
+```
+
+Slots are the stable interface between a workflow and its resources. Role
+bindings let the step logic refer to `source` and `destination` without naming
+one particular plate or file.
+
+## Create a run
+
+```python
+with namespace.build_process_run(
+    name="Measure Plate 001",
+    description="First measurement",
+    template_name="Measure Plate",
+    version="1.0",
+) as run:
+    run.assign_resource("input_plate", input_plate)
+    run.assign_resource("result_file", result_file)
+
+    params = run.get_params("Measure")
+    params.acquisition.exposure = 0.25
+    run.set_params(params)
+```
+
+The run records assignments and parameter values alongside the ordered steps.
+Use `model_dump()` to inspect a parameter model and
+`model_json_schema()` to inspect its generated validation schema.
+
+## Inspect assignments
+
+When loaded with resources, assigned values are available by slot name:
+
+```python
+run = (
+    namespace.query_maker()
+    .process_runs()
+    .include_steps(include_parameters=True)
+    .include_resources()
+    .first()
+)
+
+input_plate = run.assigned_resources["input_plate"].resource
+```

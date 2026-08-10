@@ -1,0 +1,72 @@
+---
+title: "Quick Start: Create and Store Data Locally"
+---
+
+# Quick Start: Create and Store Data Locally
+
+This procedure creates a namespace, a resource template, a resource, and a
+process template in a local SQLite database. Builders validate nested models
+and persist an aggregate when their context manager exits successfully.
+
+## Create a client and namespace
+
+```python
+from recap.client import RecapClient
+
+with RecapClient.from_sqlite("experiment.db") as client:
+    namespace = client.namespace("beamline/amx")
+    namespace.create(metadata={"beamline": "amx"})
+```
+
+`from_sqlite()` creates or upgrades the database. A namespace path scopes
+queries and writes; it also allows the same template or resource name to exist
+in separate namespaces.
+
+## Define a resource template
+
+```python
+with namespace.build_resource_template(
+    name="Sample Plate",
+    type_names=["container", "plate"],
+) as template:
+    template.add_properties({
+        "dimensions": [
+            {"name": "rows", "type": "int", "default": 8},
+            {"name": "columns", "type": "int", "default": 12},
+        ]
+    })
+```
+
+Resource templates define the shape of resources, including property groups,
+typed attributes, defaults, and child templates.
+
+## Create a resource
+
+```python
+resource = namespace.build_resource(
+    name="Sample Plate 001",
+    template_name="Sample Plate",
+).save()
+```
+
+Resources receive identity, namespace ownership, metadata, and lifecycle state.
+The returned schema is a local model; subsequent database changes still go
+through a client or builder.
+
+## Query the result
+
+```python
+plate = (
+    namespace.query_maker()
+    .resources()
+    .filter(name="Sample Plate 001")
+    .first()
+)
+
+assert plate is not None
+```
+
+Continue with [Query resources](query-resources.qmd) for filtering, ordering,
+pagination, and relationship loading. To run the same workflow through a
+server, [set up a RECAP server](setup-recap-server.qmd) and replace
+`RecapClient.from_sqlite()` with `RecapClient.from_url()`.

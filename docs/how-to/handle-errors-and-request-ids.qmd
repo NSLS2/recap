@@ -1,0 +1,51 @@
+---
+title: Handle Errors and Request IDs
+---
+
+# Handle Errors and Request IDs
+
+Mutation failures are structured so callers can classify failures without
+parsing internal exception text.
+
+## Classify failures
+
+- **Validation**: submitted properties, parameters, or references violate the
+  template or command contract.
+- **Authorization**: caller lacks permission for namespace or target.
+- **Conflict**: revision is stale, idempotency key is reused for another
+  command, or `on_existing="raise"` detects duplicate.
+- **Connection**: client cannot reach server or receives rejected HTTP response.
+
+Local builders raise domain exceptions such as `ExistingResourceError`.
+Remote clients expose `RecapConnectionError` for transport failures and
+`RecapHTTPError` for rejected responses. HTTP errors include status code and,
+when supplied by server, `request_id`.
+
+## Use request IDs in diagnostics
+
+Every server response carries `X-Request-ID`; structured error bodies also carry
+that identifier:
+
+```text
+X-Request-ID: 6f4c2f08-...
+```
+
+Return opaque value to operators when reporting failure. Do not expose API keys,
+authorization headers, internal tracebacks, or sensitive property and parameter
+values in user-facing errors.
+
+## Rely on atomic mutation behavior
+
+Failed mutations roll back database changes. Failure audits remain durable in a
+separate transaction, preserving request ID, actor, target, and safe reason code
+without retaining partial state or secret values.
+
+```python
+from recap.exceptions import RecapHTTPError
+
+try:
+    with namespace.build_resource(resource_id=plate.id) as builder:
+        builder.set_props({"dimensions": {"rows": -1}})
+except RecapHTTPError as exc:
+    print(f"Mutation failed; contact operator with request ID {exc.request_id}")
+```

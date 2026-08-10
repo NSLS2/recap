@@ -1,0 +1,89 @@
+---
+title: Query Resources
+---
+
+# Query Resources
+
+Create namespace-scoped queries and compose immutable filters. Each operation
+returns a new query.
+
+```python
+from recap.dsl.query import Field
+
+query = namespace.query_maker()
+resources = (
+    query.resources()
+    .where(Field("name").starts_with("Sample"))
+    .where(Field("state") == "active")
+    .order_by(Field("create_date").desc())
+    .limit(10)
+    .offset(20)
+    .all()
+)
+```
+
+## Filter typed properties
+
+Use exactly one comparator for each typed-property filter. Supported
+comparators are `eq`, `gt`, `gte`, `lt`, `lte`, `between`, and `in_`.
+
+```python
+large_plates = (
+    query.resources()
+    .filter_property("rows", gte=100, group="dimensions")
+    .filter_property("material", in_=["Si", "Ge"], group="sample")
+    .all()
+)
+```
+
+## Include templates and children
+
+Full resource queries can explicitly load relationships. `include_template()`
+loads each resource's template; `include(["children"])` loads child resources.
+
+```python
+plates = query.resources().include_template().include("children").all()
+```
+
+Use `load="eager"` when the complete configured relationship tree is needed.
+See [Choose query shape and loading](choose-query-shape-and-loading.qmd) for
+the difference between eager and targeted loading.
+
+## Include archived resources
+
+Archived resources are excluded by default. Add `include_archived()` when a
+retired record should be visible.
+
+```python
+all_versions = query.resources().include_archived().all()
+```
+
+## Query descendants
+
+```python
+samples = query.resources().descendants(dewar).all()
+sample_descendants = (
+    query.resources()
+    .descendants(dewar, of_template=sample_template.id)
+    .all()
+)
+```
+
+`descendants()` searches every level below parent and loads `template` and
+`properties`. Use `under_parent(...)` when combining ancestry with additional
+filters without the descendant convenience preloads.
+
+## Filter namespace metadata
+
+Metadata filters apply to namespace queries, not resource queries. Local
+metadata belongs to the namespace itself; effective metadata includes inherited
+values.
+
+```python
+local = query.namespaces().filter_local_metadata(owner="beamline-a").all()
+effective = (
+    query.namespaces()
+    .filter_effective_metadata(environment="production")
+    .all()
+)
+```

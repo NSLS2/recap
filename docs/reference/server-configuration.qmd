@@ -1,0 +1,49 @@
+---
+title: Server Configuration
+---
+
+# Server Configuration
+
+`ServerConfig` reads direct keyword arguments and environment variables with
+`RECAP_` prefix. `ServerConfig.from_yaml(path)` reads values below top-level
+`server:`.
+
+## Fields
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `db_path` | `None` | SQLite database path |
+| `database_uri` | `None` | Non-file database URI, stored as secret |
+| `host` | `127.0.0.1` | Bind host |
+| `port` | `8000` | Bind port |
+| `log_level` | `info` | Logging level |
+| `authentication_mode` | `single-user` | `single-user` or `multi-user` |
+| `api_key` | `None` | Single-user API key, stored as secret |
+| `entitlement_snapshot_path` | `None` | Multi-user entitlement snapshot |
+| `entitlement_snapshot_max_age_seconds` | `300` | Positive snapshot age limit |
+| `audit_log_path` | `recap-audit.jsonl` | Audit JSONL output path |
+
+`database_url` returns `sqlite:///<db_path>` for file configuration or the
+secret database URI.
+
+## Validation
+
+Exactly one of `db_path` and `database_uri` is required. `single-user` requires
+non-empty `api_key`; `multi-user` requires `entitlement_snapshot_path`.
+`entitlement_snapshot_max_age_seconds` must be positive. Path fields accept
+strings and are converted to `Path`. Invalid configuration raises Pydantic
+validation errors or `ValueError` from the model validator.
+
+## YAML
+
+```yaml
+server:
+  db_path: /data/recap.db
+  host: 0.0.0.0
+  port: 8000
+  authentication_mode: single-user
+  api_key: secret
+```
+
+Equivalent environment variables include `RECAP_DB_PATH`, `RECAP_HOST`,
+`RECAP_PORT`, `RECAP_AUTHENTICATION_MODE`, and `RECAP_API_KEY`.

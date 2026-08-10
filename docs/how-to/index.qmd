@@ -1,0 +1,13 @@
+---
+title: How-To Guides
+---
+
+# How-To Guides
+
+How-to guides solve focused RECAP tasks. They assume readers know the relevant
+concepts and prioritize an actionable procedure over broad explanation.
+
+Start with [Quick Start: Create and Store Data Locally](quick-start-create-and-store-data-locally.qmd)
+if you want to create data without running a server. For server-backed work, use
+[Set Up a RECAP Server](setup-recap-server.qmd), then follow the same workflow
+with a URL client.

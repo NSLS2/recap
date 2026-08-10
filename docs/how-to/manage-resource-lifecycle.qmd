@@ -1,0 +1,49 @@
+---
+title: Manage Resource Lifecycle
+---
+
+# Manage Resource Lifecycle
+
+Resources move through three states:
+
+- **Mutable**: properties can be edited and saved.
+- **Active**: resource is finalized for use and cannot be patched in place.
+- **Archived**: resource is retained for history and cannot be patched in place.
+
+## Activate a resource
+
+```python
+with namespace.build_resource(resource_id=plate.id) as builder:
+    builder.activate()
+```
+
+Activation and preceding edits commit when builder exits normally.
+
+## Archive a resource
+
+```python
+with namespace.build_resource(resource_id=plate.id) as builder:
+    builder.archive()
+```
+
+Archiving retains resource and provenance while removing it from mutable
+lifecycle.
+
+## Edit frozen resources with copy-on-write
+
+Active and archived resources cannot be patched in place. Create mutable copy,
+then edit copy:
+
+```python
+copied = namespace.copy_resource(
+    source_resource_id=plate.id,
+    changes={"name": "Sample Plate 001 Revision"},
+)
+
+with namespace.build_resource(resource_id=copied.id) as builder:
+    props = builder.get_props()
+    props.dimensions.rows = 16
+    builder.set_props(props.model_dump(by_alias=True))
+```
+
+Copy-on-write preserves frozen source and records lineage from copy to source.

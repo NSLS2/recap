@@ -7,3 +7,8 @@ title: Explanation
 Explanation pages describe how RECAP works and why its design matters. They
 cover namespaces, provenance, lifecycle and freezing, local/remote transport,
 authentication, authorization, and command processing.
+
+For exact signatures, accepted values, return models, and failure behavior, see
+the [Reference](/reference/index.html) section. Explanation describes why
+RECAP behaves as it does; Reference is lookup material rather than workflow
+instruction.

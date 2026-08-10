@@ -1,0 +1,61 @@
+---
+title: Set Up a RECAP Server
+---
+
+# Set Up a RECAP Server
+
+RECAP can run behind a local or remote server. In both cases, the server owns
+the database and clients connect with `RecapClient.from_url()`. GraphQL serves
+reads, while authenticated REST endpoints handle creates, updates, and copies.
+
+## Start a local server
+
+Install the server extra and start the server against a local SQLite database:
+
+```bash
+pip install "pyrecap[server]"
+recap-server --db /path/to/recap.db --port 8000
+```
+
+Connect to it from Python:
+
+```python
+from recap.client import RecapClient
+
+client = RecapClient.from_url(
+    "http://localhost:8000",
+    api_key="your-api-key",
+)
+namespace = client.namespace("beamline/amx")
+```
+
+Once connected, follow [Quick Start: Create and Store Data Locally](quick-start-create-and-store-data-locally.qmd).
+Use `RecapClient.from_url()` in place of `RecapClient.from_sqlite()`; the
+namespace, builders, queries, and provenance workflow are the same.
+
+## Run a remote server
+
+For a remote deployment, install the server extra on the host that will own the
+database and expose the server base URL through your chosen hosting platform.
+The deployment platform is intentionally outside RECAP's scope. Configure its
+process manager, network access, TLS termination, backups, and secrets using
+your organization's standards.
+
+The client only needs the reachable base URL and an API key:
+
+```python
+client = RecapClient.from_url(
+    "https://recap.example.org",
+    api_key="your-api-key",
+)
+```
+
+Keep API keys outside source control. The client sends them as
+`Authorization: Apikey ...` and redacts credentials from transport errors and
+representations.
+
+For production deployments, configure authentication and database settings
+through server configuration rather than embedding credentials in command
+arguments. See [remote authentication](use-remote-authentication.qmd) for
+client credentials and [local and remote transport](../explanation/local-remote-architecture.qmd)
+for the transport boundary.

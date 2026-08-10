@@ -1,0 +1,45 @@
+---
+title: Authenticate a Remote Client
+---
+
+# Authenticate a Remote Client
+
+Create a remote client with an API key:
+
+```python
+from recap.client import RecapClient
+
+client = RecapClient.from_url(
+    "https://recap.example.org",
+    api_key="your-api-key",
+)
+```
+
+The client sends exactly one `Authorization` header:
+
+```text
+Authorization: Apikey your-api-key
+```
+
+Keep the key in a secret manager or environment variable rather than source
+control. RECAP redacts credentials from client representations and connection
+errors.
+
+## Namespace permissions
+
+Inspect the current actor's effective permissions for a namespace:
+
+```python
+permissions = client.permissions("beamline/amx")
+print(permissions.effective_scopes)
+print(permissions.matched_namespace_paths)
+```
+
+Permissions are computed for the authenticated actor. The client cannot ask
+for another actor's permissions.
+
+## Authentication failures
+
+Missing or malformed credentials fail before query or command execution. A
+valid credential with insufficient scope is authenticated but denied by the
+authorization policy.

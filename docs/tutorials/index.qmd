@@ -1,0 +1,23 @@
+---
+title: Tutorials
+---
+
+# Tutorials
+
+Tutorials provide goal-oriented, step-by-step paths through complete RECAP
+workflows. Start with one tutorial and follow it from setup through working
+code, then use the [How-To guides](../how-to/index.qmd),
+[Explanation](../explanation/index.qmd), and [Reference](/reference/index.html)
+for focused procedures, concepts, and exact API details.
+
+## Domain Models
+
+- [Resource Examples](resource-examples.qmd): reusable file and instrument resource shapes. See [resource templates](../how-to/resource-template.qmd) and [builder API](/reference/ResourceTemplateBuilder.html).
+
+## Provenance Workflows
+
+- [Complete Local Provenance](complete-local-provenance.qmd): sample hierarchy, process run, parameters, and local provenance query. See [create resources](../how-to/create-resources.qmd), [build process runs](../how-to/build-process-runs.qmd), and [trace provenance](../how-to/provenance-queries.qmd).
+
+## Remote Integration
+
+- [Remote Client](remote-client.qmd): same sample workflow through `RecapClient.from_url()`, REST mutations, and GraphQL-backed queries. See [remote authentication](../how-to/use-remote-authentication.qmd), [client API](/reference/RecapClient.html), and [query API](/reference/QueryDSL.html).

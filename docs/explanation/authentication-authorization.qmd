@@ -1,0 +1,67 @@
+---
+title: Authentication and Authorization
+---
+
+# Authentication and Authorization
+
+Authentication identifies a request. Authorization decides whether that actor
+may perform an operation in a namespace.
+
+## Request actor
+
+Authentication produces an immutable `RequestActor` containing:
+
+- Stable actor identity.
+- Provider identities such as `(provider, subject)` pairs.
+- Credential scopes.
+- Optional namespace restrictions.
+- A credential fingerprint for safe audit correlation.
+
+The actor is created once per request and passed through GraphQL or REST
+request context.
+
+## Scopes
+
+Scopes are separate read and write permissions for namespace, resource template,
+resource, process template, and process run families. Write permission does not
+implicitly grant read permission.
+
+## Namespace grants
+
+Multi-user authorization is compiled into an immutable snapshot. Grants bind
+identities and roles to namespace paths and scopes. Policy evaluation:
+
+```{mermaid}
+%%| fig-cap: "RECAP namespace authorization evaluation"
+flowchart TD
+    Request[Incoming request] --> Canonicalize[Canonicalize namespace]
+    Canonicalize --> Restriction{Actor namespace restriction allows target?}
+    Restriction -->|No| DenyRestriction[Deny request]
+    Restriction -->|Yes| Identity[Match provider identities]
+    Identity --> Grants[Collect grants from namespace and ancestors]
+    Grants --> Scopes[Intersect grants with credential scopes]
+    Scopes --> Target{Target relationship valid?}
+    Target -->|No| DenyTarget[Deny request]
+    Target -->|Yes| Allow[Authorize operation]
+```
+
+Evaluation first canonicalizes namespace, applies actor restrictions, matches
+provider identities, collects namespace and ancestor grants, intersects those
+grants with credential scopes, and validates the target relationship. Write
+scope does not imply read scope.
+
+Ancestor grants can make templates and resources visible in descendants. Sibling
+namespaces remain isolated. Process-run access requires exact namespace context.
+
+## Cross-namespace operations
+
+Namespace creation checks write permission on the parent namespace. Resource
+copy requires both source read permission and destination write permission. A
+valid source permission alone cannot authorize a destination write.
+
+## GraphQL filtering
+
+Authorization visibility is applied before user filters, ordering, pagination,
+and counts. This prevents unauthorized records from influencing result pages or
+counts. GraphQL applies this visibility before filtering, ordering, pagination,
+and counts.

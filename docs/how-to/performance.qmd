@@ -1,0 +1,40 @@
+---
+title: Choose Efficient Loading and Writes
+---
+
+# Choose Efficient Loading and Writes
+
+RECAP provides explicit controls for relationship hydration and known-record
+updates. Use them to avoid loading more of the provenance graph than a task
+requires.
+
+## Keep query payloads small
+
+Use references for identity-only results, explicit relationship paths for
+targeted hydration, and pagination for large result sets. See [Choose query
+shape and loading](choose-query-shape-and-loading.qmd), [Query Resources](query-resources.qmd),
+and [Query Process Runs](query-process-runs.qmd).
+
+Use `descendants()` or `under_parent()` for targeted resource subtree queries
+instead of eager-loading an entire large hierarchy. See [Trace Provenance](provenance-queries.qmd)
+for traversal patterns.
+
+## Update known records by ID
+
+Builders accept `resource_id=` and `process_run_id=` for existing records. These
+paths avoid probing by name and avoid an insert-conflict-rollback-select cycle.
+See [Use revisions and idempotency](use-revisions-and-idempotency.qmd) for
+known-ID update procedures.
+
+```python
+with namespace.build_resource(resource_id=resource_id) as builder:
+    resource = builder.get_model()
+    resource.properties.status.used = True
+    builder.set_model(resource)
+```
+
+## Group work by namespace
+
+Namespace context controls visibility and authorization. Reuse one namespace
+client for a batch of related operations rather than repeatedly switching
+contexts.

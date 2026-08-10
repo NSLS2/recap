@@ -1,0 +1,30 @@
+---
+title: Query Model and Loading
+---
+
+# Query Model and Loading
+
+RECAP queries are immutable descriptions of filters, predicates, ordering,
+pagination, and relationship loading. The same query model is interpreted by
+the local backend and transported to the GraphQL read backend.
+
+## Payload shape and loading
+
+- `shape="ref"` returns lightweight identity-oriented models.
+- `shape="full"` returns complete schema models.
+- `load="none"` avoids relationship hydration.
+- `load="eager"` loads configured relationships eagerly.
+- `include(...)` selects explicit relationship paths for full, non-eager
+  queries.
+
+Namespace context travels beside the serialized `QuerySpec`. It is not embedded
+inside query predicates, which keeps predicates portable across backends.
+
+## Visibility and pagination
+
+Namespace visibility is applied before user filters, ordering, pagination, and
+counts. This ordering prevents an authorized query from counting or paginating
+records that the actor cannot see.
+
+Structured `Field` predicates work across local and remote backends. Raw
+SQLAlchemy predicates remain local-only and are deprecated.

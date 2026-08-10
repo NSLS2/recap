@@ -1,0 +1,46 @@
+---
+title: Resource Examples
+---
+
+# Resource Examples
+
+Resources can represent physical objects, digital files, instruments, or
+people. The template defines the stable shape; each resource stores identity
+and values for one instance.
+
+## NeXus file
+
+```python
+with namespace.build_resource_template(
+    name="NeXus File",
+    type_names=["file", "hdf5", "nexus"],
+) as template:
+    template.add_properties({
+        "file_metadata": [
+            {"name": "path", "type": "str", "default": ""},
+            {"name": "sha256", "type": "str", "default": ""},
+        ],
+        "scan": [
+            {"name": "beamline", "type": "str", "default": ""},
+            {"name": "exposure_time", "type": "float", "default": 0.1, "unit": "s"},
+        ],
+    })
+```
+
+## Robot
+
+```python
+with namespace.build_resource_template(
+    name="UR5 Robot",
+    type_names=["instrument", "robot", "ur5"],
+) as template:
+    template.add_properties({
+        "specs": [
+            {"name": "reach_mm", "type": "float", "default": 850.0, "unit": "mm"},
+            {"name": "payload_kg", "type": "float", "default": 5.0, "unit": "kg"},
+        ]
+    })
+```
+
+Use stable type labels so process-template slots can require compatible
+resources without coupling workflows to one concrete resource name.

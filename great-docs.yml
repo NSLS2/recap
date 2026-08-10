@@ -11,6 +11,8 @@ module: recap
 # -------------
 display_name: Recap
 repo: https://github.com/nsls2/recap
+logo: docs/assets/recap_logo.png
+favicon: docs/assets/favicon.ico
 
 # Docstring Parser
 # ----------------
@@ -49,7 +51,7 @@ dynamic: true
 authors:
   - name: Venkateswaran Shekar
     role: Author
-    # affiliation: 
+    affiliation: Brookhaven National Lab
     email: vshekar1@bnl.gov
     # github: 
     # orcid: 
@@ -57,21 +59,57 @@ authors:
 
 # Diataxis Content Sections
 # -------------------------
-user_guide: user_guide
 
 sections:
+  - title: Getting Started
+    dir: docs/getting_started
   - title: How-To Guides
-    dir: how-to
+    dir: docs/how-to
+    sidebar_groups:
+      - section: Quick Start
+        contents:
+          - quick-start-create-and-store-data-locally.qmd
+          - setup-recap-server.qmd
+          - use-remote-authentication.qmd
+      - section: Create Templates
+        contents:
+          - resource-template.qmd
+          - process-template.qmd
+          - nested-resource-templates.qmd
+          - update-and-retire-templates.qmd
+      - section: Create and Edit Instances
+        contents:
+          - create-resources.qmd
+          - build-process-runs.qmd
+          - add-runtime-children.qmd
+          - edit-resource-properties.qmd
+          - copy-frozen-resources.qmd
+          - manage-resource-lifecycle.qmd
+          - handle-errors-and-request-ids.qmd
+          - use-revisions-and-idempotency.qmd
+      - section: Query Experiments
+        contents:
+          - query-resources.qmd
+          - query-process-runs.qmd
+          - query-templates-and-namespaces.qmd
+          - choose-query-shape-and-loading.qmd
+          - provenance-queries.qmd
+          - performance.qmd
   - title: Explanation
-    dir: explanation
-  - title: Examples
-    dir: examples
+    dir: docs/explanation
+  - title: Tutorials
+    dir: docs/tutorials
+
+custom_pages:
+  - dir: docs/assets
+    output: docs/assets
+
 
 navbar_order:
-  - User Guide
+  - Getting Started
   - How-To Guides
   - Explanation
-  - Examples
+  - Tutorials
   - Reference
   - Changelog
 
@@ -96,7 +134,110 @@ navbar_order:
 # - Add 'desc:' to sections for descriptions
 
 reference:
-
+  - title: Client
+    desc: Local and remote clients, namespace context, and permissions.
+    contents:
+      - name: RecapClient
+        members: true
+      - name: ActorPermissions
+        members: true
+      - name: EffectivePermissions
+        members: true
+      - name: PermissionDecision
+        members: true
+      - DenialCode
+  - title: Queries
+    desc: Immutable query composition and field predicates.
+    contents:
+      - name: QueryDSL
+        members: true
+      - name: Field
+        members: true
+      - name: FieldPredicate
+        members: true
+      - name: FieldOrdering
+        members: true
+      - name: BaseQuery
+        members: true
+      - name: NamespaceQuery
+        members: true
+      - name: ResourceQuery
+        members: true
+      - name: ResourceTemplateQuery
+        members: true
+      - name: ProcessTemplateQuery
+        members: true
+      - name: ProcessRunQuery
+        members: true
+  - title: Builders
+    desc: Context-managed resource and process builders.
+    contents:
+      - name: ResourceTemplateBuilder
+        members: true
+      - name: ResourceBuilder
+        members: true
+      - name: ProcessTemplateBuilder
+        members: true
+      - name: StepTemplateBuilder
+        members: true
+      - name: ProcessRunBuilder
+        members: true
+      - name: AttributeGroupBuilder
+        members: true
+  - title: Models and Lifecycle
+    desc: Public schemas, lifecycle state, directions, and copy options.
+    contents:
+      - LifecycleStatus
+      - Direction
+      - validate_transition
+      - name: NamespaceRef
+        members: true
+      - name: NamespaceContext
+        members: true
+      - name: NamespaceSchema
+        members: true
+      - name: ResourceTypeSchema
+        members: true
+      - name: ResourceCopyChanges
+        members: true
+      - name: ResourceCopyOptions
+        members: true
+      - name: ResourceTemplateRef
+        members: true
+      - name: ResourceTemplateSchema
+        members: true
+      - name: ResourceRef
+        members: true
+      - name: ResourceSchema
+        members: true
+      - name: ResourceAssignmentSchema
+        members: true
+      - name: ProcessTemplateRef
+        members: true
+      - name: ProcessTemplateSchema
+        members: true
+      - name: ProcessRunRef
+        members: true
+      - name: ProcessRunSchema
+        members: true
+      - name: StepTemplateRef
+        members: true
+      - name: StepTemplateSchema
+        members: true
+      - name: StepSchema
+        members: true
+      - name: ParameterSchema
+        members: true
+      - name: AttributeTemplateSchema
+        members: true
+      - name: AttributeGroupRef
+        members: true
+      - name: AttributeGroupTemplateSchema
+        members: true
+      - name: AttributeValueSchema
+        members: true
+      - name: AttributeTemplateValidator
+        members: true
 # Site URL
 # --------
 # Canonical address of the deployed documentation site.
