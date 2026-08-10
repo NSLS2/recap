@@ -43,6 +43,13 @@ from recap.utils.general import Direction
 
 
 class ProcessTemplateBuilder:
+    """Builder for process templates, resource slots, and step templates.
+
+    Context-manager exit commits clean work and rolls back exceptions. Existing
+    templates load by UUID; ``on_existing`` controls identity reuse, while draft
+    validation reports invalid slots, steps, or parameters before submission.
+    """
+
     def __init__(
         self,
         backend: Backend,
@@ -140,6 +147,7 @@ class ProcessTemplateBuilder:
             self._uow = None
 
     def save(self):
+        """Validate and persist current process-template draft."""
         if self._command_mode:
             draft = self._build_draft()
             if self._template is None:
@@ -164,6 +172,7 @@ class ProcessTemplateBuilder:
         return self
 
     def activate(self):
+        """Transition process template to ACTIVE."""
         self._ensure_template()
         self.backend.set_process_template_status(
             self.template.id, LifecycleStatus.ACTIVE
@@ -171,6 +180,7 @@ class ProcessTemplateBuilder:
         return self
 
     def archive(self):
+        """Transition process template to ARCHIVED."""
         self._ensure_template()
         self.backend.set_process_template_status(
             self.template.id, LifecycleStatus.ARCHIVED
@@ -234,6 +244,7 @@ class ProcessTemplateBuilder:
         create_resource_type=False,
         required: bool = True,
     ) -> "ProcessTemplateBuilder":
+        """Add typed input/output resource slot after validating direction."""
         if self._command_mode:
             self._draft_resource_slots.append(
                 ResourceSlotDraft(
@@ -261,6 +272,7 @@ class ProcessTemplateBuilder:
         self,
         name: str,
     ):
+        """Open builder for a named process step."""
         if self._command_mode:
             builder = StepTemplateBuilder(parent=self, draft_name=name)
             self._draft_steps.append(builder)
@@ -293,6 +305,7 @@ class ProcessTemplateBuilder:
         )
 
     def set_model(self, model: ProcessTemplateSchema | ProcessTemplateRef):
+        """Replace working template after verifying UUID identity."""
         if self._template is None:
             raise RuntimeError("Template not initialized")
         if model.id != self._template.id:
@@ -363,7 +376,7 @@ class ProcessTemplateBuilder:
 
 
 class StepTemplateBuilder:
-    """Scoped editor for a single step"""
+    """Scoped editor for one step's parameter groups and resource bindings."""
 
     def __init__(
         self,
@@ -381,11 +394,13 @@ class StepTemplateBuilder:
         self._bound_slots = {}
 
     def close_step(self) -> ProcessTemplateBuilder:
+        """Return owning process-template builder."""
         return self.parent
 
     def param_group(
         self, group_name: str
     ) -> "AttributeGroupBuilder[StepTemplateBuilder]":
+        """Open parameter-group builder for this step."""
         if self.parent._command_mode:
             builder = DraftAttributeGroupBuilder(group_name, self)
             self._draft_parameter_groups.append(builder)
@@ -396,6 +411,7 @@ class StepTemplateBuilder:
         return attr_group_builder
 
     def bind_slot(self, role: str, slot_name: str):
+        """Bind process resource slot to step role."""
         if self.parent._command_mode:
             self._draft_role_bindings[role] = slot_name
             return self
@@ -415,6 +431,7 @@ class StepTemplateBuilder:
         )
 
     def add_parameters(self, param_def: dict[str, list[dict[str, Any]]]):
+        """Validate and add grouped parameter definitions."""
         for group_key, params in param_def.items():
             group = self.param_group(group_key)
             for param in params:
@@ -431,6 +448,8 @@ class StepTemplateBuilder:
 
 
 class DraftAttributeGroupBuilder:
+    """Draft-only builder for step parameter definitions."""
+
     def __init__(self, group_name: str, parent: StepTemplateBuilder):
         self.group_name = group_name
         self.parent = parent
@@ -463,6 +482,13 @@ class DraftAttributeGroupBuilder:
 
 
 class ProcessRunBuilder:
+    """Builder for process-run assignments, parameters, and child steps.
+
+    Clean context-manager exit commits and exception exit rolls back local work;
+    command-backed remote builders submit validated drafts. UUID loading,
+    ``on_existing``, lifecycle methods, and validation errors are preserved.
+    """
+
     def __init__(
         self,
         name: str | None,
@@ -642,6 +668,7 @@ class ProcessRunBuilder:
             self._uow = None
 
     def save(self):
+        """Validate and persist current process-run changes."""
         if self._command_mode:
             if self._process_run is None:
                 command = CreateProcessRun(
@@ -673,6 +700,7 @@ class ProcessRunBuilder:
         return self
 
     def finalize(self):
+        """Transition process run to ACTIVE/finalized state."""
         if self._command_mode:
             self._ensure_command_saved()
             self._process_run = self.backend.execute(
@@ -691,6 +719,7 @@ class ProcessRunBuilder:
         return self
 
     def archive(self):
+        """Transition process run to ARCHIVED."""
         self._ensure_uow()
         self.backend.set_process_run_status(
             self._process_run.id, LifecycleStatus.ARCHIVED
@@ -698,6 +727,7 @@ class ProcessRunBuilder:
         return self
 
     def persist(self):
+        """Write current process-run model changes."""
         self._process_run = self.backend.update_process_run(self._process_run)
         return self
 
@@ -706,6 +736,7 @@ class ProcessRunBuilder:
         return self._process_run
 
     def set_model(self, model: ProcessRunSchema):
+        """Replace working run model after verifying UUID identity."""
         if self._process_run is None:
             raise RuntimeError("ProcessRun not initialized")
         if model.id != self._process_run.id:
@@ -719,6 +750,7 @@ class ProcessRunBuilder:
         resource_slot_name: str,
         resource: ResourceSchema,
     ) -> "ProcessRunBuilder":
+        """Assign resource to named process slot."""
         if self._command_mode:
             self._draft_assignments[resource_slot_name] = resource.id
             return self
@@ -754,6 +786,7 @@ class ProcessRunBuilder:
         step_name: str | None = None,
         step_schema: StepSchema | None = None,
     ) -> type[BaseModel]:
+        """Return typed parameter model for selected process step."""
         self._ensure_uow()
         if step_name is None and step_schema is None:
             raise ValueError("Provide step_name or step_schema to get params")
@@ -769,6 +802,7 @@ class ProcessRunBuilder:
         return self.backend.get_params(step_schema)
 
     def set_params(self, filled_params: type[BaseModel]):
+        """Validate and apply typed parameter values in current transaction."""
         self._ensure_uow()
         self.backend.set_params(filled_params)
         # backend.set_params() already flushed the values to the session within
@@ -780,6 +814,7 @@ class ProcessRunBuilder:
         self,
         child_step: StepSchema,
     ) -> StepSchema:
+        """Persist runtime child step after validating process-run ownership."""
         self._ensure_uow()
         if child_step.parent_id is None:
             raise ValueError(

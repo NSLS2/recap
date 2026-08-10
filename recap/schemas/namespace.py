@@ -8,6 +8,8 @@ from recap.schemas.common import CommonFields
 
 
 class NamespaceRef(BaseModel):
+    """Lightweight namespace identity used in relationships and query results."""
+
     id: UUID
     path: str
 
@@ -15,10 +17,14 @@ class NamespaceRef(BaseModel):
 
 
 class NamespaceContext(NamespaceRef):
+    """Active namespace scope attached to client queries and writes."""
+
     pass
 
 
 class NamespaceSchema(CommonFields):
+    """Persisted namespace with lifecycle, hierarchy, and metadata fields."""
+
     path: str
     parent_id: UUID | None = None
     status: LifecycleStatus

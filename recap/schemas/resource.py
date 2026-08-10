@@ -298,10 +298,14 @@ class ResourceTypeSchema(CommonFields):
 
 
 class ResourceCopyChanges(BaseModel):
+    """Property changes applied while copying a resource."""
+
     properties: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class ResourceCopyOptions(BaseModel):
+    """Name and property overrides for a resource copy operation."""
+
     name: str | None = None
     changes: ResourceCopyChanges = Field(default_factory=ResourceCopyChanges)
 

@@ -11,10 +11,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class ServerConfig(BaseSettings):
     """Configuration for the recap GraphQL server.
 
-    Values can be set via:
-    1. Environment variables prefixed with RECAP_ (e.g. RECAP_PORT=9000)
-    2. YAML config file via ServerConfig.from_yaml()
-    3. Direct instantiation kwargs
+    Configuration precedence is direct kwargs > environment variables > YAML
+    values. Environment variables use the ``RECAP_`` prefix.
     """
 
     model_config = SettingsConfigDict(env_prefix="RECAP_")
@@ -59,6 +57,7 @@ class ServerConfig(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        """Return SQLAlchemy URL derived from the configured database source."""
         if self.db_path is not None:
             return f"sqlite:///{self.db_path}"
         assert self.database_uri is not None
@@ -68,9 +67,8 @@ class ServerConfig(BaseSettings):
     def from_yaml(cls, path: str | Path) -> ServerConfig:
         """Load ServerConfig from a YAML file.
 
-        YAML must have a top-level 'server:' key. Exactly one database location
-        is required.
-        CLI/env vars still override YAML values when set.
+        YAML must have a top-level ``server:`` key. Exactly one database source
+        is required; environment variables and direct kwargs override YAML.
         Raises FileNotFoundError if the config file does not exist.
         """
         with open(path) as f:
