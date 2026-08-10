@@ -178,7 +178,7 @@ def test_current_actor_permissions_are_typed(parity_clients):
     from recap.client.permissions import ActorPermissions
 
     local, remote = parity_clients
-    permissions = remote.permissions(local.namespace_context.path)
+    permissions = remote.permissions()
 
     assert isinstance(permissions, ActorPermissions)
     assert Scope.RESOURCE_READ in permissions.effective_scopes
@@ -203,7 +203,8 @@ def test_reference_shape_parity(parity_clients, query, expected_type):
 def test_filters_scopes_pagination_and_count_parity(parity_clients):
     local, remote = parity_clients
     parent = (
-        local.namespace(local.namespace_context.path).query_maker()
+        local.namespace(local.namespace_context.path)
+        .query_maker()
         .resources()
         .filter(name="plate-1")
         .include("children")
@@ -327,7 +328,10 @@ def test_field_ordering_parity(parity_clients, ordering):
 def test_transport_scalar_predicate_coercion_parity(parity_clients, field):
     local, _ = parity_clients
     target = (
-        local.namespace(local.namespace_context.path).query_maker().process_runs().first()
+        local.namespace(local.namespace_context.path)
+        .query_maker()
+        .process_runs()
+        .first()
     )
 
     local_result, remote_result = _assert_query_parity(

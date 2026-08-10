@@ -135,6 +135,9 @@ pytest = ">=8.4.2,<9"
 hatch = "*"
 twine = "*"
 
+[tool.pixi.feature.lint.dependencies]
+pre-commit = ">=4.0.1"
+
 [tool.pixi.feature.build.tasks]
 build = { cmd = ["hatch", "build"] }
 publish = { cmd = ["hatch", "publish"]}

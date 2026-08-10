@@ -56,9 +56,7 @@ def test_shared_state_release_is_idempotent_after_close():
 
 
 def test_shared_state_rejects_acquisition_after_close():
-    state = _ConnectionState(
-        read_backend=FakeClosable(), write_backend=FakeClosable()
-    )
+    state = _ConnectionState(read_backend=FakeClosable(), write_backend=FakeClosable())
     state.acquire()
     state.release()
 
@@ -171,9 +169,7 @@ def test_scoped_local_builder_resolves_namespace_path_without_active_context(tmp
     root._namespace_context = None
     scoped = root.namespace("beamline/amx")
 
-    builder = scoped.build_resource_template(
-        name="Sample", type_names=["sample"]
-    )
+    builder = scoped.build_resource_template(name="Sample", type_names=["sample"])
 
     assert builder.namespace_id
 

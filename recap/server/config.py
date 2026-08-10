@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,7 +19,10 @@ class ServerConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="RECAP_")
 
-    db_path: Path | None = None
+    db_path: Path | None = Field(
+        default=None,
+        description="SQLite database path; mutually exclusive with database_uri.",
+    )
     database_uri: SecretStr | None = None
     host: str = "127.0.0.1"
     port: int = 8000

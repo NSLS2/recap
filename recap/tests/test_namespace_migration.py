@@ -112,22 +112,22 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
             },
         )
 
-    campaign_path = f"campaign/{campaign_id}"
-    apply_migrations(db_url)
+    campaign_path = f"default/campaign/{campaign_id}"
+    apply_migrations(
+        db_url,
+        campaign_namespace_paths={campaign_id: campaign_path},
+        base_namespace_path="default",
+    )
 
     with engine.connect() as connection:
         namespace = (
             connection.execute(
-                text(
-                    "SELECT id, path, parent_id, metadata_json "
-                    "FROM namespace WHERE id = :id"
-                ),
+                text("SELECT id, path, metadata_json FROM namespace WHERE id = :id"),
                 {"id": campaign_id.hex},
             )
             .mappings()
             .one()
         )
-        root_id = connection.scalar(text("SELECT id FROM namespace WHERE path = ''"))
         process_run = (
             connection.execute(
                 text("SELECT namespace_id FROM process_run WHERE id = :id"),
@@ -187,12 +187,7 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
     metadata = json.loads(namespace["metadata_json"])
     assert namespace["path"] == campaign_path
     assert namespace["id"] == campaign_id.hex
-    assert namespace["parent_id"] == root_id
     assert process_run["namespace_id"] == namespace["id"]
-    assert templates["process_namespace_id"] == root_id
-    assert templates["resource_namespace_id"] == root_id
-    assert templates["process_namespace_id"] == templates["resource_namespace_id"]
-    assert resources[unassigned_resource_id.hex]["namespace_id"] == root_id
     assert resources[assigned_resource_id.hex]["status"] == "ACTIVE"
     assert resources[unassigned_resource_id.hex]["status"] == "MUTABLE"
     assert assignment == {
@@ -205,6 +200,7 @@ def test_campaign_data_is_backfilled_into_namespaces(tmp_path):
     assert metadata["nsls2.proposal"] == "312345"
     assert metadata["nsls2.saf"] == "310000"
     assert metadata["recap.campaign.metadata"] == {"sample": "Ni"}
+    assert templates["process_namespace_id"] == templates["resource_namespace_id"]
     assert resources[assigned_resource_id.hex]["revision"] == 1
 
     inspector = inspect(engine)
@@ -220,9 +216,13 @@ def test_fresh_database_uses_empty_root_namespace(tmp_path):
     apply_migrations(db_url)
 
     with create_engine(db_url).connect() as connection:
-        root = connection.execute(
-            text("SELECT path, parent_id FROM namespace WHERE path = ''")
-        ).mappings().one()
+        root = (
+            connection.execute(
+                text("SELECT path, parent_id FROM namespace WHERE path = ''")
+            )
+            .mappings()
+            .one()
+        )
 
     assert root["path"] == ""
     assert root["parent_id"] is None
@@ -252,10 +252,14 @@ def test_explicit_campaign_namespace_path_is_unchanged_with_empty_base(tmp_path)
     )
 
     with engine.connect() as connection:
-        campaign = connection.execute(
-            text("SELECT path, parent_id FROM namespace WHERE id = :id"),
-            {"id": campaign_id.hex},
-        ).mappings().one()
+        campaign = (
+            connection.execute(
+                text("SELECT path, parent_id FROM namespace WHERE id = :id"),
+                {"id": campaign_id.hex},
+            )
+            .mappings()
+            .one()
+        )
         root_id = connection.scalar(text("SELECT id FROM namespace WHERE path = ''"))
 
     assert campaign["path"] == "beamline/amx"

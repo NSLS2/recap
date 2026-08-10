@@ -19,9 +19,7 @@ def _create_source(client):
     prefix_path = f"{source_path}x/destination"
     namespace_prefix = client.namespace_path
     source_full_path = "/".join(filter(None, (namespace_prefix, source_path)))
-    destination_full_path = "/".join(
-        filter(None, (namespace_prefix, destination_path))
-    )
+    destination_full_path = "/".join(filter(None, (namespace_prefix, destination_path)))
     sibling_full_path = "/".join(filter(None, (namespace_prefix, sibling_path)))
     prefix_full_path = "/".join(filter(None, (namespace_prefix, prefix_path)))
     uow = client.backend.begin()
@@ -227,9 +225,7 @@ def test_copy_resource_activates_source_and_owns_clone_in_destination(client):
     )
 
 
-@pytest.mark.parametrize(
-    "destination_key", ["sibling_path", "prefix_path"]
-)
+@pytest.mark.parametrize("destination_key", ["sibling_path", "prefix_path"])
 def test_copy_resource_rejects_destination_outside_source_ancestry(
     client, destination_key
 ):

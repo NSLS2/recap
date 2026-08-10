@@ -7,7 +7,7 @@ from recap.adapter.transport import QueryRequest
 from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate
 from recap.db.resource import Resource, ResourceTemplate
-from recap.dsl.query import QueryDSL, QuerySpec
+from recap.dsl.query import Field, QueryDSL, QuerySpec
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceTemplateSchema
@@ -149,9 +149,7 @@ def test_visibility_precedes_filter_pagination_and_count(db_session):
     db_session.commit()
 
     query = (
-        _query(db_session, own)
-        .process_templates(shape="ref")
-        .order_by(ProcessTemplate.name)
+        _query(db_session, own).process_templates(shape="ref").order_by(Field("name"))
     )
     assert [item.name for item in query.offset(1).limit(1).all()] == ["b"]
     assert query.count() == 3

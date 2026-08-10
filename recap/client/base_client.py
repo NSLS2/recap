@@ -18,6 +18,7 @@ from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceCopyOptions, ResourceRef, ResourceSchema
 from recap.utils.migrations import apply_migrations
 
+
 class RecapClient:
     """Primary entry point for interacting with a RECAP provenance database.
 
@@ -212,7 +213,10 @@ class RecapClient:
         return self.namespace(namespace)
 
     def _resolve_namespace_context(
-        self, namespace_path: str | None = None, *, context: NamespaceContext | None = None
+        self,
+        namespace_path: str | None = None,
+        *,
+        context: NamespaceContext | None = None,
     ) -> NamespaceContext:
         requested_path = self._normalize_namespace(
             self.namespace_path if namespace_path is None else namespace_path
@@ -224,7 +228,10 @@ class RecapClient:
                 raise ValueError("Namespace context must match namespace path")
             return context
         if self._namespace_context is not None:
-            if namespace_path is not None and self._namespace_context.path != requested_path:
+            if (
+                namespace_path is not None
+                and self._namespace_context.path != requested_path
+            ):
                 raise ValueError("Namespace context must match client view scope")
             return self._namespace_context
         if isinstance(self.backend, LocalBackend):
@@ -288,9 +295,7 @@ class RecapClient:
         apply_migrations(db_url)
 
         engine = create_engine(db_url, echo=echo)
-        sessionmaker_ = sessionmaker(
-            bind=engine, expire_on_commit=False, future=True
-        )
+        sessionmaker_ = sessionmaker(bind=engine, expire_on_commit=False, future=True)
         backend = LocalBackend(sessionmaker_)
         client = cls._from_backends(
             read_backend=backend,

@@ -1,5 +1,12 @@
 import recap
-from recap import Direction, Field, LifecycleStatus, QueryDSL, RecapClient, validate_transition
+from recap import (
+    Direction,
+    Field,
+    LifecycleStatus,
+    QueryDSL,
+    RecapClient,
+    validate_transition,
+)
 
 
 def test_core_public_exports_are_importable():

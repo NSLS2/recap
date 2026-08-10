@@ -49,9 +49,13 @@ def statement_counter():
 
 
 @pytest.fixture(scope="session")
-def db_url(tmp_path_factory):
+def db_path(tmp_path_factory):
     db_dir = tmp_path_factory.mktemp("data")
-    db_path = db_dir / "test.db"
+    return db_dir / "test.db"
+
+
+@pytest.fixture(scope="session")
+def db_url(db_path):
     return f"sqlite:///{db_path}"
 
 
@@ -139,12 +143,7 @@ def namespaced_session(db_session):
 
 
 @pytest.fixture(scope="function")
-def client(db_url, apply_migrations):
-    # client = RecapClient(url=db_url)
-    # try:
-    #     yield client
-    # finally:
-    #     client.close()
-    with RecapClient(url=db_url) as client:
+def client(db_path, apply_migrations):
+    with RecapClient.from_sqlite(db_path) as client:
         client.create_namespace(f"test/{uuid4()}")
         yield client

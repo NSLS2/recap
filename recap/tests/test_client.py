@@ -26,9 +26,7 @@ def test_from_sqlite_returns_root_recap_client(tmp_path):
 
 
 def test_factories_accept_initial_namespace_scope(tmp_path):
-    local = RecapClient.from_sqlite(
-        tmp_path / "recap.db", namespace="beamline/amx"
-    )
+    local = RecapClient.from_sqlite(tmp_path / "recap.db", namespace="beamline/amx")
 
     assert local.namespace_path == "beamline/amx"
     local.close()
@@ -61,7 +59,6 @@ def test_from_sqlite_reuses_existing_file(tmp_path):
 
     with RecapClient.from_sqlite(db_file) as client:
         client.create_namespace("name")
-        existing_id = client.namespace_context.id
 
     with RecapClient.from_sqlite(db_file) as client:
         scoped = client.namespace("name")
@@ -83,7 +80,6 @@ def test_query_maker_uses_client_namespace_scope(apply_migrations, db_path):
 
 def test_query_maker_uses_scoped_namespace_view(apply_migrations, db_path):
     with RecapClient.from_sqlite(db_path) as client:
-        default = client.create_namespace("client-default")
         other = client.create_namespace("client-other")
         qm = client.namespace(other.path).query_maker()
 
@@ -134,8 +130,9 @@ def test_scoped_remote_query_uses_view_namespace():
 
 
 def test_builder_namespace_argument_is_rejected(tmp_path):
-    with RecapClient.from_sqlite(tmp_path / "recap.db", namespace="beamline/amx") as client:
-        with pytest.raises(TypeError):
+    with (RecapClient.from_sqlite(
+        tmp_path / "recap.db", namespace="beamline/amx"
+    ) as client, pytest.raises(TypeError)):
             client.build_resource_template(
                 name="Sample",
                 type_names=["sample"],

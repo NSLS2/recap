@@ -1,4 +1,3 @@
-import enum
 import json
 from datetime import datetime
 from typing import Any
@@ -6,10 +5,7 @@ from typing import Any
 from slugify import slugify
 from sqlalchemy.ext.mutable import MutableList
 
-
-class Direction(str, enum.Enum):
-    input = "input"
-    output = "output"
+from recap import Direction  # noqa: F401
 
 
 def _parse_array_like(value: Any) -> list[Any]:

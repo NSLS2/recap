@@ -13,7 +13,7 @@ from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate, StepTemplateResourceSlotBinding
-from recap.dsl.query import QueryDSL, ResourceQuery
+from recap.dsl.query import Field, QueryDSL, ResourceQuery
 from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
@@ -139,8 +139,8 @@ def test_process_run_pagination_and_filtering(db_session):
     query = (
         make_query(db_session)
         .process_runs()
-        .where(ProcessRun.name.like("Run-batch%"))
-        .order_by(ProcessRun.name)
+        .where(Field("name").starts_with("Run-batch"))
+        .order_by(Field("name"))
     )
 
     # head = query.limit(2).as_models()
@@ -149,7 +149,7 @@ def test_process_run_pagination_and_filtering(db_session):
     third = query.offset(2).first()
     assert third.name == names[2]
 
-    filtered = query.where(ProcessRun.name == names[1]).all()
+    filtered = query.where(Field("name") == names[1]).all()
     assert [run.name for run in filtered] == [names[1]]
 
 
