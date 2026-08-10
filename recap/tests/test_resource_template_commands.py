@@ -20,6 +20,7 @@ from recap.commands.service import CommandService
 from recap.db.audit import MutationAudit
 from recap.db.base import Base
 from recap.db.resource import ResourceTemplate
+from recap.db.namespace import Namespace
 from recap.dsl.drafts import AttributeDraft, AttributeGroupDraft, ResourceTemplateDraft
 
 
@@ -44,6 +45,8 @@ def command_setup(tmp_path):
         namespace_restrictions=None,
         credential_fingerprint="fingerprint",
     )
+    with factory.begin() as session:
+        session.add(Namespace(path="", metadata_json={}))
     audit = AuditCollector()
     context = CommandContext(
         actor=actor,
@@ -54,7 +57,12 @@ def command_setup(tmp_path):
         idempotency_key="template-1",
     )
     service = CommandService(factory)
-    namespace = service.create_namespace(context, path="beamline/amx", metadata={})
+    service.create_namespace(context, path="beamline", metadata={})
+    namespace = service.create_namespace(
+        replace(context, idempotency_key="namespace-child-1"),
+        path="beamline/amx",
+        metadata={},
+    )
     return (
         service,
         factory,
@@ -112,7 +120,7 @@ def test_create_persists_nested_graph_replays_and_audits(command_setup):
     assert (
         created.attribute_group_templates[0].attribute_templates[0].default_value == 8
     )
-    assert len(audit.records) == 2
+    assert len(audit.records) == 3
     with factory() as session:
         assert len(session.scalars(select(ResourceTemplate)).all()) == 3
         assert (

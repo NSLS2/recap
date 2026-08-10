@@ -33,12 +33,14 @@ def test_namespace_round_trip(db_session):
 
 
 def test_effective_metadata_merges_ancestors(namespace_repository, db_session):
+    namespace_repository.create("beamline")
     root = namespace_repository.create("beamline/amx", {"facility": "nsls2"})
+    namespace_repository.create("beamline/amx/proposal")
     child = namespace_repository.create(
         "beamline/amx/proposal/312345", {"nsls2.proposal": "312345"}
     )
     db_session.flush()
-    assert child.parent is root
+    assert child.parent.path == "beamline/amx/proposal"
     assert namespace_repository.effective_metadata(child.id) == {
         "facility": "nsls2",
         "nsls2.proposal": "312345",

@@ -30,6 +30,7 @@ def test_remote_writes_are_visible_to_graphql_and_match_rest_entities(tmp_path):
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
     ):
         namespace = remote.namespace("beamline/amx")
+        remote.create_namespace("beamline")
         namespace_result = namespace.create_namespace(
             namespace.namespace_path, metadata={"beamline": "amx"}
         )
@@ -132,6 +133,7 @@ def test_scoped_remote_public_builders_use_namespace_routes(tmp_path):
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
     ):
         namespace = remote.namespace("beamline/amx")
+        remote.create_namespace("beamline")
         namespace.create_namespace(namespace.namespace_path)
 
         with namespace.build_resource_template(name="Sample", type_names=["sample"]):
@@ -180,6 +182,7 @@ def test_scoped_remote_create_resource_uses_namespace_route(tmp_path):
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
     ):
         namespace = remote.namespace("beamline/amx")
+        remote.create_namespace("beamline")
         namespace.create_namespace(namespace.namespace_path)
         with namespace.build_resource_template(name="Sample", type_names=["sample"]):
             pass

@@ -114,4 +114,4 @@ class WriteBackend(Protocol):
 class Backend(ReadBackend, WriteBackend, Protocol):
     """Combined read+write protocol. Implemented by LocalBackend."""
 
-    pass
+    def list_child_namespace_paths(self, parent_path: str) -> list[str]: ...

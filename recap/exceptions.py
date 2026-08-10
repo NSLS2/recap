@@ -76,10 +76,18 @@ class RecapConnectionError(Exception):
 class RecapHTTPError(Exception):
     """Raised for an HTTP response rejected by a remote Recap server."""
 
-    def __init__(self, url: str, status_code: int, request_id: str | None = None):
+    def __init__(
+        self,
+        url: str,
+        status_code: int,
+        request_id: str | None = None,
+        message: str | None = None,
+    ):
         self.url = url
         self.status_code = status_code
         self.request_id = request_id
+        self.message = message
         detail = f" (HTTP {status_code})"
         request = f", request_id={request_id}" if request_id else ""
-        super().__init__(f"Recap request failed at {url}{detail}{request}")
+        extra = f": {message}" if message else ""
+        super().__init__(f"Recap request failed at {url}{detail}{request}{extra}")

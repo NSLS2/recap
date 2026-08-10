@@ -55,6 +55,12 @@ def draft(labels=None):
 
 
 def create_namespace(client, auth_header):
+    parent = client.put(
+        "/api/v1/namespaces/beamline",
+        headers={**auth_header, "Idempotency-Key": "parent-1"},
+        json={"metadata": {}},
+    )
+    assert parent.status_code == 201
     response = client.put(
         "/api/v1/namespaces/beamline/amx",
         headers={**auth_header, "Idempotency-Key": "namespace-1"},

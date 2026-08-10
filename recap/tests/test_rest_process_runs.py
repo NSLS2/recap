@@ -8,6 +8,12 @@ from recap.server.app import create_app
 def test_process_run_create_update_finalize_and_replay(tmp_path):
     with TestClient(create_app(tmp_path / "runs.db", api_key="secret")) as client:
         auth = {"Authorization": "Apikey secret"}
+        parent = client.put(
+            "/api/v1/namespaces/beamline",
+            headers={**auth, "Idempotency-Key": "parent"},
+            json={},
+        )
+        assert parent.status_code == 201
         namespace = client.put(
             "/api/v1/namespaces/beamline/amx",
             headers={**auth, "Idempotency-Key": "ns"},

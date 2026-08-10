@@ -42,6 +42,7 @@ def parity_clients(tmp_path, monkeypatch):
     with ExitStack() as stack:
         local = stack.enter_context(RecapClient.from_sqlite(db_path))
 
+        local.create_namespace("test")
         local.create_namespace("test/mx-parity", metadata={"beamline": "AMX"})
         with local.build_resource_template(
             name="Parity plate", type_names=["container", "plate"]

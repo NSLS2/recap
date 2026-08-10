@@ -145,5 +145,7 @@ def namespaced_session(db_session):
 @pytest.fixture(scope="function")
 def client(db_path, apply_migrations):
     with RecapClient.from_sqlite(db_path) as client:
-        client.create_namespace(f"test/{uuid4()}")
+        parent_path = f"test-{uuid4()}"
+        client.create_namespace(parent_path)
+        client.create_namespace(f"{parent_path}/{uuid4()}")
         yield client

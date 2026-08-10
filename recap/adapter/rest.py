@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from secrets import token_urlsafe
 from typing import Any
@@ -96,8 +97,21 @@ class RESTAdapter:
             ) from None
         except httpx.HTTPStatusError as exc:
             response = exc.response
+            message = None
+            payload: Any = None
+            if response.content:
+                with suppress(TypeError, ValueError):
+                    payload = response.json()
+            if isinstance(payload, dict):
+                error = payload.get("error")
+                candidate = error.get("message") if isinstance(error, dict) else None
+                if isinstance(candidate, str) and candidate:
+                    message = self._auth.redact(candidate)
             raise RecapHTTPError(
-                url, response.status_code, response.headers.get("X-Request-ID")
+                url,
+                response.status_code,
+                response.headers.get("X-Request-ID"),
+                message=message,
             ) from None
         return RESTResult(
             response.json() if response.content else None,
@@ -130,6 +144,14 @@ class RESTAdapter:
             etag=etag,
             idempotency_key=idempotency_key,
         )
+
+    def list_child_namespaces(self, parent_path: str) -> list[str]:
+        path = parent_path.strip("/")
+        route = "/api/v1/namespaces/children"
+        if path:
+            route += f"/{path}"
+        result = self._request("GET", route)
+        return list(result.entity or [])
 
     def create(
         self,

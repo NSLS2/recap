@@ -32,6 +32,7 @@ query ExecuteCount($schema_name: String!, $namespace_path: String!, $spec: JSON!
 
 def seed_resource_tree(db_path):
     client = RecapClient.from_sqlite(db_path)
+    client.create_namespace("test")
     context = client.create_namespace("test/resource-tree")
     namespace_path = context.path
     with client.build_resource_template(
@@ -54,6 +55,7 @@ def seed_resource_tree(db_path):
 
 def seed_namespace(db_path):
     client = RecapClient.from_sqlite(db_path)
+    client.create_namespace("test")
     context = client.create_namespace("test/namespace")
     path = context.path
     client.close()
@@ -115,7 +117,7 @@ def test_graphql_count_fields(tmp_path):
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["resources_count"] == 0
-    assert data["namespaces_count"] == 1
+    assert data["namespaces_count"] == 2
     assert data["resource_templates_count"] == 0
     assert data["process_templates_count"] == 0
 

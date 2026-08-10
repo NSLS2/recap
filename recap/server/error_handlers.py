@@ -22,7 +22,7 @@ def register_command_error_handlers(app: FastAPI) -> None:
             status_code, code, message = (
                 422,
                 ErrorCode.VALIDATION_ERROR,
-                "Request validation failed",
+                error.public_message or "Request validation failed",
             )
         else:
             status_code, code, message = 400, ErrorCode.REQUEST_ERROR, "Request failed"

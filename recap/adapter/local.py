@@ -1455,6 +1455,17 @@ class LocalBackend(Backend):
                 raise LookupError(f"Namespace does not exist: {path}")
             return NamespaceContext.model_validate(namespace)
 
+    def list_child_namespace_paths(self, parent_path: str) -> list[str]:
+        """Return full paths for direct children of a namespace path."""
+        with self._session_scope() as session:
+            parent = session.scalars(
+                select(Namespace).where(Namespace.path == parent_path)
+            ).one_or_none()
+            if parent is None:
+                return []
+            statement = select(Namespace).where(Namespace.parent_id == parent.id)
+            return [namespace.path for namespace in session.scalars(statement)]
+
     def _apply_namespace_visibility(
         self, model, stmt, spec: QuerySpec, namespace_path: str
     ):

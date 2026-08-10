@@ -33,6 +33,7 @@ class RecapClient:
     engine on exit:
 
         with RecapClient.from_sqlite() as client:
+            client.create_namespace("projects")
             client.create_namespace("projects/my-project")
 
     """
@@ -49,6 +50,9 @@ class RecapClient:
         self._closed = False
         self.database_path: Path | None = None
         self.backend: Backend | None = None
+
+    def __repr__(self) -> str:
+        return f"RecapClient({self.namespace_path=})"
 
     @staticmethod
     def _normalize_namespace(namespace: str | None) -> str:
@@ -978,6 +982,17 @@ class RecapClient:
             uow.rollback()
             raise
         return self._namespace_context
+
+    def list_namespaces(self) -> list[str]:
+        """Return relative names of direct child namespaces."""
+        if self.backend is None:
+            raise RuntimeError("Backend not initialized")
+        if self.backend.__class__.__name__ == "RESTAdapter":
+            return self.backend.list_child_namespaces(self.namespace_path)
+
+        child_paths = self.backend.list_child_namespace_paths(self.namespace_path)
+        prefix = f"{self.namespace_path}/" if self.namespace_path else ""
+        return [child_path[len(prefix) :] for child_path in child_paths]
 
     def query_maker(
         self,

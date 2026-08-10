@@ -225,6 +225,43 @@ def test_copy_is_allowed_when_both_sides_are_authorized():
     ).allowed
 
 
+def test_namespace_read_grant_discovers_descendants():
+    identity = ProviderIdentity(provider="pam", subject="alice")
+    namespace_policy = policy(grant(identity, "beamlines", Scope.NAMESPACE_READ))
+
+    assert namespace_policy.can_discover_namespace(
+        actor(identity), "beamlines/amx"
+    )
+
+
+def test_leaf_grant_discovers_only_required_ancestor_prefixes():
+    identity = ProviderIdentity(provider="pam", subject="alice")
+    namespace_policy = policy(
+        grant(identity, "beamlines/amx/proposals/pass-312345", Scope.NAMESPACE_READ)
+    )
+
+    assert namespace_policy.can_discover_namespace(actor(identity), "beamlines")
+    assert namespace_policy.can_discover_namespace(actor(identity), "beamlines/amx")
+    assert namespace_policy.can_discover_namespace(
+        actor(identity), "beamlines/amx/proposals/pass-312345"
+    )
+    assert not namespace_policy.can_discover_namespace(actor(identity), "staff")
+
+
+def test_discovery_honors_identity_scope_and_namespace_restriction():
+    identity = ProviderIdentity(provider="pam", subject="alice")
+    namespace_policy = policy(
+        grant(identity, "beamlines/amx/secret", Scope.NAMESPACE_READ)
+    )
+
+    assert not namespace_policy.can_discover_namespace(
+        actor(identity, scopes=frozenset()), "beamlines"
+    )
+    assert not namespace_policy.can_discover_namespace(
+        actor(identity, restrictions=frozenset({"other"})), "beamlines"
+    )
+
+
 def test_unrestricted_policy_grants_single_user_all_scopes_without_provenance():
     current_actor = actor(ProviderIdentity(provider="api-key", subject="single-user"))
     namespace_policy = UnrestrictedNamespacePolicy()

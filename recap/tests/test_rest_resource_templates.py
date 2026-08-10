@@ -32,6 +32,12 @@ def headers(key):
 
 
 def create_namespace(client):
+    parent = client.put(
+        "/api/v1/namespaces/beamline",
+        headers=headers("parent-1"),
+        json={"metadata": {}},
+    )
+    assert parent.status_code == 201
     response = client.put(
         "/api/v1/namespaces/beamline/amx",
         headers=headers("namespace-1"),

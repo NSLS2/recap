@@ -7,10 +7,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, Request, Response
 
 from recap.authentication.models import RequestActor
+from recap.adapter.local import LocalBackend
 from recap.authorization.policy import (
     SnapshotNamespacePolicy,
     UnrestrictedNamespacePolicy,
 )
+from recap.utils.namespace import canonicalize_namespace_path
 from recap.commands.models import CommandContext
 from recap.commands.service import CommandService
 from recap.dsl.drafts import (
@@ -117,6 +119,33 @@ def update_namespace(
         status=body.status,
     )
     return _set_etag(response, result)
+
+
+@router.get("/namespaces/children", response_model=list[str])
+@router.get("/namespaces/children/{namespace_path:path}", response_model=list[str])
+def list_child_namespaces(
+    request: Request,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    namespace_path: str = "",
+) -> list[str]:
+    path = canonicalize_namespace_path(namespace_path)
+    provider = getattr(request.app.state, "authorization_snapshot_provider", None)
+    policy = (
+        SnapshotNamespacePolicy(provider.acquire())
+        if provider is not None
+        else getattr(
+            request.app.state, "namespace_policy", UnrestrictedNamespacePolicy()
+        )
+    )
+    backend = LocalBackend(request.app.state.session_factory)
+    child_paths = backend.list_child_namespace_paths(path)
+    visible_paths = [
+        child_path
+        for child_path in child_paths
+        if policy.can_discover_namespace(actor, child_path)
+    ]
+    prefix = f"{path}/" if path else ""
+    return [child_path[len(prefix) :] for child_path in visible_paths]
 
 
 @router.post(

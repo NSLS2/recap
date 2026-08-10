@@ -27,6 +27,17 @@ def test_command_errors_have_stable_semantics(error_type, code):
     assert str(error) == "safe message"
 
 
+def test_validation_error_supports_optional_public_message():
+    default = CommandValidationError("internal message")
+    explicit = CommandValidationError(
+        "internal message", public_message="safe public message"
+    )
+
+    assert default.public_message is None
+    assert explicit.public_message == "safe public message"
+    assert str(explicit) == "internal message"
+
+
 def test_command_context_has_exact_request_scoped_fields():
     assert [field.name for field in fields(CommandContext)] == [
         "actor",

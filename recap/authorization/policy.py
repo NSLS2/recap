@@ -87,6 +87,38 @@ class SnapshotNamespacePolicy:
             return _denied(DenialCode.INSUFFICIENT_SCOPE)
         return PermissionDecision(allowed=True, permissions=permissions)
 
+    def can_discover_namespace(
+        self, actor: RequestActor, namespace_path: str
+    ) -> bool:
+        """Return whether actor may see namespace path during navigation."""
+        path = canonicalize_namespace_path(namespace_path)
+        if Scope.NAMESPACE_READ in self.permissions_for(actor, path).effective_scopes:
+            return True
+
+        restrictions = (
+            None
+            if actor.namespace_restrictions is None
+            else tuple(
+                canonicalize_namespace_path(item)
+                for item in actor.namespace_restrictions
+            )
+        )
+        identities = set(actor.identities)
+        return any(
+            grant.scope is Scope.NAMESPACE_READ
+            and grant.identity in identities
+            and grant.scope in actor.credential_scopes
+            and (
+                restrictions is None
+                or any(
+                    is_namespace_ancestor(restriction, grant.namespace_path)
+                    for restriction in restrictions
+                )
+            )
+            and is_namespace_ancestor(path, grant.namespace_path)
+            for grant in self._snapshot.grants
+        )
+
     def authorize_process_run(
         self,
         actor: RequestActor,

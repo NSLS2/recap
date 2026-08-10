@@ -21,6 +21,7 @@ from recap.commands.service import CommandService
 from recap.db.audit import MutationAudit
 from recap.db.base import Base
 from recap.db.process import ProcessRun, ProcessTemplate
+from recap.db.namespace import Namespace
 from recap.dsl.drafts import (
     AttributeDraft,
     AttributeGroupDraft,
@@ -54,6 +55,8 @@ def command_setup(tmp_path):
         namespace_restrictions=None,
         credential_fingerprint="fingerprint",
     )
+    with factory.begin() as session:
+        session.add(Namespace(path="", metadata_json={}))
     audit = AuditCollector()
     context = CommandContext(
         actor=actor,
@@ -64,7 +67,12 @@ def command_setup(tmp_path):
         idempotency_key="namespace-1",
     )
     service = CommandService(factory)
-    namespace = service.create_namespace(context, path="beamline/amx", metadata={})
+    service.create_namespace(context, path="beamline", metadata={})
+    namespace = service.create_namespace(
+        replace(context, idempotency_key="namespace-child-1"),
+        path="beamline/amx",
+        metadata={},
+    )
     return (
         service,
         factory,
@@ -157,7 +165,7 @@ def test_create_persists_complete_graph_replays_and_audits(command_setup):
         "float",
         "s",
     )
-    assert len(audit.records) == 2  # namespace create plus one non-replayed mutation
+    assert len(audit.records) == 3  # parent, child, plus one non-replayed mutation
     with factory() as session:
         assert len(session.scalars(select(ProcessTemplate)).all()) == 1
         assert (

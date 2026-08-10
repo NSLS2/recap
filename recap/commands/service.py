@@ -569,9 +569,20 @@ class CommandService:
                     assert decision.response is not None
                     return NamespaceSchema.model_validate(decision.response)
 
-                namespace = NamespaceRepository(session).create(
-                    canonical_path, local_metadata
-                )
+                try:
+                    namespace = NamespaceRepository(session).create(
+                        canonical_path, local_metadata
+                    )
+                except LookupError as error:
+                    parent_path = parent_namespace_path(canonical_path)
+                    raise CommandValidationError(
+                        f"Parent namespace {parent_path!r} does not exist. "
+                        f"Create it before creating {canonical_path!r}.",
+                        public_message=(
+                            "Parent namespace must be explicitly created before "
+                            "creating a nested namespace."
+                        ),
+                    ) from error
                 session.flush()
                 result = NamespaceSchema.model_validate(namespace)
                 response = result.model_dump(mode="json")

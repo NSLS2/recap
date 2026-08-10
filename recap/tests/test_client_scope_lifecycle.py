@@ -165,6 +165,7 @@ def test_scoped_view_close_is_idempotent(tmp_path):
 
 def test_scoped_local_builder_resolves_namespace_path_without_active_context(tmp_path):
     root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    root.create_namespace("beamline")
     root.create_namespace("beamline/amx")
     root._namespace_context = None
     scoped = root.namespace("beamline/amx")
@@ -179,6 +180,7 @@ def test_scoped_local_builder_resolves_namespace_path_without_active_context(tmp
 
 def test_scoped_local_get_resource_resolves_namespace_without_active_context(tmp_path):
     root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    root.create_namespace("beamline")
     root.create_namespace("beamline/amx")
     with root.build_resource_template(name="Sample", type_names=["sample"]):
         pass

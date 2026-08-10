@@ -46,24 +46,14 @@ class NamespaceRepository:
         path = canonicalize_namespace_path(path)
         local_metadata = dict(metadata or {})
         ancestor_paths = namespace_ancestors(path)[:-1]
-        parent = None
-        if ancestor_paths:
-            ancestors = {
-                item.path: item
-                for item in self._session.scalars(
-                    select(Namespace).where(Namespace.path.in_(ancestor_paths))
-                )
-            }
-            parent = next(
-                (
-                    ancestors[item]
-                    for item in reversed(ancestor_paths)
-                    if item in ancestors
-                ),
-                None,
-            )
+        parent_path = ancestor_paths[-1]
+        parent = self._session.scalar(
+            select(Namespace).where(Namespace.path == parent_path)
+        )
+        if parent is None:
+            raise LookupError(f"Parent namespace does not exist: {parent_path}")
 
-        inherited = self.effective_metadata(parent.id) if parent is not None else {}
+        inherited = self.effective_metadata(parent.id)
         if self._site_validator is not None:
             self._site_validator(inherited, local_metadata)
 

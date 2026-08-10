@@ -73,6 +73,25 @@ def test_update_and_copy_send_preconditions_and_destination_path():
     assert calls[1].kwargs["headers"]["Idempotency-Key"]
 
 
+def test_list_child_namespaces_uses_get_endpoint_without_write_headers():
+    from recap.adapter.rest import RESTAdapter
+
+    response = _response(body=["amx", "fmx"])
+    with patch("recap.adapter.rest.httpx.Client") as client_type:
+        client_type.return_value.request.return_value = response
+        adapter = RESTAdapter("https://recap.test", api_key="secret")
+
+        result = adapter.list_child_namespaces("beamline")
+
+    client_type.return_value.request.assert_called_once_with(
+        "GET",
+        "https://recap.test/api/v1/namespaces/children/beamline",
+        headers={"Authorization": "Apikey secret"},
+        json=None,
+    )
+    assert result == ["amx", "fmx"]
+
+
 @pytest.mark.parametrize("exc_type", ["connect", "timeout"])
 def test_transport_failures_map_to_typed_connection_error_without_secret(exc_type):
     import httpx2
@@ -104,4 +123,92 @@ def test_http_error_exposes_status_and_request_id_as_typed_error():
             RESTAdapter("https://recap.test", api_key="secret").create_namespace("amx")
     assert caught.value.status_code == 409
     assert caught.value.request_id == "req-9"
+    assert "secret" not in str(caught.value)
+
+
+def test_http_error_exposes_structured_validation_message():
+    from recap.adapter.rest import RESTAdapter
+    from recap.exceptions import RecapHTTPError
+
+    response = _response(
+        status=422,
+        headers={"X-Request-ID": "req-validation"},
+        body={"error": {"message": "name is required"}},
+    )
+    with patch("recap.adapter.rest.httpx.Client") as client_type:
+        client_type.return_value.request.return_value = response
+        with pytest.raises(RecapHTTPError) as caught:
+            RESTAdapter("https://recap.test", api_key="secret").create_namespace("amx")
+
+    assert caught.value.message == "name is required"
+    assert "name is required" in str(caught.value)
+    assert caught.value.url == "https://recap.test/api/v1/namespaces/amx"
+    assert caught.value.status_code == 422
+    assert caught.value.request_id == "req-validation"
+
+
+def test_http_error_keeps_generic_message_for_malformed_body():
+    from recap.adapter.rest import RESTAdapter
+    from recap.exceptions import RecapHTTPError
+
+    response = _response(status=422, body={"detail": "secret"})
+    response.content = b"not-json"
+    response.json.side_effect = ValueError("malformed response")
+    with patch("recap.adapter.rest.httpx.Client") as client_type:
+        client_type.return_value.request.return_value = response
+        with pytest.raises(RecapHTTPError) as caught:
+            RESTAdapter("https://recap.test", api_key="secret").create_namespace("amx")
+
+    assert caught.value.message is None
+    assert str(caught.value) == (
+        "Recap request failed at https://recap.test/api/v1/namespaces/amx (HTTP 422)"
+    )
+    response.json.assert_called_once_with()
+    assert "secret" not in str(caught.value)
+
+
+def test_http_error_keeps_generic_message_for_empty_body_without_parsing():
+    from recap.adapter.rest import RESTAdapter
+    from recap.exceptions import RecapHTTPError
+
+    response = _response(status=422)
+    response.content = b""
+    with patch("recap.adapter.rest.httpx.Client") as client_type:
+        client_type.return_value.request.return_value = response
+        with pytest.raises(RecapHTTPError) as caught:
+            RESTAdapter("https://recap.test", api_key="secret").create_namespace("amx")
+
+    assert caught.value.message is None
+    response.json.assert_not_called()
+
+
+def test_http_error_ignores_unstructured_body_without_exposing_secret():
+    from recap.adapter.rest import RESTAdapter
+    from recap.exceptions import RecapHTTPError
+
+    response = _response(
+        status=422,
+        body={"detail": "secret", "token": "secret"},
+    )
+    with patch("recap.adapter.rest.httpx.Client") as client_type:
+        client_type.return_value.request.return_value = response
+        with pytest.raises(RecapHTTPError) as caught:
+            RESTAdapter("https://recap.test", api_key="secret").create_namespace("amx")
+
+    assert caught.value.message is None
+    assert "secret" not in str(caught.value)
+
+
+def test_http_error_ignores_non_dict_error_payload():
+    from recap.adapter.rest import RESTAdapter
+    from recap.exceptions import RecapHTTPError
+
+    response = _response(status=422, body={"error": "secret"})
+    response.content = b'{"error":"secret"}'
+    with patch("recap.adapter.rest.httpx.Client") as client_type:
+        client_type.return_value.request.return_value = response
+        with pytest.raises(RecapHTTPError) as caught:
+            RESTAdapter("https://recap.test", api_key="secret").create_namespace("amx")
+
+    assert caught.value.message is None
     assert "secret" not in str(caught.value)

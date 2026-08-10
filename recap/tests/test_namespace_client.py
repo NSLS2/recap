@@ -14,6 +14,7 @@ def test_namespace_returns_scoped_client_with_shared_backend(tmp_path):
 
 def test_scoped_client_uses_scope_for_queries_and_namespace_creation(tmp_path):
     with RecapClient.from_sqlite(tmp_path / "recap.db") as client:
+        client.create_namespace("beamline")
         scoped = client.namespace("beamline/amx")
         context = scoped.create_namespace(scoped.namespace_path, {"beamline": "amx"})
 
