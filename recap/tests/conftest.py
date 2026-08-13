@@ -1,4 +1,7 @@
 from contextlib import ExitStack, contextmanager
+from pathlib import Path
+from shutil import copy2
+from typing import Callable
 from uuid import uuid4
 
 import httpx2
@@ -94,6 +97,24 @@ def create_namespace(api_client, idempotency_headers):
 def read_client(request, read_client_pair):
     local, remote = read_client_pair
     return local if request.param == "local" else remote
+
+
+@pytest.fixture(scope="session")
+def blank_database_path(tmp_path_factory) -> Path:
+    path = tmp_path_factory.mktemp("seed-databases") / "blank-migrated.db"
+    with RecapClient.from_sqlite(path):
+        pass
+    return path
+
+
+@pytest.fixture
+def copy_database() -> Callable[[Path, Path], Path]:
+    def copy(source: Path, destination: Path) -> Path:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        copy2(source, destination)
+        return destination
+
+    return copy
 
 
 @pytest.fixture

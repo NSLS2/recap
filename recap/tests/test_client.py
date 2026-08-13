@@ -70,6 +70,17 @@ def test_from_sqlite_reuses_existing_file(tmp_path):
         assert client.database_path == db_file
 
 
+def test_blank_database_copies_are_isolated(blank_database_path, copy_database, tmp_path):
+    first_path = copy_database(blank_database_path, tmp_path / "first.db")
+    second_path = copy_database(blank_database_path, tmp_path / "second.db")
+
+    with RecapClient.from_sqlite(first_path) as first:
+        first.create_namespace("only-first")
+
+    with RecapClient.from_sqlite(second_path) as second:
+        assert second.backend.list_child_namespace_paths("") == []
+
+
 def test_query_maker_uses_client_namespace_scope(apply_migrations, db_path):
     with RecapClient.from_sqlite(db_path) as client:
         context = client.create_namespace("query-name")
