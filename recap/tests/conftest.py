@@ -52,6 +52,44 @@ def statement_counter():
     return count_statements
 
 
+@pytest.fixture
+def api_client(tmp_path):
+    with TestClient(create_app(tmp_path / "rest.db", api_key="secret")) as client:
+        yield client
+
+
+@pytest.fixture
+def auth_header():
+    return {"Authorization": "Apikey secret"}
+
+
+@pytest.fixture
+def idempotency_headers(auth_header):
+    def make(key, **extra):
+        return {**auth_header, "Idempotency-Key": key, **extra}
+
+    return make
+
+
+@pytest.fixture
+def create_namespace(api_client, idempotency_headers):
+    def create(path="beamline/amx", metadata=None):
+        metadata = {} if metadata is None else metadata
+        parts = path.split("/")
+        prefix = []
+        for index, part in enumerate(parts):
+            prefix.append(part)
+            response = api_client.put(
+                f"/api/v1/namespaces/{'/'.join(prefix)}",
+                headers=idempotency_headers(f"namespace-{index}"),
+                json={"metadata": metadata if index == len(parts) - 1 else {}},
+            )
+            assert response.status_code == 201
+        return response
+
+    return create
+
+
 @pytest.fixture(params=["local", "remote"], ids=["local", "remote"])
 def read_client(request, read_client_pair):
     local, remote = read_client_pair

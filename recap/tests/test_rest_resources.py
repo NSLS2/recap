@@ -1,39 +1,23 @@
-import pytest
-from fastapi.testclient import TestClient
-
-from recap.server.app import create_app
 from recap.server.rest import router
 
 
-@pytest.fixture
-def client(tmp_path):
-    with TestClient(
-        create_app(tmp_path / "rest-resource.db", api_key="secret")
-    ) as client:
-        yield client
-
-
-def headers(key):
-    return {"Authorization": "Apikey secret", "Idempotency-Key": key}
-
-
-def test_resource_routes_are_canonical(client):
+def test_resource_routes_are_canonical(api_client):
     paths = {route.path for route in router.routes}
     assert "/api/v1/resources/{namespace_path:path}" in paths
     assert "/api/v1/resources/{resource_id}" in paths
     assert "/api/v1/resources/{source_resource_id}/copies" in paths
 
 
-def test_create_and_patch_resource(client):
-    namespace = client.put(
+def test_create_and_patch_resource(api_client, idempotency_headers):
+    namespace = api_client.put(
         "/api/v1/namespaces/beamline",
-        headers=headers("namespace-1"),
+        headers=idempotency_headers("namespace-1"),
         json={"metadata": {}},
     )
     assert namespace.status_code == 201
-    template = client.post(
+    template = api_client.post(
         "/api/v1/resource-templates/beamline",
-        headers=headers("template-1"),
+        headers=idempotency_headers("template-1"),
         json={
             "name": "plate",
             "version": "1",
@@ -43,43 +27,43 @@ def test_create_and_patch_resource(client):
         },
     )
     assert template.status_code == 201
-    resource = client.post(
+    resource = api_client.post(
         "/api/v1/resources/beamline",
-        headers=headers("resource-1"),
+        headers=idempotency_headers("resource-1"),
         json={"name": "plate-1", "template_id": template.json()["id"]},
     )
     assert resource.status_code == 201
     assert resource.json()["name"] == "plate-1"
-    updated = client.patch(
+    updated = api_client.patch(
         f"/api/v1/resources/{resource.json()['id']}",
-        headers={**headers("resource-2"), "If-Match": resource.headers["ETag"]},
+        headers=idempotency_headers("resource-2", **{"If-Match": resource.headers["ETag"]}),
         json={"name": "plate-2"},
     )
     assert updated.status_code == 200
     assert updated.json()["name"] == "plate-2"
 
 
-def test_copy_resource_uses_destination_namespace_in_body(client):
-    namespace = client.put(
+def test_copy_resource_uses_destination_namespace_in_body(api_client, idempotency_headers):
+    namespace = api_client.put(
         "/api/v1/namespaces/beamline",
-        headers=headers("namespace-copy"),
+        headers=idempotency_headers("namespace-copy"),
         json={"metadata": {}},
     )
     assert namespace.status_code == 201
-    template = client.post(
+    template = api_client.post(
         "/api/v1/resource-templates/beamline",
-        headers=headers("template-copy"),
+        headers=idempotency_headers("template-copy"),
         json={"name": "plate", "version": "1", "type_names": []},
     )
-    resource = client.post(
+    resource = api_client.post(
         "/api/v1/resources/beamline",
-        headers=headers("resource-copy"),
+        headers=idempotency_headers("resource-copy"),
         json={"name": "plate-1", "template_id": template.json()["id"]},
     )
 
-    copied = client.post(
+    copied = api_client.post(
         f"/api/v1/resources/{resource.json()['id']}/copies",
-        headers=headers("copy-1"),
+        headers=idempotency_headers("copy-1"),
         json={"destination_namespace": "beamline", "name": "plate-copy"},
     )
 
@@ -87,10 +71,10 @@ def test_copy_resource_uses_destination_namespace_in_body(client):
     assert copied.json()["name"] == "plate-copy"
 
 
-def test_copy_resource_requires_destination_namespace(client):
-    response = client.post(
+def test_copy_resource_requires_destination_namespace(api_client, idempotency_headers):
+    response = api_client.post(
         "/api/v1/resources/00000000-0000-0000-0000-000000000000/copies",
-        headers=headers("copy-missing-destination"),
+        headers=idempotency_headers("copy-missing-destination"),
         json={},
     )
 
