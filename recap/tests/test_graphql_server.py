@@ -4,9 +4,6 @@ from unittest.mock import Mock
 import pytest
 from fastapi.testclient import TestClient
 
-from recap.client import RecapClient
-
-
 def make_test_app(tmp_path):
     from recap.server.app import create_app
 
@@ -26,36 +23,6 @@ query ExecuteCount($schema_name: String!, $namespace_path: String!, $spec: JSON!
 """
 
 
-def seed_resource_tree(db_path):
-    client = RecapClient.from_sqlite(db_path)
-    client.create_namespace("test")
-    context = client.create_namespace("test/resource-tree")
-    namespace_path = context.path
-    with client.build_resource_template(
-        name="Parent", type_names=["container"]
-    ) as builder:
-        builder.close_child()
-    with client.build_resource_template(name="Child", type_names=["sample"]) as builder:
-        builder.close_child()
-    with client.build_resource("root", "Parent") as builder:
-        builder.add_child("nested", "Child")
-    root = client.get_resource("root", "Parent")
-    nested = client.create_resource("nested", "Child", parent=root)
-    client.build_resource(resource_id=nested.id).activate()
-    client.build_resource(resource_id=root.id).activate()
-    client.close()
-    return namespace_path
-
-
-def seed_namespace(db_path):
-    client = RecapClient.from_sqlite(db_path)
-    client.create_namespace("test")
-    context = client.create_namespace("test/namespace")
-    path = context.path
-    client.close()
-    return path
-
-
 def test_db_path_endpoint_is_removed(tmp_path):
     app = make_test_app(tmp_path)
     client = TestClient(app)
@@ -63,14 +30,13 @@ def test_db_path_endpoint_is_removed(tmp_path):
     assert resp.status_code == 404
 
 
-def test_graphql_endpoint_responds(tmp_path):
-    namespace_path = seed_namespace(tmp_path / "test.db")
-    app = make_test_app(tmp_path)
+def test_graphql_endpoint_responds(integration_database_path, graphql_namespace_path):
+    app = make_test_app(integration_database_path.parent)
     client = TestClient(app)
     resp = client.post(
         "/graphql",
         json={
-            "query": f'{{ namespaces(namespace_path: "{namespace_path}") {{ id path }} }}'
+            "query": f'{{ namespaces(namespace_path: "{graphql_namespace_path}") {{ id path }} }}'
         },
     )
     assert resp.status_code == 200
@@ -102,14 +68,13 @@ def test_graphql_namespaces_include_mutable_namespaces(tmp_path):
     assert response.json()["data"]["namespaces"] == [{"path": "test"}]
 
 
-def test_graphql_resources_empty(tmp_path):
-    namespace_path = seed_namespace(tmp_path / "test.db")
-    app = make_test_app(tmp_path)
+def test_graphql_resources_empty(integration_database_path, graphql_namespace_path):
+    app = make_test_app(integration_database_path.parent)
     client = TestClient(app)
     resp = client.post(
         "/graphql",
         json={
-            "query": f'{{ resources(namespace_path: "{namespace_path}") {{ id name }} }}'
+            "query": f'{{ resources(namespace_path: "{graphql_namespace_path}") {{ id name }} }}'
         },
     )
     assert resp.status_code == 200
@@ -143,18 +108,17 @@ def test_integration_seed_contains_disjoint_graphql_scopes(
     ]
 
 
-def test_graphql_count_fields(tmp_path):
-    namespace_path = seed_namespace(tmp_path / "test.db")
-    app = make_test_app(tmp_path)
+def test_graphql_count_fields(integration_database_path, graphql_namespace_path):
+    app = make_test_app(integration_database_path.parent)
     client = TestClient(app)
     resp = client.post(
         "/graphql",
         json={
             "query": "{ "
-            f'resources_count(namespace_path: "{namespace_path}") '
-            f'namespaces_count(namespace_path: "{namespace_path}") '
-            f'resource_templates_count(namespace_path: "{namespace_path}") '
-            f'process_templates_count(namespace_path: "{namespace_path}")'
+            f'resources_count(namespace_path: "{graphql_namespace_path}") '
+            f'namespaces_count(namespace_path: "{graphql_namespace_path}") '
+            f'resource_templates_count(namespace_path: "{graphql_namespace_path}") '
+            f'process_templates_count(namespace_path: "{graphql_namespace_path}")'
             " }"
         },
     )
@@ -166,10 +130,10 @@ def test_graphql_count_fields(tmp_path):
     assert data["process_templates_count"] == 0
 
 
-def test_execute_query_posts_full_spec_and_returns_nested_transport_payload(tmp_path):
-    db_path = tmp_path / "test.db"
-    namespace_path = seed_resource_tree(db_path)
-    client = TestClient(make_test_app(db_path.parent))
+def test_execute_query_posts_full_spec_and_returns_nested_transport_payload(
+    integration_database_path, graphql_resource_tree_path
+):
+    client = TestClient(make_test_app(integration_database_path.parent))
 
     response = client.post(
         "/graphql",
@@ -177,7 +141,7 @@ def test_execute_query_posts_full_spec_and_returns_nested_transport_payload(tmp_
             "query": EXECUTE_QUERY,
             "variables": {
                 "schema_name": "ResourceSchema",
-                "namespace_path": namespace_path,
+                "namespace_path": graphql_resource_tree_path,
                 "spec": {
                     "filters": {"name": "root"},
                     "preloads": ["children", "template"],
@@ -203,10 +167,10 @@ def test_execute_query_posts_full_spec_and_returns_nested_transport_payload(tmp_
     }
 
 
-def test_execute_query_supports_ref_schema(tmp_path):
-    db_path = tmp_path / "test.db"
-    namespace_path = seed_resource_tree(db_path)
-    client = TestClient(make_test_app(tmp_path))
+def test_execute_query_supports_ref_schema(
+    integration_database_path, graphql_resource_tree_path
+):
+    client = TestClient(make_test_app(integration_database_path.parent))
 
     response = client.post(
         "/graphql",
@@ -214,7 +178,7 @@ def test_execute_query_supports_ref_schema(tmp_path):
             "query": EXECUTE_QUERY,
             "variables": {
                 "schema_name": "ResourceRef",
-                "namespace_path": namespace_path,
+                "namespace_path": graphql_resource_tree_path,
                 "spec": {"filters": {"name": "nested"}},
             },
         },
@@ -227,10 +191,10 @@ def test_execute_query_supports_ref_schema(tmp_path):
     assert "__recap__" not in result["items"][0]
 
 
-def test_execute_count_supports_filters(tmp_path):
-    db_path = tmp_path / "test.db"
-    namespace_path = seed_resource_tree(db_path)
-    client = TestClient(make_test_app(tmp_path))
+def test_execute_count_supports_filters(
+    integration_database_path, graphql_resource_tree_path
+):
+    client = TestClient(make_test_app(integration_database_path.parent))
 
     response = client.post(
         "/graphql",
@@ -238,7 +202,7 @@ def test_execute_count_supports_filters(tmp_path):
             "query": EXECUTE_COUNT,
             "variables": {
                 "schema_name": "ResourceSchema",
-                "namespace_path": namespace_path,
+                "namespace_path": graphql_resource_tree_path,
                 "spec": {"filters": {"name": "root"}},
             },
         },
@@ -248,9 +212,10 @@ def test_execute_count_supports_filters(tmp_path):
     assert response.json()["data"]["execute_count"] == 1
 
 
-def test_execute_query_rejects_unknown_schema(tmp_path):
-    namespace_path = seed_namespace(tmp_path / "test.db")
-    client = TestClient(make_test_app(tmp_path))
+def test_execute_query_rejects_unknown_schema(
+    integration_database_path, graphql_namespace_path
+):
+    client = TestClient(make_test_app(integration_database_path.parent))
 
     response = client.post(
         "/graphql",
@@ -258,7 +223,7 @@ def test_execute_query_rejects_unknown_schema(tmp_path):
             "query": EXECUTE_QUERY,
             "variables": {
                 "schema_name": "attacker-controlled",
-                "namespace_path": namespace_path,
+                "namespace_path": graphql_namespace_path,
                 "spec": {},
             },
         },
@@ -276,9 +241,10 @@ def test_execute_query_rejects_unknown_schema(tmp_path):
     (EXECUTE_QUERY, EXECUTE_COUNT),
     ids=("query", "count"),
 )
-def test_execute_rejects_malformed_query_spec(tmp_path, query):
-    namespace_path = seed_namespace(tmp_path / "test.db")
-    client = TestClient(make_test_app(tmp_path))
+def test_execute_rejects_malformed_query_spec(
+    integration_database_path, graphql_namespace_path, query
+):
+    client = TestClient(make_test_app(integration_database_path.parent))
 
     response = client.post(
         "/graphql",
@@ -286,7 +252,7 @@ def test_execute_rejects_malformed_query_spec(tmp_path, query):
             "query": query,
             "variables": {
                 "schema_name": "ResourceSchema",
-                "namespace_path": namespace_path,
+                "namespace_path": graphql_namespace_path,
                 "spec": {"load_mode": "attacker-controlled"},
             },
         },
