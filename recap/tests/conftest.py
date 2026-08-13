@@ -117,6 +117,111 @@ def copy_database() -> Callable[[Path, Path], Path]:
     return copy
 
 
+def _seed_graphql_namespace(client: RecapClient) -> str:
+    return client.create_namespace("test/namespace").path
+
+
+def _seed_graphql_resource_tree(client: RecapClient) -> str:
+    namespace_path = client.create_namespace("test/resource-tree").path
+    with client.build_resource_template(name="Parent", type_names=["container"]) as builder:
+        builder.close_child()
+    with client.build_resource_template(name="Child", type_names=["sample"]) as builder:
+        builder.close_child()
+    with client.build_resource("root", "Parent") as builder:
+        builder.add_child("nested", "Child")
+    root = client.get_resource("root", "Parent")
+    nested = client.create_resource("nested", "Child", parent=root)
+    client.build_resource(resource_id=nested.id).activate()
+    client.build_resource(resource_id=root.id).activate()
+    return namespace_path
+
+
+def _seed_parity_graph(client: RecapClient) -> str:
+    namespace_path = client.create_namespace(
+        "test/mx-parity", metadata={"beamline": "AMX"}
+    ).path
+    with client.build_resource_template(
+        name="Parity plate", type_names=["container", "plate"]
+    ) as template:
+        template.add_properties(
+            {"metrics": [{"name": "rating", "type": "int", "default": 1}]}
+        )
+        (
+            template.add_child("sample", ["sample"])
+            .add_properties(
+                {"contents": [{"name": "mass", "type": "float", "default": 2.5}]}
+            )
+            .close_child()
+        )
+    template.activate()
+
+    first_plate = client.create_resource("plate-1", "Parity plate")
+    second_plate = client.create_resource("plate-2", "Parity plate")
+    for plate, rating in ((first_plate, 12), (second_plate, 3)):
+        with client.build_resource(resource_id=plate.id) as builder:
+            model = builder.get_model()
+            model.properties.metrics.rating = rating
+            builder.set_model(model)
+    sample = client.create_resource("sample-1", "sample", parent=first_plate)
+    client.build_resource(resource_id=sample.id).activate()
+    client.build_resource(resource_id=first_plate.id).activate()
+    client.build_resource(resource_id=second_plate.id).activate()
+
+    with client.build_process_template("Parity workflow", "1.0") as template:
+        template.add_resource_slot("plate", "container", Direction.input)
+        (
+            template.add_step("Collect")
+            .add_parameters(
+                {"exposure": [{"name": "dwell", "type": "int", "default": 1}]}
+            )
+            .bind_slot("source", "plate")
+            .close_step()
+        )
+    template.activate()
+
+    for name, plate, dwell in (
+        ("run-high", first_plate, 15),
+        ("run-low", second_plate, 5),
+    ):
+        with client.build_process_run(
+            name, "GraphQL parity run", "Parity workflow", "1.0"
+        ) as run:
+            run.assign_resource("plate", plate)
+            parameters = run.get_params("Collect")
+            parameters.exposure.dwell = dwell
+            run.set_params(parameters)
+        run.finalize()
+
+    return namespace_path
+
+
+@pytest.fixture(scope="session")
+def integration_seed_path(blank_database_path, tmp_path_factory) -> Path:
+    path = tmp_path_factory.mktemp("seed-databases") / "integration-seed.db"
+    copy2(blank_database_path, path)
+    with RecapClient.from_sqlite(path) as client:
+        client.create_namespace("test")
+        _seed_graphql_namespace(client)
+        _seed_graphql_resource_tree(client)
+        _seed_parity_graph(client)
+    return path
+
+
+@pytest.fixture
+def integration_database_path(integration_seed_path, copy_database, tmp_path) -> Path:
+    return copy_database(integration_seed_path, tmp_path / "test.db")
+
+
+@pytest.fixture
+def graphql_namespace_path() -> str:
+    return "test/namespace"
+
+
+@pytest.fixture
+def graphql_resource_tree_path() -> str:
+    return "test/resource-tree"
+
+
 @pytest.fixture
 def read_client_pair(tmp_path, monkeypatch):
     """Create equivalent local and remote clients over one prepared database."""
@@ -124,59 +229,7 @@ def read_client_pair(tmp_path, monkeypatch):
     with ExitStack() as stack:
         local = stack.enter_context(RecapClient.from_sqlite(db_path))
         local.create_namespace("test")
-        local.create_namespace("test/mx-parity", metadata={"beamline": "AMX"})
-
-        with local.build_resource_template(
-            name="Parity plate", type_names=["container", "plate"]
-        ) as template:
-            template.add_properties(
-                {"metrics": [{"name": "rating", "type": "int", "default": 1}]}
-            )
-            (
-                template.add_child("sample", ["sample"])
-                .add_properties(
-                    {"contents": [{"name": "mass", "type": "float", "default": 2.5}]}
-                )
-                .close_child()
-            )
-        template.activate()
-
-        first_plate = local.create_resource("plate-1", "Parity plate")
-        second_plate = local.create_resource("plate-2", "Parity plate")
-        for plate, rating in ((first_plate, 12), (second_plate, 3)):
-            with local.build_resource(resource_id=plate.id) as builder:
-                model = builder.get_model()
-                model.properties.metrics.rating = rating
-                builder.set_model(model)
-        sample = local.create_resource("sample-1", "sample", parent=first_plate)
-        local.build_resource(resource_id=sample.id).activate()
-        local.build_resource(resource_id=first_plate.id).activate()
-        local.build_resource(resource_id=second_plate.id).activate()
-
-        with local.build_process_template("Parity workflow", "1.0") as template:
-            template.add_resource_slot("plate", "container", Direction.input)
-            (
-                template.add_step("Collect")
-                .add_parameters(
-                    {"exposure": [{"name": "dwell", "type": "int", "default": 1}]}
-                )
-                .bind_slot("source", "plate")
-                .close_step()
-            )
-        template.activate()
-
-        for name, plate, dwell in (
-            ("run-high", first_plate, 15),
-            ("run-low", second_plate, 5),
-        ):
-            with local.build_process_run(
-                name, "GraphQL parity run", "Parity workflow", "1.0"
-            ) as run:
-                run.assign_resource("plate", plate)
-                parameters = run.get_params("Collect")
-                parameters.exposure.dwell = dwell
-                run.set_params(parameters)
-            run.finalize()
+        _seed_parity_graph(local)
 
         api_key = "parity-secret"
         app_client = stack.enter_context(TestClient(create_app(db_path, api_key=api_key)))

@@ -116,6 +116,32 @@ def test_graphql_resources_empty(tmp_path):
     assert resp.json()["data"]["resources"] == []
 
 
+def test_integration_seed_contains_disjoint_graphql_scopes(
+    integration_database_path,
+    graphql_namespace_path,
+    graphql_resource_tree_path,
+):
+    client = TestClient(make_test_app(integration_database_path.parent))
+
+    empty_response = client.post(
+        "/graphql",
+        json={
+            "query": f'{{ resources(namespace_path: "{graphql_namespace_path}") {{ name }} }}'
+        },
+    )
+    tree_response = client.post(
+        "/graphql",
+        json={
+            "query": f'{{ resources(namespace_path: "{graphql_resource_tree_path}") {{ name }} }}'
+        },
+    )
+
+    assert empty_response.json()["data"]["resources"] == []
+    assert [item["name"] for item in tree_response.json()["data"]["resources"]] == [
+        "root"
+    ]
+
+
 def test_graphql_count_fields(tmp_path):
     namespace_path = seed_namespace(tmp_path / "test.db")
     app = make_test_app(tmp_path)
