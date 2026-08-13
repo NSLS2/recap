@@ -227,8 +227,9 @@ def read_client_pair(integration_seed_path, copy_database, tmp_path, monkeypatch
     """Create isolated local and remote clients over a composite seed copy."""
     db_path = copy_database(integration_seed_path, tmp_path / "parity.db")
     with ExitStack() as stack:
-        local = stack.enter_context(RecapClient.from_sqlite(db_path))
-        local._namespace_context = local.backend.get_namespace_context("test/mx-parity")
+        local = stack.enter_context(
+            RecapClient.from_sqlite(db_path, namespace="test/mx-parity")
+        )
         api_key = "parity-secret"
         app_client = stack.enter_context(TestClient(create_app(db_path, api_key=api_key)))
 

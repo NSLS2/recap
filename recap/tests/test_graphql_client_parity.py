@@ -20,9 +20,17 @@ def _public_dump(value):
 
 def _assert_query_parity(clients, query, namespace_path=None):
     local, remote = clients
-    namespace_path = namespace_path or local.namespace_context.path
-    local_result = query(local.namespace(namespace_path).query_maker())
-    remote_result = query(remote.namespace(namespace_path).query_maker())
+    namespace_path = namespace_path or local.namespace_path
+    local_client = (
+        local if local.namespace_path == namespace_path else local.namespace(namespace_path)
+    )
+    remote_client = (
+        remote
+        if remote.namespace_path == namespace_path
+        else remote.namespace(namespace_path)
+    )
+    local_result = query(local_client.query_maker())
+    remote_result = query(remote_client.query_maker())
     assert _public_dump(remote_result) == _public_dump(local_result)
     return local_result, remote_result
 
@@ -73,7 +81,12 @@ def test_namespace_loading_parity(parity_clients):
     expected_paths = []
     assert [item.path for item in local] == expected_paths
     assert [item.path for item in remote] == expected_paths
-    scoped_clients = [client.namespace("test/mx-parity") for client in parity_clients]
+    scoped_clients = [
+        client
+        if client.namespace_path == "test/mx-parity"
+        else client.namespace("test/mx-parity")
+        for client in parity_clients
+    ]
     try:
         for client in scoped_clients:
             assert client.namespace_path == "test/mx-parity"
@@ -136,7 +149,7 @@ def test_current_actor_permissions_are_typed(parity_clients):
 def test_mutable_resource_visibility_parity(parity_clients):
     local, remote = parity_clients
     hidden = local.create_resource("mutable-only", "Parity plate")
-    namespace_path = local.namespace_context.path
+    namespace_path = local.namespace_path
 
     default_local = local._read_backend.query(
         ResourceSchema,
@@ -175,8 +188,7 @@ def test_reference_shape_parity(parity_clients, query, expected_type):
 def test_filters_scopes_pagination_and_count_parity(parity_clients):
     local, remote = parity_clients
     parent = (
-        local.namespace(local.namespace_context.path)
-        .query_maker()
+        local.query_maker()
         .resources()
         .filter(name="plate-1")
         .include("children")
@@ -201,8 +213,8 @@ def test_filters_scopes_pagination_and_count_parity(parity_clients):
     for query in queries:
         _assert_query_parity(parity_clients, query)
 
-    local_q = local.namespace(local.namespace_context.path).query_maker()
-    remote_q = remote.namespace(local.namespace_context.path).query_maker()
+    local_q = local.query_maker()
+    remote_q = remote.namespace(local.namespace_path).query_maker()
     count_queries = [
         lambda q: q.resources().count(),
         lambda q: q.resources().filter_property("rating", gt=10).count(),
@@ -300,8 +312,7 @@ def test_field_ordering_parity(parity_clients, ordering):
 def test_transport_scalar_predicate_coercion_parity(parity_clients, field):
     local, _ = parity_clients
     target = (
-        local.namespace(local.namespace_context.path)
-        .query_maker()
+        local.query_maker()
         .process_runs()
         .first()
     )
@@ -346,7 +357,11 @@ def test_on_unloaded_access_behavior_parity(parity_clients, policy, query, field
     outcomes = []
     for client in parity_clients:
         model = query(
-            client.namespace(parity_clients[0].namespace_context.path).query_maker(),
+            (
+                client.query_maker()
+                if client.namespace_path
+                else client.namespace(parity_clients[0].namespace_path).query_maker()
+            ),
             policy,
         ).first()
         outcomes.append(_access_outcome(model, field, policy))
