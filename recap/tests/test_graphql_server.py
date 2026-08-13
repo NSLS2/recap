@@ -138,7 +138,8 @@ def test_integration_seed_contains_disjoint_graphql_scopes(
 
     assert empty_response.json()["data"]["resources"] == []
     assert [item["name"] for item in tree_response.json()["data"]["resources"]] == [
-        "root"
+        "root",
+        "nested",
     ]
 
 
