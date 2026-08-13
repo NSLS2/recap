@@ -183,6 +183,106 @@ def test_execute_copy_returns_resource_schema():
     validate.assert_called_once_with({"resource": "payload"})
 
 
+def test_execute_lifecycle_uses_status_route_and_if_match_header():
+    from recap.adapter.rest import RESTAdapter
+    from recap.commands.models import SetLifecycleStatus
+    from recap.schemas.resource import ResourceTemplateSchema
+
+    command = SetLifecycleStatus(
+        object_type="resource_template",
+        object_id=uuid4(),
+        expected_revision=3,
+        status="ACTIVE",
+    )
+    response = _response(body={"id": str(command.object_id), "revision": 4})
+    with patch("recap.adapter.rest.httpx.Client") as client_type:
+        client_type.return_value.request.return_value = response
+        with patch.object(
+            ResourceTemplateSchema, "model_validate", return_value=object()
+        ) as validate:
+            RESTAdapter("https://recap.test", api_key="secret").execute(
+                command, SimpleNamespace(idempotency_key="lifecycle-1")
+            )
+
+    call = client_type.return_value.request.call_args
+    assert call.args[:2] == (
+        "POST",
+        f"https://recap.test/api/v1/lifecycle/resource_template/{command.object_id}",
+    )
+    assert call.kwargs["headers"]["If-Match"] == '"3"'
+    assert call.kwargs["headers"]["Idempotency-Key"] == "lifecycle-1"
+    assert call.kwargs["json"] == {"status": "ACTIVE"}
+    validate.assert_called_once_with(response.json.return_value)
+
+
+def test_execute_update_resource_sends_revision_only_in_if_match_header():
+    from recap.adapter.rest import RESTAdapter
+    from recap.commands.models import UpdateResource
+    from recap.schemas.resource import ResourceSchema
+    from recap.tests.transport_factories import minimal_resource
+
+    command = UpdateResource(resource_id=uuid4(), expected_revision=1, name="renamed")
+    response_body = minimal_resource().model_dump(mode="json")
+    response_body["id"] = str(command.resource_id)
+    response = _response(body=response_body)
+    with patch("recap.adapter.rest.httpx.Client") as client_type:
+        client_type.return_value.request.return_value = response
+        returned = RESTAdapter("https://recap.test", api_key="secret").execute(
+            command, SimpleNamespace(idempotency_key="resource-update")
+        )
+
+    request = client_type.return_value.request.call_args
+    assert isinstance(returned, ResourceSchema)
+    assert request.kwargs["headers"]["If-Match"] == '"1"'
+    assert request.kwargs["json"] == {"name": "renamed", "properties": None}
+    assert "expected_revision" not in request.kwargs["json"]
+
+
+def test_execute_update_resource_hydrates_dynamic_properties():
+    from recap.adapter.rest import RESTAdapter
+    from recap.adapter.transport import serialize_model
+    from recap.commands.models import UpdateResource
+    from recap.tests.transport_factories import full_resource
+
+    resource = full_resource()
+    command = UpdateResource(resource_id=resource.id, expected_revision=1, name=resource.name)
+    response = _response(body=serialize_model(resource))
+    with patch("recap.adapter.rest.httpx.Client") as client_type:
+        client_type.return_value.request.return_value = response
+        returned = RESTAdapter("https://recap.test", api_key="secret").execute(
+            command, SimpleNamespace(idempotency_key="resource-update")
+        )
+
+    assert returned.properties.measurements.values.captured_at.value == resource.properties.measurements.values.captured_at.value
+
+
+def test_execute_update_process_run_sends_revision_only_in_if_match_header():
+    from recap.adapter.rest import RESTAdapter
+    from recap.commands.models import UpdateProcessRun
+    from recap.schemas.process import ProcessRunSchema
+
+    command = UpdateProcessRun(
+        process_run_id=uuid4(), expected_revision=1, description="finished", status="ACTIVE"
+    )
+    response = _response(body={"id": str(command.process_run_id), "revision": 2})
+    with patch("recap.adapter.rest.httpx.Client") as client_type:
+        client_type.return_value.request.return_value = response
+        with patch.object(ProcessRunSchema, "model_validate", return_value=object()):
+            RESTAdapter("https://recap.test", api_key="secret").execute(
+                command, SimpleNamespace(idempotency_key="process-run-update")
+            )
+
+    request = client_type.return_value.request.call_args
+    assert request.kwargs["headers"]["If-Match"] == '"1"'
+    assert request.kwargs["json"] == {
+        "description": "finished",
+        "status": "ACTIVE",
+        "assignments": None,
+        "steps": None,
+    }
+    assert "expected_revision" not in request.kwargs["json"]
+
+
 def test_list_child_namespaces_uses_get_endpoint_without_write_headers():
     from recap.adapter.rest import RESTAdapter
 

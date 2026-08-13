@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from types import MappingProxyType
-from typing import cast
+from types import MappingProxyType, UnionType
+from typing import Any, Union, cast, get_args, get_origin
+from uuid import UUID
 
 import strawberry
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from strawberry.scalars import JSON
 
 from recap.adapter import AuthorizedReadBackend, ReadBackend
@@ -110,9 +111,51 @@ def _resolve_schema(schema_name: str) -> type[BaseModel]:
         ) from exc
 
 
-def _validate_query_spec(spec: JSON) -> QuerySpec:
+def _contains_uuid(annotation: Any) -> bool:
+    return annotation is UUID or any(
+        _contains_uuid(argument) for argument in get_args(annotation)
+    )
+
+
+def _terminal_field_annotation(annotation: Any, path: list[str]) -> Any | None:
+    if not path:
+        return annotation
+
+    origin = get_origin(annotation)
+    if origin in (list, set, tuple):
+        args = get_args(annotation)
+        return _terminal_field_annotation(args[0], path) if args else None
+    if origin in (UnionType, Union):
+        for argument in get_args(annotation):
+            if argument is type(None):
+                continue
+            result = _terminal_field_annotation(argument, path)
+            if result is not None:
+                return result
+        return None
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        field = annotation.model_fields.get(path[0])
+        if field is None:
+            return None
+        return _terminal_field_annotation(field.annotation, path[1:])
+    return None
+
+
+def _normalize_uuid_filters(schema: type[BaseModel], spec: QuerySpec) -> QuerySpec:
+    filters = dict(spec.filters)
+    for key, value in filters.items():
+        if value is None:
+            continue
+        annotation = _terminal_field_annotation(schema, key.split("__"))
+        if annotation is None or not _contains_uuid(annotation):
+            continue
+        filters[key] = TypeAdapter(annotation).validate_python(value)
+    return spec.model_copy(update={"filters": filters})
+
+
+def _validate_query_spec(spec: JSON, schema: type[BaseModel]) -> QuerySpec:
     try:
-        return QuerySpec.model_validate(spec)
+        return _normalize_uuid_filters(schema, QuerySpec.model_validate(spec))
     except ValidationError as exc:
         raise strawberry.exceptions.StrawberryGraphQLError(
             "Invalid query specification"
@@ -123,7 +166,7 @@ def resolve_execute_query(
     info: strawberry.types.Info, schema_name: str, namespace_path: str, spec: JSON
 ) -> JSON:
     schema = _resolve_schema(schema_name)
-    query_spec = _validate_query_spec(spec)
+    query_spec = _validate_query_spec(spec, schema)
     items = [
         serialize_model(item)
         for item in _query(info, schema, query_spec, namespace_path)
@@ -135,7 +178,7 @@ def resolve_execute_count(
     info: strawberry.types.Info, schema_name: str, namespace_path: str, spec: JSON
 ) -> int:
     schema = _resolve_schema(schema_name)
-    return _count(info, schema, _validate_query_spec(spec), namespace_path)
+    return _count(info, schema, _validate_query_spec(spec, schema), namespace_path)
 
 
 def _resource_schema_to_type(r: ResourceSchema) -> ResourceType:

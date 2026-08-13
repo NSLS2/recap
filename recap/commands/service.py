@@ -30,11 +30,11 @@ from recap.commands.models import (
     CreateProcessTemplate,
     CreateResource,
     CreateResourceTemplate,
+    SetLifecycleStatus,
     UpdateProcessRun,
     UpdateProcessTemplate,
     UpdateResource,
     UpdateResourceTemplate,
-    SetLifecycleStatus,
 )
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.audit import MutationAuditRepository
@@ -113,13 +113,19 @@ class _UpdateProcessRunFingerprint(BaseModel):
     expected_revision: int
 
 
+class _LifecycleFingerprint(BaseModel):
+    object_type: str
+    status: str
+    expected_revision: int
+
+
 class CommandService:
     """Execute namespace writes with one owning database transaction."""
 
     def __init__(self, session_factory: sessionmaker) -> None:
         self._session_factory = session_factory
 
-    def execute(self, command: CommandModel, context: CommandContext):
+    def execute(self, command: CommandModel, context: CommandContext):  # noqa: C901
         if isinstance(command, CreateResource):
             return self.create_resource(
                 context,
@@ -223,6 +229,33 @@ class CommandService:
                 if obj is None:
                     raise CommandNotFoundError(f"{object_type} not found")
                 self._authorize_scope(context, obj.namespace.path, scope, "set_lifecycle_status")
+                fingerprint = command_fingerprint(
+                    method="POST",
+                    route_template="/api/v1/lifecycle/{object_type}/{object_id}",
+                    namespace_path=None,
+                    source_id=object_id,
+                    body=_LifecycleFingerprint(
+                        object_type=object_type,
+                        status=status,
+                        expected_revision=expected_revision,
+                    ),
+                )
+                idempotency = IdempotencyRepository(session)
+                decision = self._claim(
+                    idempotency,
+                    context,
+                    fingerprint,
+                    lambda _target_id: None,
+                )
+                if decision is not None and decision.replayed:
+                    assert decision.response is not None
+                    schema = {
+                        ProcessTemplate: ProcessTemplateSchema,
+                        ResourceTemplate: ResourceTemplateSchema,
+                        Resource: ResourceSchema,
+                        ProcessRun: ProcessRunSchema,
+                    }[model]
+                    return schema.model_validate(decision.response)
                 validate_transition(obj.status, target_status)
                 if target_status is LifecycleStatus.ACTIVE:
                     if isinstance(obj, ProcessRun):
@@ -242,6 +275,12 @@ class CommandService:
                     Resource: ResourceSchema,
                     ProcessRun: ProcessRunSchema,
                 }[model].model_validate(obj)
+                if decision is not None:
+                    idempotency.complete(
+                        decision,
+                        target_id=str(obj.id),
+                        response=result.model_dump(mode="json"),
+                    )
                 self._emit_success(
                     session, context, "set_lifecycle_status", str(object_id), resource_type=object_type
                 )

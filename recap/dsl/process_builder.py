@@ -609,6 +609,7 @@ class ProcessRunBuilder:
         if model.id != self._process_run.id:
             raise ValueError("ID for this ProcessRun does not match the builder")
         self._process_run = model
+        self.description = model.description
         self._draft_steps = self._model_steps_payload(model)
         self._dirty = True
 

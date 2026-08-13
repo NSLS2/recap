@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, Request, Response
 
 from recap.adapter.local import LocalBackend
+from recap.adapter.transport import serialize_model
 from recap.authentication.models import RequestActor
 from recap.authorization.policy import (
     SnapshotNamespacePolicy,
@@ -32,7 +33,9 @@ from recap.server.rest_models import (
     CopyResourceRequest,
     CreateNamespaceRequest,
     CreateResourceRequest,
+    SetLifecycleStatusRequest,
     UpdateNamespaceRequest,
+    UpdateProcessRunRequest,
     UpdateResourceRequest,
 )
 from recap.server.security import authenticate_request
@@ -63,7 +66,7 @@ def _context(request: Request, actor: RequestActor, idempotency_key: str):
 
 def _set_etag(response: Response, entity):
     response.headers["ETag"] = f'"{entity.revision}"'
-    return entity
+    return serialize_model(entity) if isinstance(entity, ResourceSchema) else entity
 
 
 def _parse_if_match(value: str) -> int:
@@ -324,7 +327,7 @@ def create_process_run(
 @router.patch("/process-runs/{process_run_id}", response_model=None)
 def update_process_run(
     process_run_id: UUID,
-    body: dict,
+    body: UpdateProcessRunRequest,
     request: Request,
     response: Response,
     actor: Annotated[RequestActor, Depends(authenticate_request)],
@@ -337,7 +340,32 @@ def update_process_run(
         UpdateProcessRun(
             process_run_id=process_run_id,
             expected_revision=_parse_if_match(if_match),
-            **body,
+            **body.model_dump(),
+        ),
+        _context(request, actor, idempotency_key),
+    )
+    return _set_etag(response, result)
+
+
+@router.post("/lifecycle/{object_type}/{object_id}", response_model=None)
+def set_lifecycle_status(
+    object_type: str,
+    object_id: UUID,
+    body: SetLifecycleStatusRequest,
+    request: Request,
+    response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    if_match: Annotated[str, Header(alias="If-Match")],
+):
+    from recap.commands.models import SetLifecycleStatus
+
+    result = CommandService(request.app.state.session_factory).execute(
+        SetLifecycleStatus(
+            object_type=object_type,
+            object_id=object_id,
+            expected_revision=_parse_if_match(if_match),
+            status=body.status.value,
         ),
         _context(request, actor, idempotency_key),
     )

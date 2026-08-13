@@ -11,14 +11,16 @@ from uuid import UUID
 import httpx2 as httpx
 from pydantic import SecretStr
 
+from recap.adapter.transport import _prepare_dynamic_models
 from recap.commands.models import (
-    CommandModel,
     CommandContext,
+    CommandModel,
     CopyResource,
     CreateProcessRun,
     CreateProcessTemplate,
     CreateResource,
     CreateResourceTemplate,
+    SetLifecycleStatus,
     UpdateProcessRun,
     UpdateProcessTemplate,
     UpdateResource,
@@ -29,6 +31,11 @@ from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext, NamespaceSchema
 from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
 from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
+
+
+def _resource_schema(entity: dict[str, Any]) -> ResourceSchema:
+    _prepare_dynamic_models(entity)
+    return ResourceSchema.model_validate(entity)
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,17 +238,19 @@ class RESTAdapter:
             idempotency_key=idempotency_key,
         )
 
-    def execute(self, command: CommandModel, context) -> Any:
+    def execute(self, command: CommandModel, context) -> Any:  # noqa: C901
         """Submit command DTO using its canonical REST route."""
         data = command.model_dump(mode="json")
         key = getattr(context, "idempotency_key", None)
         if isinstance(command, CopyResource):
-            return ResourceSchema.model_validate(self.copy_resource(
-                command.source_resource_id,
-                command.destination_namespace_path,
-                changes=command.options.model_dump(mode="json"),
-                idempotency_key=key,
-            ).entity)
+            return _resource_schema(
+                self.copy_resource(
+                    command.source_resource_id,
+                    command.destination_namespace_path,
+                    changes=command.options.model_dump(mode="json"),
+                    idempotency_key=key,
+                ).entity
+            )
         if isinstance(command, CreateProcessRun):
             return ProcessRunSchema.model_validate(
                 self.create(
@@ -259,20 +268,25 @@ class RESTAdapter:
                     {
                         key: value
                         for key, value in data.items()
-                        if key != "process_run_id"
+                        if key not in {"process_run_id", "expected_revision"}
                     },
                     etag=f'"{command.expected_revision}"',
                     idempotency_key=key,
                 ).entity
             )
         if isinstance(command, UpdateResource):
-            return self.update(
+            entity = self.update(
                 "resources",
                 command.resource_id,
-                {key: value for key, value in data.items() if key != "resource_id"},
+                {
+                    key: value
+                    for key, value in data.items()
+                    if key not in {"resource_id", "expected_revision"}
+                },
                 etag=f'"{command.expected_revision}"',
                 idempotency_key=key,
             ).entity
+            return _resource_schema(entity)
         if isinstance(command, CreateProcessTemplate):
             return ProcessTemplateSchema.model_validate(
                 self.create(
@@ -292,7 +306,7 @@ class RESTAdapter:
                 ).entity
             )
         if isinstance(command, CreateResource):
-            return ResourceSchema.model_validate(
+            return _resource_schema(
                 self.create(
                     "resources",
                     command.namespace_path,
@@ -324,4 +338,23 @@ class RESTAdapter:
                     idempotency_key=key,
                 ).entity
             )
+        if isinstance(command, SetLifecycleStatus):
+            result = self._request(
+                "POST",
+                f"/api/v1/lifecycle/{command.object_type}/{command.object_id}",
+                body={"status": command.status},
+                etag=f'"{command.expected_revision}"',
+                idempotency_key=key,
+            )
+            schema = {
+                "resource": ResourceSchema,
+                "resource_template": ResourceTemplateSchema,
+                "process_template": ProcessTemplateSchema,
+                "process_run": ProcessRunSchema,
+            }.get(command.object_type)
+            if schema is None:
+                raise TypeError(f"Unsupported lifecycle object: {command.object_type}")
+            if schema is ResourceSchema:
+                return _resource_schema(result.entity)
+            return schema.model_validate(result.entity)
         raise TypeError(f"Unsupported REST command: {type(command).__name__}")

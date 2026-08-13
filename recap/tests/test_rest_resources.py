@@ -41,6 +41,73 @@ def test_create_and_patch_resource(api_client, idempotency_headers):
     )
     assert updated.status_code == 200
     assert updated.json()["name"] == "plate-2"
+    assert updated.request.content == b'{"name":"plate-2"}'
+    assert "expected_revision" not in updated.request.content.decode()
+    assert updated.headers["ETag"] == '"2"'
+
+
+def test_create_resource_replays_sequentially_with_same_idempotency_key(
+    api_client, idempotency_headers
+):
+    namespace = api_client.put(
+        "/api/v1/namespaces/beamline",
+        headers=idempotency_headers("namespace-replay"),
+        json={"metadata": {}},
+    )
+    assert namespace.status_code == 201
+    template = api_client.post(
+        "/api/v1/resource-templates/beamline",
+        headers=idempotency_headers("template-replay"),
+        json={"name": "plate", "version": "1", "type_names": []},
+    )
+    assert template.status_code == 201
+
+    headers = idempotency_headers("resource-replay")
+    payload = {"name": "plate-1", "template_id": template.json()["id"]}
+    first = api_client.post("/api/v1/resources/beamline", headers=headers, json=payload)
+    replay = api_client.post("/api/v1/resources/beamline", headers=headers, json=payload)
+
+    assert first.status_code == replay.status_code == 201
+    first_body = first.json()
+    replay_body = replay.json()
+    assert first_body["id"] == replay_body["id"]
+    assert first_body["name"] == replay_body["name"] == "plate-1"
+    assert first_body["revision"] == replay_body["revision"] == 1
+    assert first_body["template"]["id"] == replay_body["template"]["id"]
+
+
+def test_create_resource_response_preserves_dynamic_properties(
+    api_client, idempotency_headers, create_namespace
+):
+    create_namespace("beamline")
+    template = api_client.post(
+        "/api/v1/resource-templates/beamline",
+        headers=idempotency_headers("template-properties"),
+        json={
+            "name": "sample",
+            "version": "1",
+            "type_names": [],
+            "property_groups": [
+                {
+                    "name": "measurements",
+                    "attributes": [{"name": "mass", "type": "float", "default": 0.0}],
+                }
+            ],
+        },
+    )
+    assert template.status_code == 201
+
+    request = {
+        "headers": idempotency_headers("resource-properties"),
+        "json": {
+            "name": "sample-1",
+            "template_id": template.json()["id"],
+            "properties": {"measurements": {"mass": 2.5}},
+        },
+    }
+    first = api_client.post("/api/v1/resources/beamline", **request)
+    assert first.status_code == 201
+    assert first.json()["properties"]["measurements"]["values"]["mass"]["value"] == 2.5
 
 
 def test_copy_resource_uses_destination_namespace_in_body(api_client, idempotency_headers):
