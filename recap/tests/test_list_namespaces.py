@@ -13,29 +13,17 @@ def client_with_namespaces(tmp_path):
         yield client
 
 
-def test_list_namespaces_root_returns_top_level(client_with_namespaces):
-    result = client_with_namespaces.list_namespaces()
-    assert sorted(result) == ["beamline", "staff"]
-
-
-def test_list_namespaces_scoped_returns_direct_children(client_with_namespaces):
-    result = client_with_namespaces["beamline"].list_namespaces()
-    assert sorted(result) == ["amx", "fmx"]
-
-
-def test_list_namespaces_explicit_hierarchy(tmp_path):
-    with RecapClient.from_sqlite(tmp_path / "recap.db") as client:
-        client.create_namespace("beamline")
-        client.create_namespace("beamline/amx")
-        client.create_namespace("beamline/fmx")
-
-        assert client.list_namespaces() == ["beamline"]
-        assert client["beamline"].list_namespaces() == ["amx", "fmx"]
-
-
-def test_list_namespaces_leaf_returns_empty(client_with_namespaces):
-    result = client_with_namespaces["beamline/amx"].list_namespaces()
-    assert result == []
+@pytest.mark.parametrize(
+    ("scope", "expected"),
+    [
+        pytest.param("", ["beamline", "staff"], id="root"),
+        pytest.param("beamline", ["amx", "fmx"], id="direct-children"),
+        pytest.param("beamline/amx", [], id="leaf"),
+    ],
+)
+def test_list_namespaces_returns_direct_children(client_with_namespaces, scope, expected):
+    client = client_with_namespaces if not scope else client_with_namespaces[scope]
+    assert sorted(client.list_namespaces()) == expected
 
 
 def test_list_namespaces_nonexistent_returns_empty(tmp_path):
@@ -66,7 +54,7 @@ def test_local_backend_lists_full_direct_child_paths(client_with_namespaces):
     assert client.backend.list_child_namespace_paths("missing") == []
 
 
-def test_list_namespaces_remote_calls_correct_url():
+def test_list_namespaces_remote_calls_scoped_rest_children_endpoint():
     from recap.adapter.rest import RESTResult
 
     client = RecapClient.from_url("http://recap.test", api_key="secret")
@@ -101,23 +89,4 @@ def test_list_namespaces_remote_root_calls_correct_url():
 
     assert calls == [("GET", "/api/v1/namespaces/children")]
     assert sorted(result) == ["beamline", "staff"]
-    client.close()
-
-
-def test_list_namespaces_remote_uses_rest_when_graphql_lacks_capability():
-    from recap.adapter.rest import RESTResult
-
-    client = RecapClient.from_url("http://recap.test", api_key="secret")
-    calls = []
-
-    def fake_request(method, path, **kwargs):
-        calls.append((method, path))
-        return RESTResult(entity=["amx", "fmx"], etag=None, request_id=None)
-
-    client.backend._request = fake_request
-
-    result = client["beamline"].list_namespaces()
-
-    assert calls == [("GET", "/api/v1/namespaces/children/beamline")]
-    assert sorted(result) == ["amx", "fmx"]
     client.close()

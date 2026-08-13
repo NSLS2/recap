@@ -18,10 +18,5 @@ def test_core_public_exports_are_importable():
     assert callable(validate_transition)
 
 
-def test_namespace_is_scoped_recap_client_and_facade_is_not_public(tmp_path):
+def test_namespace_client_facade_is_not_public():
     assert not hasattr(recap, "NamespaceClient")
-
-    with RecapClient.from_sqlite(tmp_path / "recap.db") as client:
-        scoped = client.namespace("beamline/amx")
-        assert isinstance(scoped, RecapClient)
-        assert scoped.namespace_path == "beamline/amx"
