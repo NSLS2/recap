@@ -1,4 +1,4 @@
-import inspect
+from inspect import signature
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -39,4 +39,4 @@ def test_legacy_namespace_api_is_removed():
     from recap.client.base_client import RecapClient
 
     assert not hasattr(RecapClient, "set_namespace")
-    assert "path" in inspect.signature(RecapClient.namespace).parameters
+    assert "path" in signature(RecapClient.namespace).parameters
