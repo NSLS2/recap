@@ -18,6 +18,29 @@ def _response(status=201, *, headers=None, body=None):
     return response
 
 
+def _malformed_response():
+    response = _response(status=422, body={"detail": "secret"})
+    response.content = b"not-json"
+    response.json.side_effect = ValueError("malformed response")
+    return response
+
+
+def _empty_response():
+    response = _response(status=422)
+    response.content = b""
+    return response
+
+
+def _unstructured_response():
+    return _response(status=422, body={"detail": "secret", "token": "secret"})
+
+
+def _non_dict_error_response():
+    response = _response(status=422, body={"error": "secret"})
+    response.content = b'{"error":"secret"}'
+    return response
+
+
 def test_create_namespace_sends_exact_authenticated_request_and_parses_etag():
     from recap.adapter.rest import RESTAdapter
 
@@ -147,13 +170,21 @@ def test_http_error_exposes_structured_validation_message():
     assert caught.value.request_id == "req-validation"
 
 
-def test_http_error_keeps_generic_message_for_malformed_body():
+@pytest.mark.parametrize(
+    ("make_response", "expects_json"),
+    [
+        pytest.param(_malformed_response, True, id="malformed-json"),
+        pytest.param(_empty_response, False, id="empty-body"),
+        pytest.param(_unstructured_response, True, id="unstructured-object"),
+        pytest.param(_non_dict_error_response, True, id="non-dict-error"),
+    ],
+)
+def test_http_error_hides_unstructured_response_details(make_response, expects_json):
     from recap.adapter.rest import RESTAdapter
     from recap.exceptions import RecapHTTPError
 
-    response = _response(status=422, body={"detail": "secret"})
-    response.content = b"not-json"
-    response.json.side_effect = ValueError("malformed response")
+    response = make_response()
+
     with patch("recap.adapter.rest.httpx.Client") as client_type:
         client_type.return_value.request.return_value = response
         with pytest.raises(RecapHTTPError) as caught:
@@ -163,52 +194,8 @@ def test_http_error_keeps_generic_message_for_malformed_body():
     assert str(caught.value) == (
         "Recap request failed at https://recap.test/api/v1/namespaces/amx (HTTP 422)"
     )
-    response.json.assert_called_once_with()
     assert "secret" not in str(caught.value)
-
-
-def test_http_error_keeps_generic_message_for_empty_body_without_parsing():
-    from recap.adapter.rest import RESTAdapter
-    from recap.exceptions import RecapHTTPError
-
-    response = _response(status=422)
-    response.content = b""
-    with patch("recap.adapter.rest.httpx.Client") as client_type:
-        client_type.return_value.request.return_value = response
-        with pytest.raises(RecapHTTPError) as caught:
-            RESTAdapter("https://recap.test", api_key="secret").create_namespace("amx")
-
-    assert caught.value.message is None
-    response.json.assert_not_called()
-
-
-def test_http_error_ignores_unstructured_body_without_exposing_secret():
-    from recap.adapter.rest import RESTAdapter
-    from recap.exceptions import RecapHTTPError
-
-    response = _response(
-        status=422,
-        body={"detail": "secret", "token": "secret"},
-    )
-    with patch("recap.adapter.rest.httpx.Client") as client_type:
-        client_type.return_value.request.return_value = response
-        with pytest.raises(RecapHTTPError) as caught:
-            RESTAdapter("https://recap.test", api_key="secret").create_namespace("amx")
-
-    assert caught.value.message is None
-    assert "secret" not in str(caught.value)
-
-
-def test_http_error_ignores_non_dict_error_payload():
-    from recap.adapter.rest import RESTAdapter
-    from recap.exceptions import RecapHTTPError
-
-    response = _response(status=422, body={"error": "secret"})
-    response.content = b'{"error":"secret"}'
-    with patch("recap.adapter.rest.httpx.Client") as client_type:
-        client_type.return_value.request.return_value = response
-        with pytest.raises(RecapHTTPError) as caught:
-            RESTAdapter("https://recap.test", api_key="secret").create_namespace("amx")
-
-    assert caught.value.message is None
-    assert "secret" not in str(caught.value)
+    if expects_json:
+        response.json.assert_called_once_with()
+    else:
+        response.json.assert_not_called()
