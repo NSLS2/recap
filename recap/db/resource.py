@@ -17,6 +17,7 @@ from sqlalchemy.orm import (
     Mapped,
     mapped_collection,
     mapped_column,
+    object_session,
     relationship,
     validates,
 )
@@ -285,13 +286,20 @@ class Resource(RevisionedLifecycleMixin, TimestampMixin, Base):
         for child_ct in self.template.children.values():
             if child_ct.id is not None and child_ct.id in visited:
                 continue
-            Resource(
+            child = Resource(
                 name=child_ct.name,
                 template=child_ct,
                 parent=self,
                 namespace=self.namespace,
+                _init_children=False,
                 _visited_children=visited,
                 _max_depth=max_depth - 1,
+            )
+            session = object_session(self)
+            if session is not None:
+                session.add(child)
+            child._initialize_from_resource_template(
+                child_ct, visited, max_depth - 1
             )
 
     __table_args__ = (

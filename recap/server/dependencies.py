@@ -8,11 +8,7 @@ from recap.adapter.local import LocalBackend
 
 
 def get_local_backend(request: Request) -> Iterator[LocalBackend]:
-    """Provide one transactional backend and session for one request."""
+    """Provide backend whose reads use short-lived sessions."""
 
     backend = LocalBackend(request.app.state.session_factory)
-    backend.begin()
-    try:
-        yield backend
-    finally:
-        backend.close()
+    yield backend

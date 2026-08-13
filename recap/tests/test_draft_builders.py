@@ -7,7 +7,9 @@ from recap.commands.models import (
     CreateResource,
 )
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
-from recap.dsl.resource_builder import ResourceBuilder
+from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
+from recap.schemas.resource import ResourceTemplateSchema
+from recap.tests.transport_factories import resource_template
 from recap.utils.general import Direction
 
 
@@ -15,14 +17,39 @@ class RecordingBackend:
     def __init__(self, existing=None):
         self.commands = []
         self.existing = existing
+        self.resource_template = None
 
     def get_process_template(self, *args, **kwargs):
         return self.existing
 
-    def get_resource_template(self, *args, **kwargs):
-        return type("Template", (), {"id": uuid4()})()
-
     def find_resources_by_identity(self, *args, **kwargs):
+        return []
+
+    def query(self, schema, *args, **kwargs):
+        if (
+            schema is ResourceTemplateSchema
+            and args
+            and args[0].filters.get("name") is not None
+        ):
+            self.resource_template = resource_template().model_copy(
+                update={
+                    "name": args[0].filters["name"],
+                    "version": args[0].filters["version"],
+                }
+            )
+            return [self.resource_template]
+        if schema is ResourceTemplateSchema and self.resource_template is not None:
+            return [self.resource_template]
+        if (
+            schema.__name__ == "ProcessTemplateSchema"
+            and args
+            and args[0].filters.get("id") is not None
+        ):
+            return [
+                SimpleNamespace(
+                    id=uuid4(), step_templates={}, resource_slots=[]
+                )
+            ]
         return []
 
     def execute(self, command, context):
@@ -162,3 +189,163 @@ def test_resource_builder_serializes_property_values_into_create_command():
             }
         }
     }
+
+
+def test_client_routes_local_builders_through_commands_without_begin(client):
+    client.create_namespace("command")
+    scoped = client.namespace("command")
+    backend = scoped.backend
+
+    with scoped.build_process_template("command-pt", "1.0"):
+        pass
+    with scoped.build_resource_template(name="command-rt", type_names=["container"]):
+        pass
+
+    assert not hasattr(backend, "begin")
+
+    process_template = scoped.build_process_template("command-pt-2", "1.0")
+    process_run = scoped.build_process_run(
+        "command-run", "description", "command-pt", "1.0"
+    )
+    resource_template = scoped.build_resource_template(
+        name="command-rt-2", type_names=["container"]
+    )
+    resource = scoped.build_resource(
+        "command-resource", "command-rt", on_existing="create"
+    )
+
+    for builder in (process_template, process_run, resource_template, resource):
+        assert builder._command_context is not None
+        assert getattr(builder, "_command_backend", builder.backend) is backend
+
+
+def test_resource_template_command_draft_accepts_attribute_group_builder():
+    backend = RecordingBackend()
+    builder = ResourceTemplateBuilder(
+        name="template",
+        type_names=["container"],
+        backend=backend,
+        namespace_id=uuid4(),
+        namespace_path="beamline/amx",
+        command_context=object(),
+    )
+
+    builder.prop_group("properties").add_attribute(
+        "serial", "str", "", ""
+    ).close_group()
+    builder.save()
+
+    assert (
+        backend.commands[0][0].draft.property_groups[0].attributes[0].name == "serial"
+    )
+
+
+def test_process_run_command_builder_rejects_missing_template_and_run_ids():
+    import pytest
+
+    with pytest.raises(ValueError, match="template_id or process_run_id"):
+        ProcessRunBuilder(
+            "run",
+            "description",
+            "template",
+            uuid4(),
+            RecordingBackend(),
+            namespace_path="beamline/amx",
+            command_context=object(),
+        )
+
+
+def test_process_run_command_save_tolerates_none_or_partial_result():
+    class ResultBackend(RecordingBackend):
+        def __init__(self, result):
+            super().__init__()
+            self.result = result
+
+        def execute(self, command, context):
+            self.commands.append((command, context))
+            return self.result
+
+    for result in (None, object()):
+        backend = ResultBackend(result)
+        builder = ProcessRunBuilder(
+            "run",
+            "description",
+            "template",
+            uuid4(),
+            backend,
+            namespace_path="beamline/amx",
+            template_id=uuid4(),
+            command_context=object(),
+        )
+        builder.save()
+
+        assert len(backend.commands) == 1
+
+
+def test_process_run_builder_loads_template_without_client_lookup():
+    template_id = uuid4()
+
+    class QueryBackend(RecordingBackend):
+        def query(self, schema, spec, *, namespace_path):
+            if spec.filters == {"name": "template", "version": "1.0"}:
+                return [
+                    SimpleNamespace(
+                        id=template_id,
+                        step_templates={},
+                        resource_slots=[],
+                    )
+                ]
+            return []
+
+    backend = QueryBackend()
+    builder = ProcessRunBuilder(
+        "run",
+        "description",
+        "template",
+        uuid4(),
+        backend,
+        version="1.0",
+        namespace_path="beamline/amx",
+        command_context=object(),
+    )
+
+    assert builder._template_id == template_id
+
+
+def test_process_run_command_save_handles_missing_template_steps():
+    backend = RecordingBackend()
+    builder = ProcessRunBuilder(
+        "run",
+        "description",
+        "template",
+        uuid4(),
+        backend,
+        namespace_path="beamline/amx",
+        template_id=uuid4(),
+        command_context=object(),
+    )
+    builder._process_template = SimpleNamespace(step_templates=None)
+
+    builder.save()
+
+    assert len(backend.commands) == 1
+
+
+def test_resource_reuse_with_changed_properties_submits_update(client):
+    with client.build_resource_template(
+        name="ReuseUpdateRT", type_names=["container"]
+    ) as template:
+        template.prop_group("properties").add_attribute(
+            "serial", "str", "", ""
+        ).close_group()
+    first = client.create_resource("ReuseUpdate", "ReuseUpdateRT", on_existing="create")
+
+    with client.build_resource(
+        "ReuseUpdate", "ReuseUpdateRT", on_existing="silent"
+    ) as builder:
+        builder.resource.properties["properties"].values["serial"] = "changed"
+
+    with client.build_resource(resource_id=first.id) as verifier:
+        assert (
+            verifier.resource.properties["properties"].values.serial.value == "changed"
+        )

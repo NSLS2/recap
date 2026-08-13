@@ -12,20 +12,12 @@ fetched with ``include(["properties"])`` issues **zero** additional SQL
 statements.
 """
 
-from recap.dsl.resource_builder import ResourceTemplateBuilder
-from recap.lifecycle import LifecycleStatus
-
 from .conftest import count_statements
 
 
 def _make_template(client, name="IncPropT"):
     """A template with three property groups, each with one attribute."""
-    with ResourceTemplateBuilder(
-        name=name,
-        type_names=["container"],
-        backend=client.backend,
-        namespace_id=client.namespace_context.id,
-    ) as rtb:
+    with client.build_resource_template(name=name, type_names=["container"]) as rtb:
         rtb.prop_group("details").add_attribute(
             "serial", "str", "", "abc"
         ).close_group()
@@ -42,9 +34,7 @@ def test_build_property_model_after_include_properties_no_lazy_loads(client):
     first = client.create_resource("incprop-a", "IncPropT", on_existing="create")
     second = client.create_resource("incprop-b", "IncPropT", on_existing="create")
     for resource in (first, second):
-        uow = client.backend.begin()
-        client.backend.set_resource_status(resource.id, LifecycleStatus.ACTIVE)
-        uow.commit()
+        client.build_resource(resource_id=resource.id).activate()
 
     qm = client.query_maker()
     resources = qm.resources().include(["properties"]).filter(name="incprop-a").all()
@@ -80,9 +70,7 @@ def test_include_properties_matches_load_eager_statement_count(client):
     resource = client.create_resource(
         "parity-res", "IncPropParity", on_existing="create"
     )
-    uow = client.backend.begin()
-    client.backend.set_resource_status(resource.id, LifecycleStatus.ACTIVE)
-    uow.commit()
+    client.build_resource(resource_id=resource.id).activate()
 
     qm = client.query_maker()
 

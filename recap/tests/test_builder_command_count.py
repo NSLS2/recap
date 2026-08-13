@@ -44,6 +44,7 @@ def test_repeated_save_uses_latest_revision():
     )
 
     builder.save()
+    builder.add_resource_slot("input", "container", "input")
     builder.save()
 
     assert len(backend.commands) == 2
@@ -52,3 +53,30 @@ def test_repeated_save_uses_latest_revision():
     )
     assert backend.commands[0].expected_revision == 3
     assert backend.commands[1].expected_revision == 4
+
+
+def test_clean_repeated_save_does_not_duplicate_command():
+    existing = SimpleNamespace(
+        id=uuid4(),
+        name="clean",
+        version="1.0",
+        revision=3,
+        labels=[],
+        resource_slots=[],
+        step_templates={},
+    )
+    backend = RecordingBackend(existing)
+    builder = ProcessTemplateBuilder(
+        backend=backend,
+        namespace_id=uuid4(),
+        namespace_path="beamline/amx",
+        name=None,
+        version=None,
+        process_template_id=existing.id,
+        command_context=object(),
+    )
+
+    builder.save()
+    builder.save()
+
+    assert len(backend.commands) == 1

@@ -102,3 +102,22 @@ def test_list_namespaces_remote_root_calls_correct_url():
     assert calls == [("GET", "/api/v1/namespaces/children")]
     assert sorted(result) == ["beamline", "staff"]
     client.close()
+
+
+def test_list_namespaces_remote_uses_rest_when_graphql_lacks_capability():
+    from recap.adapter.rest import RESTResult
+
+    client = RecapClient.from_url("http://recap.test", api_key="secret")
+    calls = []
+
+    def fake_request(method, path, **kwargs):
+        calls.append((method, path))
+        return RESTResult(entity=["amx", "fmx"], etag=None, request_id=None)
+
+    client.backend._request = fake_request
+
+    result = client["beamline"].list_namespaces()
+
+    assert calls == [("GET", "/api/v1/namespaces/children/beamline")]
+    assert sorted(result) == ["amx", "fmx"]
+    client.close()

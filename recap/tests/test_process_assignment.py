@@ -1,27 +1,30 @@
 import pytest
+from types import SimpleNamespace
 from sqlalchemy.orm import sessionmaker
+from uuid import uuid4
 
-from recap.adapter.local import LocalBackend
 from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
-from recap.schemas.process import ProcessRunSchema
-from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
 from recap.utils.general import Direction
 
 
 @pytest.fixture
 def backend(apply_migrations, engine):
     SessionLocal = sessionmaker(bind=engine)
-    backend = LocalBackend(SessionLocal)
-    uow = backend.begin()
-    backend.namespace = Namespace(path="process-assignment", metadata_json={})
-    backend.session.add(backend.namespace)
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = SessionLocal(bind=connection)
+    namespace = Namespace(path=f"process-assignment-{uuid4()}", metadata_json={})
+    session.add(namespace)
+    session.flush()
     try:
-        yield backend
+        yield SimpleNamespace(session=session, namespace=namespace)
     finally:
-        uow.rollback()
-        backend.close()
+        if transaction.is_active:
+            transaction.rollback()
+        session.close()
+        connection.close()
 
 
 def test_assign_resource_rejects_slot_from_other_template(backend):
@@ -42,43 +45,23 @@ def test_assign_resource_rejects_slot_from_other_template(backend):
 
     backend.session.add_all([rt, pt_run, pt_slot, slot, tmpl, res, run])
     backend.session.flush()
-
-    slot_schema = ResourceSlotSchema.model_validate(slot)
-    res_schema = ResourceSchema.model_validate(res, from_attributes=True)
-    run_schema = ProcessRunSchema.model_validate(run, from_attributes=True)
-
-    with pytest.raises(ValueError, match="does not belong"):
-        backend.assign_resource(slot_schema, res_schema, run_schema)
+    with pytest.raises(ValueError, match="does not belong to process template"):
+        run.resources[slot] = res
 
 
-def test_assign_resource_prevents_duplicate_slot_usage(backend):
-    rt = ResourceType(name="rt3")
-    pt = ProcessTemplate(namespace=backend.namespace, name="PT3", version="1")
-    slot = ResourceSlot(
-        name="slot-z", process_template=pt, resource_type=rt, direction=Direction.input
-    )
-    tmpl = ResourceTemplate(namespace=backend.namespace, name="RT3", types=[rt])
-    res1 = Resource(namespace=backend.namespace, name="R-active-1", template=tmpl)
-    res2 = Resource(namespace=backend.namespace, name="R-active-2", template=tmpl)
-    run = ProcessRun(
-        namespace=backend.namespace, name="run3", description="", template=pt
-    )
-
-    backend.session.add_all([rt, pt, slot, tmpl, res1, res2, run])
-    backend.session.flush()
-
-    slot_schema = ResourceSlotSchema.model_validate(slot)
-    run_schema = ProcessRunSchema.model_validate(run, from_attributes=True)
-
-    run_schema = backend.assign_resource(
-        slot_schema,
-        ResourceSchema.model_validate(res1, from_attributes=True),
-        run_schema,
-    )
-
-    with pytest.raises(ValueError, match="already assigned"):
-        backend.assign_resource(
-            slot_schema,
-            ResourceSchema.model_validate(res2, from_attributes=True),
-            run_schema,
+def test_assign_resource_prevents_duplicate_slot_usage(client):
+    with client.build_process_template("PT3", "1") as pt:
+        pt.add_resource_slot(
+            "slot-z", "container", Direction.input, create_resource_type=True
         )
+    with client.build_resource_template(name="RT3", type_names=["container"]):
+        pass
+    res1 = client.create_resource("R-active-1", "RT3")
+    res2 = client.create_resource("R-active-2", "RT3")
+    with client.build_process_run("run3", "", "PT3", "1") as builder:
+        builder.assign_resource("slot-z", res1)
+        run_id = builder.process_run.id
+
+    with pytest.raises(ValueError, match="already occupied"):
+        with client.build_process_run(process_run_id=run_id) as builder:
+            builder.assign_resource("slot-z", res2)

@@ -79,6 +79,25 @@ def test_authenticator_returns_deterministic_actor_with_all_scopes(configured_ke
     )
 
 
+def test_single_user_actor_identity_is_shared_with_local_actor(configured_key):
+    from recap.authentication.actors import single_user_actor
+    from recap.authentication.api_key import ApiKeyRequestAuthenticator
+
+    api_key_actor = asyncio.run(
+        ApiKeyRequestAuthenticator(configured_key).authenticate(configured_key)
+    )
+    local_actor = single_user_actor(credential_fingerprint="local-single-user")
+
+    assert api_key_actor.actor_id == local_actor.actor_id
+    assert api_key_actor.kind == local_actor.kind
+    assert api_key_actor.identities[0].subject == local_actor.identities[0].subject
+    assert api_key_actor.identities[0].provider == "api-key"
+    assert local_actor.identities[0].provider == "single-user"
+    assert api_key_actor.credential_scopes == local_actor.credential_scopes
+    assert api_key_actor.namespace_restrictions == local_actor.namespace_restrictions
+    assert api_key_actor.credential_fingerprint != local_actor.credential_fingerprint
+
+
 def test_authenticator_uses_constant_time_comparison(configured_key):
     from recap.authentication.api_key import ApiKeyRequestAuthenticator
 

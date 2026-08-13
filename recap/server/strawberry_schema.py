@@ -8,7 +8,7 @@ from strawberry.fastapi import GraphQLRouter
 from strawberry.scalars import JSON
 from strawberry.schema.config import StrawberryConfig
 
-from recap.adapter import ReadBackend
+from recap.adapter import AuthorizedReadBackend, ReadBackend
 from recap.server.context import StrawberryGraphQLContext, graphql_context
 from recap.server.dependencies import get_local_backend
 from recap.server.resolvers import (
@@ -83,7 +83,7 @@ def build_router() -> GraphQLRouter:
 
     async def get_context(
         request: Request,
-        backend: Annotated[ReadBackend, Depends(get_local_backend)],
+        backend: Annotated[AuthorizedReadBackend, Depends(get_local_backend)],
         authorization: Annotated[str | None, Header()] = None,
     ) -> StrawberryGraphQLContext:
         return await graphql_context(request, backend, authorization)

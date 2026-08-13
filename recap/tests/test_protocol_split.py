@@ -1,7 +1,13 @@
 import os
 import tempfile
 
-from recap.adapter import ReadBackend, WriteBackend
+from recap.adapter import (
+    AuthorizedReadBackend,
+    NamespaceChildrenBackend,
+    ReadBackend,
+    WriteBackend,
+)
+from recap.adapter.graphql import GraphQLAdapter
 from recap.adapter.local import LocalBackend
 
 
@@ -26,9 +32,24 @@ def test_local_backend_satisfies_backend():
     with tempfile.TemporaryDirectory() as d:
         db_path = os.path.join(d, "test.db")
         lb = LocalBackend(db_path)
-        # runtime_checkable would be ideal but Protocol doesn't require it;
-        # just verify the key methods exist on both protocols
-        assert hasattr(lb, "query")
+        assert isinstance(lb, ReadBackend)
+        assert isinstance(lb, NamespaceChildrenBackend)
         assert hasattr(lb, "create_namespace")
-        assert hasattr(lb, "count")
-        assert hasattr(lb, "create_resource")
+        assert isinstance(lb, WriteBackend)
+
+
+def test_graphql_adapter_satisfies_read_backend():
+    adapter = GraphQLAdapter("http://recap.test/graphql")
+    try:
+        assert isinstance(adapter, ReadBackend)
+        assert not isinstance(adapter, NamespaceChildrenBackend)
+        assert not isinstance(adapter, AuthorizedReadBackend)
+    finally:
+        adapter.close()
+
+
+def test_authorized_read_backend_is_separate_from_public_read_backend():
+    assert "query_authorized" not in ReadBackend.__dict__
+    assert "count_authorized" not in ReadBackend.__dict__
+    assert "query_authorized" in AuthorizedReadBackend.__dict__
+    assert "count_authorized" in AuthorizedReadBackend.__dict__

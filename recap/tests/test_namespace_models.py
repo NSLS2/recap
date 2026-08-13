@@ -29,12 +29,14 @@ def test_namespace_round_trip(db_session):
     assert schema.metadata == {"beamline": "amx"}
     assert schema.model_dump()["metadata"] == {"beamline": "amx"}
     assert NamespaceRef.model_validate(child).path == child.path
-    assert NamespaceContext(id=child.id, path=child.path).path == child.path
+    context = NamespaceContext.model_validate(child)
+    assert context.path == child.path
+    assert context.metadata == {"beamline": "amx"}
 
 
 def test_effective_metadata_merges_ancestors(namespace_repository, db_session):
     namespace_repository.create("beamline")
-    root = namespace_repository.create("beamline/amx", {"facility": "nsls2"})
+    namespace_repository.create("beamline/amx", {"facility": "nsls2"})
     namespace_repository.create("beamline/amx/proposal")
     child = namespace_repository.create(
         "beamline/amx/proposal/312345", {"nsls2.proposal": "312345"}

@@ -5,9 +5,9 @@ import secrets
 
 from pydantic import SecretStr
 
+from recap.authentication.actors import single_user_actor
 from recap.authentication.errors import InvalidCredentialsError
-from recap.authentication.models import ActorKind, ProviderIdentity, RequestActor
-from recap.authorization.scopes import Scope
+from recap.authentication.models import RequestActor
 
 
 class ApiKeyRequestAuthenticator:
@@ -18,13 +18,9 @@ class ApiKeyRequestAuthenticator:
             api_key if isinstance(api_key, SecretStr) else SecretStr(api_key)
         )
         secret = self._api_key.get_secret_value()
-        self._actor = RequestActor(
-            actor_id="single-user",
-            kind=ActorKind.USER,
-            identities=(ProviderIdentity(provider="api-key", subject="single-user"),),
-            credential_scopes=frozenset(Scope),
-            namespace_restrictions=None,
+        self._actor = single_user_actor(
             credential_fingerprint=hashlib.sha256(secret.encode()).hexdigest(),
+            provider="api-key",
         )
 
     async def authenticate(self, credential: object) -> RequestActor:

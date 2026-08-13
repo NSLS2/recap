@@ -11,19 +11,13 @@ that grows with tree depth.
 """
 
 from recap.dsl.resource_builder import ResourceTemplateBuilder
-from recap.lifecycle import LifecycleStatus
 
 from .conftest import count_statements
 
 
 def _make_template(client, name):
     """A minimal single-type template with one property group."""
-    with ResourceTemplateBuilder(
-        name=name,
-        type_names=["container"],
-        backend=client.backend,
-        namespace_id=client.namespace_context.id,
-    ) as rtb:
+    with client.build_resource_template(name=name, type_names=["container"]) as rtb:
         rtb.prop_group("details").add_attribute(
             "serial", "str", "", "abc"
         ).close_group()
@@ -43,9 +37,7 @@ def _make_chain(client, depth, *, template, prefix):
             parent=parent,
             on_existing="create",
         )
-    uow = client.backend.begin()
-    client.backend.set_resource_status(root.id, LifecycleStatus.ACTIVE)
-    uow.commit()
+    client.build_resource(resource_id=root.id).activate()
     return root
 
 

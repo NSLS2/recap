@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from recap.adapter.local import LocalBackend
 from recap.authentication.models import ActorKind, ProviderIdentity, RequestActor
 from recap.authorization.policy import UnrestrictedNamespacePolicy
 from recap.authorization.scopes import Scope
@@ -94,6 +95,24 @@ def test_create_requires_existing_parent_and_sets_parent_id(command_setup):
         assert stored_child.parent_id == stored_parent.id
 
 
+def test_local_backend_namespace_commands_delegate(command_setup):
+    _, factory, context, _, _ = command_setup
+    backend = LocalBackend(factory)
+
+    created = backend.create_namespace("beamline", {}, context)
+    updated = backend.update_namespace(
+        created.id,
+        expected_revision=1,
+        metadata={"owner": "amx"},
+        status=LifecycleStatus.ACTIVE,
+        context=replace(context, idempotency_key="update-namespace"),
+    )
+
+    assert created.path == "beamline"
+    assert updated.metadata == {"owner": "amx"}
+    assert updated.revision == 2
+
+
 def test_create_missing_parent_fails_with_actionable_validation_error(command_setup):
     service, factory, context, policy, audit = command_setup
 
@@ -172,14 +191,16 @@ def test_idempotency_key_reuse_for_different_create_conflicts(command_setup):
         service.create_namespace(context, path="beamline/fmx", metadata={})
 
 
-def test_update_checks_revision_replaces_metadata_and_transitions_status(command_setup):
+def test_update_checks_revision_merges_metadata_and_transitions_status(command_setup):
     service, _, context, _, _ = command_setup
     service.create_namespace(
         replace(context, idempotency_key="create-parent"),
         path="beamline",
         metadata={},
     )
-    created = service.create_namespace(context, path="beamline/amx", metadata={"a": 1})
+    created = service.create_namespace(
+        context, path="beamline/amx", metadata={"a": 1, "owner": "old"}
+    )
     update_context = replace(context, idempotency_key="namespace-command-2")
 
     updated = service.update_namespace(
@@ -190,7 +211,7 @@ def test_update_checks_revision_replaces_metadata_and_transitions_status(command
         expected_revision=1,
     )
 
-    assert updated.metadata == {"owner": "amx"}
+    assert updated.metadata == {"a": 1, "owner": "amx"}
     assert updated.status is LifecycleStatus.ACTIVE
     assert updated.revision == 2
 

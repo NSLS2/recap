@@ -5,11 +5,12 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from recap.adapter.local import LocalBackend
 from recap.authentication.models import ActorKind, ProviderIdentity, RequestActor
 from recap.authorization.policy import UnrestrictedNamespacePolicy
 from recap.authorization.scopes import Scope
 from recap.commands.errors import CommandConflictError
-from recap.commands.models import CommandContext
+from recap.commands.models import CommandContext, CreateResource
 from recap.commands.service import CommandService
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.base import Base
@@ -78,6 +79,27 @@ def _property_template(factory, path="beamline/properties"):
         session.add(template)
         session.flush()
         return namespace.path, template.id
+
+
+def test_local_backend_execute_delegates_resource_command(command_setup):
+    _, factory, context, audit = command_setup
+    namespace_path, template_id = _template(factory)
+    backend = LocalBackend(factory)
+
+    result = backend.execute(
+        CreateResource(
+            namespace_path=namespace_path,
+            name="sample-1",
+            template_id=template_id,
+        ),
+        context,
+    )
+
+    assert result.name == "sample-1"
+    assert result.namespace_id is not None
+    assert len(audit.records) == 1
+    with factory() as session:
+        assert session.get(Resource, result.id) is not None
 
 
 def test_resource_create_update_revision_and_frozen_patch(command_setup):

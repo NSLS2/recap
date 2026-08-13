@@ -30,10 +30,13 @@ class QueryRequest(BaseModel):
             raise TypeError("Remote query predicates must use Field(...)")
         if not all(isinstance(item, FieldOrdering) for item in spec.orderings):
             raise TypeError("Remote query orderings must use Field(...)")
+        serialized_spec = spec.model_dump(mode="json")
+        if not spec.include_mutable:
+            serialized_spec.pop("include_mutable", None)
         return cls(
             schema_name=schema.__name__,
             namespace_path=namespace_path,
-            spec=spec.model_dump(mode="json"),
+            spec=serialized_spec,
         )
 
 

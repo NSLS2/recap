@@ -1,13 +1,16 @@
 import json
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.orm import sessionmaker
 
+from recap.authorization.policy import UnrestrictedNamespacePolicy
 from recap.commands.audit import DurableAuditSink, record_failure_after_rollback
+from recap.commands.context import build_local_command_context
 from recap.commands.idempotency import command_fingerprint
 from recap.commands.models import CreateResource
+from recap.commands.service import CommandService
 from recap.db.audit import MutationAudit, MutationAuditRepository
 from recap.db.base import Base
 from recap.db.idempotency import IdempotencyRecord, IdempotencyRepository
@@ -27,6 +30,64 @@ def audit_record(*, outcome: AuditOutcome = AuditOutcome.SUCCESS) -> AuditRecord
         outcome=outcome,
         reason_code=ErrorCode.INTERNAL_ERROR if outcome is AuditOutcome.ERROR else None,
     )
+
+
+class AuditCollector:
+    def __init__(self):
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+
+def test_local_command_context_has_shared_actor_and_configurable_audit_sink():
+    sink = AuditCollector()
+
+    context = build_local_command_context(
+        audit_sink=sink,
+        request_id="request-1",
+        idempotency_key="command-1",
+    )
+
+    assert context.actor.actor_id == "single-user"
+    assert context.actor.identities[0].provider == "single-user"
+    assert context.actor.credential_scopes
+    assert context.actor.namespace_restrictions is None
+    assert isinstance(context.policy, UnrestrictedNamespacePolicy)
+    assert context.request_id == "request-1"
+    assert context.idempotency_key == "command-1"
+    assert context.audit_sink is sink
+
+
+def test_local_command_context_generates_uuid_request_id():
+    context = build_local_command_context()
+
+    assert UUID(context.request_id).version == 4
+
+
+def test_local_context_external_audit_does_not_duplicate_durable_record():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(engine)
+    sink = AuditCollector()
+    context = build_local_command_context(
+        audit_sink=sink,
+        request_id=str(uuid4()),
+        idempotency_key="create-namespace-1",
+    )
+
+    with session_factory.begin() as session:
+        session.add(Namespace(path="", metadata_json={}))
+
+    CommandService(session_factory).create_namespace(
+        context,
+        path="beamline",
+        metadata={},
+    )
+
+    with session_factory() as session:
+        assert len(sink.records) == 1
+        assert len(session.scalars(select(MutationAudit)).all()) == 1
 
 
 def test_durable_sink_reuses_plan_2_record_and_persists_only_sanitized_fields():

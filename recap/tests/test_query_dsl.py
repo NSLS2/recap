@@ -250,8 +250,8 @@ def test_include_steps_with_parameters_adds_nested_preload(db_session):
         ("resource_templates", ResourceTemplateSchema),
     ],
 )
-def test_query_defaults_use_full_shape(factory, schema, db_session):
-    query = getattr(make_query(db_session), factory)()
+def test_query_defaults_use_full_shape(factory, schema, read_client):
+    query = getattr(read_client.query_maker(), factory)()
 
     assert query._shape == "full"
     assert query.model is schema
@@ -267,8 +267,8 @@ def test_query_defaults_use_full_shape(factory, schema, db_session):
         ("resource_templates", ResourceTemplateSchema),
     ],
 )
-def test_query_accepts_eager_load(factory, schema, db_session):
-    query = getattr(make_query(db_session), factory)(shape="full", load="eager")
+def test_query_accepts_eager_load(factory, schema, read_client):
+    query = getattr(read_client.query_maker(), factory)(shape="full", load="eager")
 
     assert query._shape == "full"
     assert query._load == "eager"

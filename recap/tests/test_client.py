@@ -1,10 +1,13 @@
 from pathlib import Path
 from tempfile import gettempdir
+from uuid import UUID
 
 import pytest
 
 from recap.client.base_client import RecapClient
 from recap.schemas.namespace import NamespaceContext
+from recap.schemas.resource import ResourceRef
+from recap.lifecycle import LifecycleStatus
 
 
 def test_build_process_run_resolves_root_namespace(tmp_path):
@@ -115,6 +118,86 @@ def test_scoped_permissions_use_client_namespace(monkeypatch):
     client.namespace("beamline/amx").permissions()
 
     assert calls == ["beamline/amx"]
+    client.close()
+
+
+def test_remote_get_resource_uses_read_backend(monkeypatch):
+    client = RecapClient.from_url("http://recap.test", api_key="secret")
+    expected = ResourceRef.model_construct(id=UUID(int=1), name="sample")
+    calls = []
+
+    def read(*args, **kwargs):
+        calls.append((args, kwargs))
+        return [expected]
+
+    monkeypatch.setattr(client._read_backend, "query", read)
+    monkeypatch.setattr(
+        client.backend,
+        "get_resource",
+        lambda *args, **kwargs: pytest.fail("remote read used REST backend"),
+        raising=False,
+    )
+
+    assert client.get_resource("sample", "Sample") is expected
+    assert calls[0][1]["namespace_path"] == ""
+    client.close()
+
+
+def test_get_resource_uses_supported_relationship_filters(monkeypatch, tmp_path):
+    client = RecapClient.from_sqlite(tmp_path / "recap.db")
+    expected = ResourceRef.model_construct(id=UUID(int=4), name="sample")
+    calls = []
+
+    def read(*args, **kwargs):
+        calls.append((args, kwargs))
+        return [expected]
+
+    monkeypatch.setattr(client._read_backend, "query", read)
+
+    assert client.get_resource("sample", "Sample", "2.0") is expected
+    assert calls[0][0][1].filters == {
+        "name": "sample",
+        "template__name": "Sample",
+        "template__version": "2.0",
+    }
+    client.close()
+
+
+def test_get_resource_rejects_multiple_matches(monkeypatch, tmp_path):
+    client = RecapClient.from_sqlite(tmp_path / "recap.db")
+    matches = [
+        ResourceRef.model_construct(id=UUID(int=5), name="sample"),
+        ResourceRef.model_construct(id=UUID(int=6), name="sample"),
+    ]
+    monkeypatch.setattr(client._read_backend, "query", lambda *args, **kwargs: matches)
+
+    with pytest.raises(ValueError, match="[Mm]ultiple resources"):
+        client.get_resource("sample", "Sample")
+    client.close()
+
+
+def test_uuid_parent_resolution_uses_read_backend(monkeypatch):
+    client = RecapClient.from_url("http://recap.test", api_key="secret")
+    expected = ResourceRef.model_construct(id=UUID(int=2), name="parent")
+    calls = []
+
+    def read(*args, **kwargs):
+        calls.append((args, kwargs))
+        return [expected]
+
+    monkeypatch.setattr(client._read_backend, "query", read)
+    monkeypatch.setattr(
+        client.backend,
+        "query",
+        lambda *args, **kwargs: pytest.fail("parent lookup used write backend"),
+        raising=False,
+    )
+
+    assert client._resolve_parent(expected.id, NamespaceContext(
+        id=UUID(int=3), path="beamline", metadata={},
+        status=LifecycleStatus.ACTIVE, revision=1
+    )) is expected
+    assert calls[0][1]["namespace_path"] == "beamline"
     client.close()
 
 

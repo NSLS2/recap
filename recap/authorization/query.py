@@ -79,5 +79,18 @@ class AuthorizedQuery:
             )
         return stmt.where(or_(*predicates) if predicates else false())
 
+    def for_read(self) -> AuthorizedQuery:
+        """Return authorization limited to read scopes for read endpoints."""
+        read_scopes = {read for read, _ in _MODEL_SCOPES.values()}
+        return AuthorizedQuery(
+            namespace_path=self.namespace_path,
+            permissions=self.permissions.model_copy(
+                update={
+                    "effective_scopes": self.permissions.effective_scopes
+                    & read_scopes
+                }
+            ),
+        )
+
 
 __all__ = ["AuthorizedQuery", "NamespacePolicy"]

@@ -22,9 +22,7 @@ def _create_source(client):
     destination_full_path = "/".join(filter(None, (namespace_prefix, destination_path)))
     sibling_full_path = "/".join(filter(None, (namespace_prefix, sibling_path)))
     prefix_full_path = "/".join(filter(None, (namespace_prefix, prefix_path)))
-    uow = client.backend.begin()
-    try:
-        session = client.backend.session
+    with client._sessionmaker.begin() as session:
         source_namespace = Namespace(
             path=source_full_path, status=LifecycleStatus.ACTIVE
         )
@@ -84,6 +82,7 @@ def _create_source(client):
             "source_id": root.id,
             "child_id": child.id,
             "source_namespace_id": source_namespace.id,
+            "source_namespace_path": source_full_path,
             "destination_namespace_id": destination_namespace.id,
             "sibling_namespace_id": sibling_namespace.id,
             "prefix_namespace_id": prefix_namespace.id,
@@ -91,19 +90,12 @@ def _create_source(client):
             "sibling_path": sibling_path,
             "prefix_path": prefix_path,
         }
-        uow.commit()
         return result
-    except Exception:
-        uow.rollback()
-        raise
 
 
 def _load_tree(client, root_id):
-    uow = client.backend.begin()
-    try:
-        resources = client.backend._load_resource_subtrees(
-            client.backend.session, [root_id]
-        )
+    with client._sessionmaker.begin() as session:
+        resources = client.backend._load_resource_subtrees(session, [root_id])
         by_id = {resource.id: resource for resource in resources}
         root = by_id[root_id]
         # Snapshot while ORM relationships remain attached to active session.
@@ -120,11 +112,7 @@ def _load_tree(client, root_id):
                 root.properties["details"]._values["value"].metadata_json
             ),
         }
-        uow.commit()
         return snapshot
-    except Exception:
-        uow.rollback()
-        raise
 
 
 def test_copy_resource_deep_copies_full_graph_with_new_ids(client):
@@ -168,12 +156,11 @@ def test_copy_resource_isolates_mutable_values_and_applies_root_overrides(client
         ),
     )
 
-    uow = client.backend.begin()
-    clone = client.backend.session.get(Resource, copied.id)
-    copied_value = clone.properties["details"]._values["value"]
-    copied_value.value = [*copied_value.value, 10]
-    copied_value.metadata_json["tags"] = [*copied_value.metadata_json["tags"], "copy"]
-    uow.commit()
+    with client._sessionmaker.begin() as session:
+        clone = session.get(Resource, copied.id)
+        copied_value = clone.properties["details"]._values["value"]
+        copied_value.value = [*copied_value.value, 10]
+        copied_value.metadata_json["tags"] = [*copied_value.metadata_json["tags"], "copy"]
 
     source = _load_tree(client, setup["source_id"])
     clone = _load_tree(client, copied.id)
@@ -186,10 +173,9 @@ def test_copy_resource_isolates_mutable_values_and_applies_root_overrides(client
 
 def test_builder_copy_on_write_preserves_value_metadata(client):
     setup = _create_source(client)
-    uow = client.backend.begin()
-    client.backend.session.get(Resource, setup["source_id"]).activate()
-    uow.commit()
-    client.set_namespace(setup["source_namespace_id"])
+    with client._sessionmaker.begin() as session:
+        session.get(Resource, setup["source_id"]).activate()
+    client = client.namespace(setup["source_namespace_path"])
 
     with client.build_resource(resource_id=setup["source_id"]) as builder:
         value = builder.resource.properties["details"].values["value"]
@@ -253,9 +239,7 @@ def test_invalid_copy_changes_roll_back_source_activation_and_clone(client):
             ),
         )
 
-    uow = client.backend.begin()
-    try:
-        session = client.backend.session
+    with client._sessionmaker.begin() as session:
         source = session.get(Resource, setup["source_id"])
         clone_count = session.scalar(
             select(func.count())
@@ -264,7 +248,3 @@ def test_invalid_copy_changes_roll_back_source_activation_and_clone(client):
         )
         assert source.status is LifecycleStatus.MUTABLE
         assert clone_count == 0
-        uow.commit()
-    except Exception:
-        uow.rollback()
-        raise

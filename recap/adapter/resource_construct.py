@@ -180,14 +180,14 @@ class ResourceSchemaHydrator:
         self,
         template: ResourceTemplate,
     ) -> ResourceTemplateSchema:
-        return self._construct_with_simple_fields(
-            ResourceTemplateSchema,
-            template,
+        values = self._simple_field_values(ResourceTemplateSchema, template)
+        values.update(
             types=[],
             parent=None,
             children={},
             attribute_group_templates=[],
         )
+        return ResourceTemplateSchema.model_validate(values)
 
     def _construct_resource_ref(
         self,

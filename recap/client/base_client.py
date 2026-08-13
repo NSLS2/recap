@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Any, Literal, overload
@@ -7,14 +7,18 @@ from uuid import UUID, uuid4
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from recap.adapter import Backend
+from recap.adapter import Backend, NamespaceChildrenBackend
 from recap.adapter.local import LocalBackend
 from recap.client.connection_state import _ConnectionState
 from recap.client.permissions import ActorPermissions
+from recap.commands.context import build_local_command_context
+from recap.commands.errors import CommandValidationError
+from recap.commands.models import CopyResource
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
-from recap.schemas.namespace import NamespaceContext
+from recap.lifecycle import LifecycleStatus
+from recap.schemas.namespace import NamespaceContext, NamespaceSchema
 from recap.schemas.resource import ResourceCopyOptions, ResourceRef, ResourceSchema
 from recap.utils.migrations import apply_migrations
 
@@ -75,7 +79,8 @@ class RecapClient:
         backend = getattr(self, "backend", None)
         if backend and hasattr(backend, "close"):
             backend.close()
-        # Close read_backend separately when it differs from backend (e.g. GraphQLAdapter)
+        # Close read_backend separately when it differs from backend
+        # (e.g. GraphQLAdapter).
         read_backend = getattr(self, "_read_backend", None)
         if (
             read_backend
@@ -247,6 +252,10 @@ class RecapClient:
                 raise
         return NamespaceContext(id=UUID(int=0), path=requested_path)
 
+    @staticmethod
+    def _command_context():
+        return build_local_command_context()
+
     @classmethod
     def from_sqlite(
         cls,
@@ -330,7 +339,8 @@ class RecapClient:
         on_existing: Literal["silent", "warn", "raise"] = "warn",
         **kwargs,
     ) -> ProcessTemplateBuilder:
-        """Open a builder for a :class:`~recap.dsl.process_builder.ProcessTemplateBuilder`.
+        """Open a builder for a
+        :class:`~recap.dsl.process_builder.ProcessTemplateBuilder`.
 
         Call this method in two mutually exclusive ways:
 
@@ -372,12 +382,14 @@ class RecapClient:
         if process_template_id is not None:
             if args or kwargs:
                 raise TypeError(
-                    "Pass either an existing process_template_id or name/version, not both"
+                    "Pass either an existing process_template_id or "
+                    "name/version, not both"
                 )
             return ProcessTemplateBuilder(
                 name=None,
                 version=None,
                 backend=self.backend,
+                command_context=self._command_context(),
                 namespace_id=namespace_context.id,
                 namespace_path=namespace_context.path,
                 process_template_id=process_template_id,
@@ -401,6 +413,7 @@ class RecapClient:
             name=name,
             version=version,
             backend=self.backend,
+            command_context=self._command_context(),
             namespace_id=namespace_context.id,
             namespace_path=namespace_context.path,
             on_existing=on_existing,
@@ -467,7 +480,8 @@ class RecapClient:
         if process_run_id is not None:
             if args or kwargs:
                 raise TypeError(
-                    "Pass either an existing process_run_id or name/description/template_name/version, not both"
+                    "Pass either an existing process_run_id or "
+                    "name/description/template_name/version, not both"
                 )
             return ProcessRunBuilder(
                 name=None,
@@ -475,6 +489,7 @@ class RecapClient:
                 template_name=None,
                 namespace_id=namespace_context.id,
                 backend=self.backend,
+                command_context=self._command_context(),
                 version=None,
                 namespace_path=namespace_context.path,
                 process_run_id=process_run_id,
@@ -484,7 +499,8 @@ class RecapClient:
         if args:
             if len(args) != 4:
                 raise TypeError(
-                    "Provide exactly four positional arguments: name, description, template_name, version"
+                    "Provide exactly four positional arguments: name, description, "
+                    "template_name, version"
                 )
             name, description, template_name, version = args
         else:
@@ -506,8 +522,10 @@ class RecapClient:
             template_name=template_name,
             namespace_id=namespace_context.id,
             backend=self.backend,
+            command_context=self._command_context(),
             version=version,
             namespace_path=namespace_context.path,
+            read_backend=getattr(self, "_read_backend", self.backend),
             on_existing=on_existing,
         )
 
@@ -530,7 +548,8 @@ class RecapClient:
         resource_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
     ):
-        """Open a builder for a :class:`~recap.dsl.resource_builder.ResourceTemplateBuilder`.
+        """Open a builder for a
+        :class:`~recap.dsl.resource_builder.ResourceTemplateBuilder`.
 
         A :class:`~recap.schemas.resource.ResourceTemplateSchema` is the
         blueprint for a :class:`~recap.schemas.resource.ResourceSchema`.
@@ -542,7 +561,9 @@ class RecapClient:
                 name="Library Plate",
                 type_names=["container", "plate", "library_plate"],
             ) as tb:
-                tb.add_properties({"dimensions": [{"name": "rows", "type": "int", "default": 8}]})
+                tb.add_properties(
+                    {"dimensions": [{"name": "rows", "type": "int", "default": 8}]}
+                )
 
         **Load an existing template by ID**::
 
@@ -574,14 +595,13 @@ class RecapClient:
             raise RuntimeError("Backend not initialized")
         namespace_context = self._resolve_namespace_context()
         builder_backend = getattr(self, "_read_backend", self.backend)
-        command_backend = (
-            self.backend if self.backend.__class__.__name__ == "RESTAdapter" else None
-        )
+        command_backend = self.backend
 
         if resource_template_id is not None:
             if name is not None or type_names is not None:
                 raise TypeError(
-                    "Pass either an existing resource_template_id or name/type_names, not both"
+                    "Pass either an existing resource_template_id or "
+                    "name/type_names, not both"
                 )
             return ResourceTemplateBuilder(
                 name=None,
@@ -589,6 +609,7 @@ class RecapClient:
                 version=version,
                 backend=builder_backend,
                 command_backend=command_backend,
+                command_context=self._command_context(),
                 namespace_id=namespace_context.id,
                 namespace_path=namespace_context.path,
                 resource_template_id=resource_template_id,
@@ -608,6 +629,7 @@ class RecapClient:
             version=version,
             backend=builder_backend,
             command_backend=command_backend,
+            command_context=self._command_context(),
             namespace_id=namespace_context.id,
             namespace_path=namespace_context.path,
             on_existing=on_existing,
@@ -683,14 +705,13 @@ class RecapClient:
             raise RuntimeError("Backend not initialized")
         namespace_context = self._resolve_namespace_context()
         builder_backend = getattr(self, "_read_backend", self.backend)
-        command_backend = (
-            self.backend if self.backend.__class__.__name__ == "RESTAdapter" else None
-        )
+        command_backend = self.backend
 
         if resource_id is not None:
             if args or kwargs:
                 raise TypeError(
-                    "Pass either an existing resource_id or name/template_name, not both"
+                    "Pass either an existing resource_id or "
+                    "name/template_name, not both"
                 )
             if parent is not None:
                 raise TypeError(
@@ -703,6 +724,7 @@ class RecapClient:
                 template_version="1.0",
                 backend=builder_backend,
                 command_backend=command_backend,
+                command_context=self._command_context(),
                 namespace_id=namespace_context.id,
                 namespace_path=namespace_context.path,
                 resource_id=resource_id,
@@ -718,6 +740,7 @@ class RecapClient:
             template_version=template_version,
             backend=builder_backend,
             command_backend=command_backend,
+            command_context=self._command_context(),
             namespace_id=namespace_context.id,
             namespace_path=namespace_context.path,
             on_existing=on_existing,
@@ -735,7 +758,8 @@ class RecapClient:
         if isinstance(parent, UUID):
             from recap.dsl.query import QuerySpec
 
-            results = self.backend.query(
+            read_backend = getattr(self, "_read_backend", self.backend)
+            results = read_backend.query(
                 ResourceSchema,
                 QuerySpec(
                     filters={"id": parent},
@@ -817,9 +841,7 @@ class RecapClient:
             raise RuntimeError("Backend not initialized")
         namespace_context = self._resolve_namespace_context()
         builder_backend = getattr(self, "_read_backend", self.backend)
-        command_backend = (
-            self.backend if self.backend.__class__.__name__ == "RESTAdapter" else None
-        )
+        command_backend = self.backend
         return ResourceBuilder.create(
             name=name,
             template_name=template_name,
@@ -827,6 +849,7 @@ class RecapClient:
             backend=builder_backend,
             namespace_path=namespace_context.path,
             command_backend=command_backend,
+            command_context=self._command_context(),
             namespace_id=namespace_context.id,
             parent=parent,
             on_existing=on_existing,
@@ -853,18 +876,19 @@ class RecapClient:
                 changes=copy_options.model_dump(mode="json"),
             )
             return ResourceSchema.model_validate(result.entity)
-        uow = self.backend.begin()
-        try:
-            copied = self.backend.copy_resource(
-                source_resource_id,
-                namespace_context.id,
-                copy_options,
-            )
-            uow.commit()
-            return copied
-        except Exception:
-            uow.rollback()
-            raise
+        if isinstance(self.backend, LocalBackend):
+            try:
+                return self.backend.execute(
+                    CopyResource(
+                        source_resource_id=source_resource_id,
+                        destination_namespace_path=namespace_context.path,
+                        options=copy_options,
+                    ),
+                    self._command_context(),
+                )
+            except CommandValidationError as error:
+                raise ValueError(str(error)) from error
+        raise TypeError("Backend does not support local command execution")
 
     @overload
     def get_resource(
@@ -926,13 +950,31 @@ class RecapClient:
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
         namespace_context = self._resolve_namespace_context()
-        return self.backend.get_resource(
-            namespace_context.id,
-            name,
-            template_name,
-            template_version,
-            expand=expand,
+        read_backend = getattr(self, "_read_backend", self.backend)
+        from recap.dsl.query import QuerySpec
+
+        schema = ResourceSchema if expand else ResourceRef
+        results = read_backend.query(
+            schema,
+            QuerySpec(
+                filters={
+                    "name": name,
+                    "template__name": template_name,
+                    "template__version": template_version,
+                },
+                preloads=("template", "children", "properties") if expand else (),
+                load_mode="eager" if expand else None,
+                include_mutable=True,
+            ),
+            namespace_path=namespace_context.path,
         )
+        if not results:
+            raise ValueError(f"Resource {name!r} not found")
+        if len(results) > 1:
+            raise ValueError(
+                f"Multiple resources named {name!r} matched the requested template"
+            )
+        return results[0]
 
     def create_namespace(
         self, path: str, metadata: dict[str, Any] | None = None
@@ -941,58 +983,114 @@ class RecapClient:
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
         if self.backend.__class__.__name__ == "RESTAdapter":
-            from recap.schemas.namespace import NamespaceSchema
-
             result = self.backend.create_namespace(path, metadata)
             namespace = NamespaceSchema.model_validate(result.entity)
             self._namespace_context = NamespaceContext(
-                id=namespace.id, path=namespace.path
+                id=namespace.id,
+                path=namespace.path,
+                metadata=namespace.metadata,
+                status=namespace.status,
+                revision=namespace.revision,
+                etag=result.etag,
             )
             return self._namespace_context
-        uow = self.backend.begin()
-        try:
-            self._namespace_context = self.backend.create_namespace(path, metadata)
-            uow.commit()
-        except Exception:
-            uow.rollback()
-            raise
-        return self._namespace_context
+        if isinstance(self.backend, LocalBackend):
+            namespace = self.backend.create_namespace(
+                path,
+                metadata,
+                self._command_context(),
+            )
+            if isinstance(namespace, NamespaceContext):
+                self._namespace_context = namespace
+            else:
+                self._namespace_context = NamespaceContext(
+                    id=namespace.id,
+                    path=namespace.path,
+                    metadata=namespace.metadata,
+                    status=namespace.status,
+                    revision=namespace.revision,
+                )
+            return self._namespace_context
+        raise TypeError("Backend does not support local command execution")
+
+    def update_namespace(
+        self,
+        namespace_id: UUID | None = None,
+        *,
+        expected_revision: int | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        status: LifecycleStatus | None = None,
+    ) -> NamespaceContext:
+        """Apply namespace metadata/status update and make result active."""
+        if self.backend is None:
+            raise RuntimeError("Backend not initialized")
+        context = self._namespace_context
+        if namespace_id is None:
+            if context is None:
+                raise ValueError("An active namespace context is required")
+            namespace_id = context.id
+        if expected_revision is None:
+            if context is None or context.revision is None:
+                raise ValueError("Expected namespace revision is required")
+            expected_revision = context.revision
+
+        if self.backend.__class__.__name__ == "RESTAdapter":
+            body: dict[str, Any] = {}
+            if metadata is not None:
+                body["metadata"] = dict(metadata)
+            if status is not None:
+                body["status"] = status.value
+            result = self.backend.update_namespace(
+                namespace_id,
+                body,
+                etag=context.etag if context is not None else f'"{expected_revision}"',
+            )
+            namespace = NamespaceSchema.model_validate(result.entity)
+            self._namespace_context = NamespaceContext(
+                id=namespace.id,
+                path=namespace.path,
+                metadata=namespace.metadata,
+                status=namespace.status,
+                revision=namespace.revision,
+                etag=result.etag,
+            )
+            return self._namespace_context
+
+        if isinstance(self.backend, LocalBackend):
+            namespace = self.backend.update_namespace(
+                namespace_id,
+                expected_revision,
+                None if metadata is None else dict(metadata),
+                status,
+                self._command_context(),
+            )
+            self._namespace_context = NamespaceContext(
+                id=namespace.id,
+                path=namespace.path,
+                metadata=namespace.metadata,
+                status=namespace.status,
+                revision=namespace.revision,
+            )
+            return self._namespace_context
+
+        raise TypeError("Backend does not support namespace updates")
 
     @property
     def namespace_context(self) -> NamespaceContext | None:
-        return self._namespace_context
-
-    def set_namespace(self, id: UUID, *, force: bool = False) -> NamespaceContext:
-        """Load a namespace by ID and make it active for subsequent writes."""
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        if not isinstance(id, UUID):
-            raise TypeError(f"id should be of type UUID, found {type(id)}")
-        if (
-            not force
-            and self._namespace_context is not None
-            and self._namespace_context.id == id
-        ):
-            return self._namespace_context
-        uow = self.backend.begin()
-        try:
-            self._namespace_context = self.backend.set_namespace(id)
-            uow.commit()
-        except Exception:
-            uow.rollback()
-            raise
         return self._namespace_context
 
     def list_namespaces(self) -> list[str]:
         """Return relative names of direct child namespaces."""
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        if self.backend.__class__.__name__ == "RESTAdapter":
+        read_backend = getattr(self, "_read_backend", self.backend)
+        if isinstance(read_backend, NamespaceChildrenBackend):
+            child_paths = read_backend.list_child_namespace_paths(self.namespace_path)
+            prefix = f"{self.namespace_path}/" if self.namespace_path else ""
+            return [child_path[len(prefix) :] for child_path in child_paths]
+        if hasattr(self.backend, "list_child_namespaces"):
             return self.backend.list_child_namespaces(self.namespace_path)
-
-        child_paths = self.backend.list_child_namespace_paths(self.namespace_path)
-        prefix = f"{self.namespace_path}/" if self.namespace_path else ""
-        return [child_path[len(prefix) :] for child_path in child_paths]
+        raise TypeError("Backend does not support namespace child listing")
 
     def query_maker(
         self,

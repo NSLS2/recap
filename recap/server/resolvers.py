@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
+from typing import cast
 
 import strawberry
 from pydantic import BaseModel, ValidationError
 from strawberry.scalars import JSON
 
-from recap.adapter import ReadBackend
+from recap.adapter import AuthorizedReadBackend, ReadBackend
 from recap.adapter.transport import QueryResult, serialize_model
 from recap.authorization.query import AuthorizedQuery
 from recap.dsl.query import QuerySpec
@@ -57,7 +58,7 @@ _SCHEMA_REGISTRY: Mapping[str, type[BaseModel]] = MappingProxyType(
 
 def _backend_and_authorization(
     info: strawberry.types.Info, namespace_path: str
-) -> tuple[ReadBackend, AuthorizedQuery | None]:
+) -> tuple[ReadBackend | AuthorizedReadBackend, AuthorizedQuery | None]:
     context = info.context
     if isinstance(context, StrawberryGraphQLContext):
         return context.backend, AuthorizedQuery.from_policy(
@@ -75,7 +76,12 @@ def _query(
     backend, authorization = _backend_and_authorization(info, namespace_path)
     if authorization is None:
         return backend.query(schema, spec, namespace_path=namespace_path)
-    return backend.query_authorized(schema, spec, authorization=authorization)
+    effective_authorization = (
+        authorization if spec.include_mutable else authorization.for_read()
+    )
+    return cast(AuthorizedReadBackend, backend).query_authorized(
+        schema, spec, authorization=effective_authorization
+    )
 
 
 def _count(
@@ -87,7 +93,12 @@ def _count(
     backend, authorization = _backend_and_authorization(info, namespace_path)
     if authorization is None:
         return backend.count(schema, spec, namespace_path=namespace_path)
-    return backend.count_authorized(schema, spec, authorization=authorization)
+    effective_authorization = (
+        authorization if spec.include_mutable else authorization.for_read()
+    )
+    return cast(AuthorizedReadBackend, backend).count_authorized(
+        schema, spec, authorization=effective_authorization
+    )
 
 
 def _resolve_schema(schema_name: str) -> type[BaseModel]:
@@ -261,13 +272,14 @@ def resolve_namespaces(
     offset: int | None = None,
 ) -> list[NamespaceType]:
     effective_limit = _check_limit(limit)
-    spec = QuerySpec(limit=effective_limit, offset=offset)
+    spec = QuerySpec(limit=effective_limit, offset=offset, include_mutable=True)
     results = _query(info, NamespaceSchema, spec, namespace_path)
     return [_namespace_schema_to_type(namespace) for namespace in results]
 
 
 def resolve_namespaces_count(info: strawberry.types.Info, namespace_path: str) -> int:
-    spec = QuerySpec()
+    # Preserve legacy namespace-count semantics; execute_count uses read parity.
+    spec = QuerySpec(include_mutable=True)
     return _count(info, NamespaceSchema, spec, namespace_path)
 
 

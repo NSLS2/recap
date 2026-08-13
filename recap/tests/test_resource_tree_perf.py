@@ -13,20 +13,13 @@ The key assertion is *depth-independence*: a 3-level and a 4-level chain must
 issue the **same** number of statements.
 """
 
-from recap.dsl.resource_builder import ResourceTemplateBuilder
-from recap.lifecycle import LifecycleStatus
 
 from .conftest import count_statements
 
 
 def _make_template(client, name="TreePerfT"):
     """A minimal single-type template with one property group."""
-    with ResourceTemplateBuilder(
-        name=name,
-        type_names=["container"],
-        backend=client.backend,
-        namespace_id=client.namespace_context.id,
-    ) as rtb:
+    with client.build_resource_template(name=name, type_names=["container"]) as rtb:
         rtb.prop_group("details").add_attribute(
             "serial", "str", "", "abc"
         ).close_group()
@@ -46,9 +39,7 @@ def _make_chain(client, depth, *, prefix):
             parent=parent,
             on_existing="create",
         )
-    uow = client.backend.begin()
-    client.backend.set_resource_status(root.id, LifecycleStatus.ACTIVE)
-    uow.commit()
+    client.build_resource(resource_id=root.id).activate()
     return root
 
 
@@ -102,9 +93,7 @@ def test_load_eager_resource_tree_bounded_count(client):
             parent=parent,
             on_existing="create",
         )
-    uow = client.backend.begin()
-    client.backend.set_resource_status(root.id, LifecycleStatus.ACTIVE)
-    uow.commit()
+    client.build_resource(resource_id=root.id).activate()
 
     qm = client.query_maker()
     with count_statements(client) as counter:

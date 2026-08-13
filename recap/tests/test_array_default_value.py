@@ -10,7 +10,6 @@ The fix serializes list-like defaults to JSON strings before storage/query.
 
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.resource import Resource, ResourceTemplate
-from recap.dsl.resource_builder import ResourceTemplateBuilder
 
 
 class TestArrayDefaultViaLocalBackend:
@@ -22,7 +21,7 @@ class TestArrayDefaultViaLocalBackend:
             name="ArrayTest-T1", type_names=["sample"]
         ) as rtb:
             rtb.prop_group("data").add_attribute("tags", "array", "", []).close_group()
-            rtb.activate()
+        rtb.activate()
 
         # Verify template was persisted and is queryable
         tmpl = (
@@ -41,7 +40,7 @@ class TestArrayDefaultViaLocalBackend:
             rtb.prop_group("meta").add_attribute(
                 "labels", "array", "", ["a", "b", "c"]
             ).close_group()
-            rtb.activate()
+        rtb.activate()
 
         tmpl = (
             client.query_maker()
@@ -54,23 +53,15 @@ class TestArrayDefaultViaLocalBackend:
     def test_array_default_idempotent_on_reopen(self, client):
         """Reopening a template with an array attribute doesn't create duplicates."""
         for _ in range(2):
-            with ResourceTemplateBuilder(
-                name="ArrayTest-T3",
-                type_names=["container"],
-                backend=client.backend,
-                namespace_id=client.namespace_context.id,
+            with client.build_resource_template(
+                name="ArrayTest-T3", type_names=["container"]
             ) as rtb:
                 rtb.prop_group("info").add_attribute(
                     "items", "array", "", []
                 ).close_group()
-        with ResourceTemplateBuilder(
-            name="ArrayTest-T3",
-            type_names=["container"],
-            backend=client.backend,
-            namespace_id=client.namespace_context.id,
-        ) as rtb:
-            rtb.activate()
-
+        client.build_resource_template(
+            name="ArrayTest-T3", type_names=["container"]
+        ).activate()
         # Should still have exactly one attribute template named "items"
         tmpl = (
             client.query_maker()

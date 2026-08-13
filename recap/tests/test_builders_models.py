@@ -104,7 +104,7 @@ def test_process_run_builder_set_model_handles_mismatch(client):
         set_mismatched_model()
 
 
-def test_resource_builder_add_child_persists_and_links(client):
+def test_resource_builder_add_child_persists_and_links(client, recwarn):
     """ResourceBuilder.add_child() creates a child resource in the parent's
     unit of work and links it to the parent. The parent's __exit__ commits both.
 
@@ -132,3 +132,4 @@ def test_resource_builder_add_child_persists_and_links(client):
     assert child.template.name == "AC-Child"
     assert "AC-Leaf" in parent.children
     assert parent.children["AC-Leaf"].id == child.id
+    assert not [warning for warning in recwarn if warning.category.__name__ == "SAWarning"]

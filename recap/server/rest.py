@@ -6,13 +6,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Request, Response
 
-from recap.authentication.models import RequestActor
 from recap.adapter.local import LocalBackend
+from recap.authentication.models import RequestActor
 from recap.authorization.policy import (
     SnapshotNamespacePolicy,
     UnrestrictedNamespacePolicy,
 )
-from recap.utils.namespace import canonicalize_namespace_path
+from recap.commands.context import DiscardAuditSink
 from recap.commands.models import CommandContext
 from recap.commands.service import CommandService
 from recap.dsl.drafts import (
@@ -27,7 +27,6 @@ from recap.schemas.resource import (
     ResourceSchema,
     ResourceTemplateSchema,
 )
-from recap.server.audit import AuditRecord
 from recap.server.errors import request_id_from
 from recap.server.rest_models import (
     CopyResourceRequest,
@@ -37,14 +36,10 @@ from recap.server.rest_models import (
     UpdateResourceRequest,
 )
 from recap.server.security import authenticate_request
+from recap.utils.namespace import canonicalize_namespace_path
 
 router = APIRouter(prefix="/api/v1")
 _ETAG = re.compile(r'(?:W/)?"?([1-9][0-9]*)"?')
-
-
-class _DiscardAuditSink:
-    def emit(self, record: AuditRecord) -> None:
-        pass
 
 
 def _context(request: Request, actor: RequestActor, idempotency_key: str):
@@ -60,7 +55,7 @@ def _context(request: Request, actor: RequestActor, idempotency_key: str):
         actor=actor,
         request_id=request_id_from(request),
         policy=policy,
-        audit_sink=_DiscardAuditSink(),
+        audit_sink=DiscardAuditSink(),
         authorization_generation=None,
         idempotency_key=idempotency_key,
     )

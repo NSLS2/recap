@@ -173,6 +173,11 @@ class ProcessRun(RevisionedLifecycleMixin, TimestampMixin, Base):
         slot = assignment.resource_slot
         resource = assignment.resource
 
+        if slot.process_template is not self.template:
+            raise ValueError(
+                f"Slot {slot.name} does not belong to process template {self.template.name}"
+            )
+
         # Resource must advertise the slot's type via its template's types
         resource_type_ids = {rt.id for rt in resource.template.types}
         if slot.resource_type_id not in resource_type_ids:

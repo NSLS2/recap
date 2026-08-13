@@ -1,10 +1,8 @@
 import json
-import warnings
 from collections.abc import Sequence
 from contextlib import contextmanager
-from copy import deepcopy
 from typing import Any, Literal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import BaseModel, Field, TypeAdapter, create_model
 from pydantic import ValidationError as PydanticError
@@ -16,15 +14,13 @@ from sqlalchemy import (
     cast,
     exists,
     func,
-    insert,
     select,
 )
-from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import and_, or_
 from sqlalchemy.sql.functions import count
 
-from recap.adapter import Backend, UnitOfWork
+from recap.adapter import Backend
 from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
 from recap.adapter.query_loaders import (
     preload_options,
@@ -32,32 +28,25 @@ from recap.adapter.query_loaders import (
 )
 from recap.adapter.resource_construct import ResourceSchemaHydrator
 from recap.authorization.query import AuthorizedQuery
+from recap.commands.models import CommandContext, CommandModel
+from recap.commands.service import CommandService
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate, AttributeValue
 from recap.db.base import Base
-from recap.db.exceptions import ValidationError
 from recap.db.namespace import Namespace, NamespaceRepository
 from recap.db.process import (
-    Direction,
     ProcessRun,
     ProcessTemplate,
     ResourceAssignment,
-    ResourceSlot,
 )
 from recap.db.resource import (
     Property,
     Resource,
     ResourceTemplate,
     ResourceType,
-    resource_template_type_association,
 )
-from recap.db.step import Parameter, Step, StepTemplate, StepTemplateResourceSlotBinding
+from recap.db.step import Parameter, Step
 from recap.dsl.query import FieldOrdering, FieldPredicate, QuerySpec, SchemaT
-from recap.exceptions import ExistingResourceError, ExistingResourceWarning
 from recap.lifecycle import LifecycleStatus
-from recap.schemas.attribute import (
-    AttributeGroupRef,
-    AttributeTemplateSchema,
-)
 from recap.schemas.namespace import NamespaceContext, NamespaceSchema
 from recap.schemas.process import (
     ProcessRunRef,
@@ -66,24 +55,19 @@ from recap.schemas.process import (
     ProcessTemplateSchema,
 )
 from recap.schemas.resource import (
-    ResourceCopyOptions,
     ResourceRef,
     ResourceSchema,
-    ResourceSlotSchema,
     ResourceTemplateRef,
     ResourceTemplateSchema,
-    ResourceTypeSchema,
 )
 from recap.schemas.step import (
     StepSchema,
-    StepTemplateRef,
-    StepTemplateSchema,
 )
-from recap.utils.database import get_or_create, load_single
+from recap.utils.database import load_single
 from recap.utils.dsl import AliasMixin, build_param_values_model, resolve_path
 from recap.utils.general import make_slug, to_json_compatible
 from recap.utils.loaders import chain_load
-from recap.utils.namespace import is_namespace_ancestor, namespace_ancestors
+from recap.utils.namespace import namespace_ancestors
 
 SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
     NamespaceSchema: Namespace,
@@ -172,97 +156,55 @@ def _apply_field_expressions(model, stmt, spec, joined_paths):
     return stmt
 
 
-class SQLUnitOfWork(UnitOfWork):
-    def __init__(self, backend: "LocalBackend", session: Session, tx):
-        self._backend = backend
-        self._session = session
-        self._tx = tx
-
-    def commit(self, clear_session=True):
-        self._tx.commit()
-        if clear_session:
-            self._backend._clear_session(self._session)
-
-    def end_session(self):
-        self._backend._clear_session(self._session)
-
-    def rollback(self):
-        self._tx.rollback()
-        self._backend._clear_session(self._session)
-
-
 class LocalBackend(Backend):
     def __init__(self, session_factory):
         self._session_factory = session_factory
-        self._session: Session | None = None
-
-    def _get_session(self) -> Session:
-        if self._session is None:
-            raise RuntimeError("No active session; call begin() first")
-        return self._session
-
-    @property
-    def session(self) -> Session:
-        return self._get_session()
-
-    def _clear_session(self, session: Session):
-        if self._session is session:
-            session.close()
-            self._session = None
 
     def close(self):
-        """Close any active session if it is still open."""
-        if self._session is not None:
-            self._session.close()
-            self._session = None
+        """Retained for client lifecycle compatibility; sessions are short-lived."""
+        return None
+
+    def execute(self, command: CommandModel, context: CommandContext) -> object:
+        return CommandService(self._session_factory).execute(command, context)
 
     @contextmanager
     def _session_scope(self):
-        """Yield a session, closing it if we had to create one."""
-        if self._session is not None:
-            yield self._session
-            return
+        """Yield one short-lived read session."""
         session = self._session_factory()
         try:
             yield session
         finally:
             session.close()
 
-    def begin(self) -> UnitOfWork:
-        if self._session is not None:
-            raise RuntimeError(
-                "An active session already exists; nested begin() calls are not supported"
-            )
-        session = self._session_factory()
-        tx = session.begin()
-        self._session = session
-        return SQLUnitOfWork(self, session, tx)
-
     def create_namespace(
-        self, path: str, metadata: dict[str, Any] | None = None
-    ) -> NamespaceContext:
-        namespace = NamespaceRepository(self.session).create(path, metadata)
-        namespace.status = LifecycleStatus.ACTIVE
-        self.session.flush()
-        return NamespaceContext.model_validate(namespace)
-
-    def set_namespace(self, id: UUID) -> NamespaceContext:
-        namespace = self.session.get(Namespace, id)
-        if namespace is None:
-            raise ValueError(f"Namespace with ID {id} not found")
-        return NamespaceContext.model_validate(namespace)
-
-    def create_process_template(
-        self, namespace_id: UUID, name: str, version: str
-    ) -> ProcessTemplateRef | None:
-        template, created = get_or_create(
-            self.session,
-            ProcessTemplate,
-            {"namespace_id": namespace_id, "name": name, "version": version},
-            {},
+        self,
+        path: str,
+        metadata: dict[str, Any] | None = None,
+        context: CommandContext | None = None,
+    ) -> NamespaceContext | NamespaceSchema:
+        if context is None:
+            raise ValueError("Command context is required")
+        return CommandService(self._session_factory).create_namespace(
+            context,
+            path=path,
+            metadata=metadata,
         )
-        if created:
-            return ProcessTemplateRef.model_validate(template)
+
+    def update_namespace(
+        self,
+        namespace_id: UUID,
+        expected_revision: int,
+        metadata: dict[str, Any] | None,
+        status: LifecycleStatus | None,
+        context: CommandContext,
+    ) -> NamespaceSchema:
+        return CommandService(self._session_factory).update_namespace(
+            context,
+            namespace_id=namespace_id,
+            expected_revision=expected_revision,
+            metadata=metadata,
+            status=status,
+        )
 
     def get_process_template(
         self,
@@ -290,243 +232,11 @@ class LocalBackend(Backend):
                 chain_load(ProcessTemplate.step_templates),
                 chain_load(ProcessTemplate.resource_slots),
             )
-        process_template = load_single(self.session, statement, label="ProcessTemplate")
-        if expand:
-            return ProcessTemplateSchema.model_validate(process_template)
-        return ProcessTemplateRef.model_validate(process_template)
-
-    def add_resource_slot(
-        self,
-        name: str,
-        resource_type: str,
-        direction: Direction,
-        process_template_ref: ProcessTemplateRef,
-        create_resource_type=False,
-        required: bool = True,
-    ) -> ResourceSlotSchema:
-        rt = self.session.execute(
-            select(ResourceType).filter_by(name=resource_type)
-        ).scalar_one_or_none()
-        if rt is None:
-            if not create_resource_type:
-                raise ValueError(
-                    f"Could not find resource_type named {resource_type}. Use create_resource_type=True to create one"
-                )
-            else:
-                rt = ResourceType(name=resource_type)
-                self.session.add(rt)
-        slot, _ = get_or_create(
-            self.session,
-            ResourceSlot,
-            where={"process_template_id": process_template_ref.id, "name": name},
-            defaults={
-                "resource_type": rt,
-                "direction": direction,
-                "required": required,
-            },
-        )
-        if slot.resource_type_id != rt.id or slot.direction != direction:
-            raise ValueError(
-                f"ResourceSlot {name} already exists with different type/direction"
-            )
-        return ResourceSlotSchema.model_validate(slot)
-
-    def add_step(
-        self, name: str, process_template_ref: ProcessTemplateRef
-    ) -> StepTemplateRef:
-        step_template, _ = get_or_create(
-            self.session,
-            StepTemplate,
-            where={"name": name, "process_template_id": process_template_ref.id},
-            defaults={},
-        )
-        return StepTemplateRef.model_validate(step_template)
-
-    def bind_slot(
-        self,
-        role: str,
-        slot_name: str,
-        process_template_ref: ProcessTemplateRef,
-        step_template_ref: StepTemplateRef,
-    ) -> ResourceSlotSchema | None:
-        slot = self.session.scalars(
-            select(ResourceSlot).where(
-                ResourceSlot.process_template_id == process_template_ref.id,
-                ResourceSlot.name == slot_name,
-            )
-        ).one_or_none()
-        if slot is None:
-            warnings.warn(
-                f"Did not find ResourceSlot named {slot_name}. Nothing added",
-                stacklevel=2,
-            )
-            return
-        step_template = self.session.scalars(
-            select(StepTemplate).where(StepTemplate.id == step_template_ref.id)
-        ).one()
-        step_template.resource_slots[role] = slot
-        return ResourceSlotSchema.model_validate(slot)
-
-    def add_attr_group(
-        self, group_name: str, template_ref: StepTemplateRef | ResourceTemplateRef
-    ) -> AttributeGroupRef:
-        filter_params: dict[str, Any] = {"name": group_name}
-        if isinstance(template_ref, StepTemplateRef | StepTemplateSchema):
-            filter_params["step_template_id"] = template_ref.id
-        elif isinstance(template_ref, ResourceTemplateRef | ResourceTemplateSchema):
-            filter_params["resource_template_id"] = template_ref.id
-        results = list(
-            self.session.scalars(
-                select(AttributeGroupTemplate)
-                .filter_by(**filter_params)
-                .order_by(AttributeGroupTemplate.create_date)
-            )
-        )
-        if results:
-            if len(results) > 1:
-                warnings.warn(
-                    f"Multiple attribute groups named {group_name!r} exist for template "
-                    f"{template_ref}; using the first existing group.",
-                    stacklevel=2,
-                )
-            attr_group_template = results[0]
-        else:
-            attr_group_template = AttributeGroupTemplate(**filter_params)
-            self.session.add(attr_group_template)
-            self.session.flush()
-        return AttributeGroupRef.model_validate(attr_group_template)
-
-    def add_attribute(
-        self,
-        name: str,
-        value_type: str,
-        unit: str,
-        default: Any,
-        attribute_group_ref: AttributeGroupRef,
-        metadata: dict[str, Any] | None = None,
-    ) -> AttributeTemplateSchema:
-        # The default_value column is Mapped[str | None].  Non-string values
-        # (e.g. MutableList from type="array") must be serialized to a JSON
-        # string so they can be stored and compared in filter_by().
-        if isinstance(default, list):
-            serialized_default = json.dumps(default, default=str)
-        else:
-            serialized_default = default
-
-        filter_params: dict[str, Any] = {
-            "name": name,
-            "value_type": value_type,
-            "unit": unit,
-            "default_value": serialized_default,
-            "attribute_group_template_id": attribute_group_ref.id,
-            "metadata_json": metadata or {},
-        }
-        attribute_template = self.session.execute(
-            select(AttributeTemplate).filter_by(**filter_params)
-        ).scalar_one_or_none()
-        if attribute_template is None:
-            attribute_template = AttributeTemplate(**filter_params)
-            self.session.add(attribute_template)
-            self.session.flush()
-
-        return AttributeTemplateSchema.model_validate(attribute_template)
-
-    def remove_attribute(self, name: str, attribute_group: AttributeGroupRef):
-        attribute = self.session.execute(
-            select(AttributeTemplate).filter_by(
-                name=name, attribute_group_template_id=attribute_group.id
-            )
-        ).scalar_one_or_none()
-        if attribute is None:
-            warnings.warn(
-                f"Property does not exist in group {attribute_group.name}: {name}",
-                stacklevel=2,
-            )
-        self.session.delete(attribute)
-        self.session.flush()
-
-    def add_resource_types(self, type_names: list[str]) -> list[ResourceTypeSchema]:
-        resource_type_schemas = []
-        for type_name in type_names:
-            where = {"name": type_name}
-            resource_type, _ = get_or_create(self.session, ResourceType, where=where)
-            resource_type_schemas.append(
-                ResourceTypeSchema.model_validate(resource_type)
-            )
-
-        return resource_type_schemas
-
-    def add_resource_template(
-        self,
-        namespace_id: UUID,
-        name: str,
-        types: list[ResourceTypeSchema],
-        version: str = "1.0",
-    ) -> ResourceTemplateRef:
-        template = ResourceTemplate(
-            namespace_id=namespace_id,
-            name=name,
-            version=version,
-            # types=types,
-        )
-        self.session.add(template)
-        self.session.flush()
-        type_ids = [type.id for type in types]
-        if type_ids:
-            self.session.execute(
-                insert(resource_template_type_association),
-                [
-                    {"resource_template_id": template.id, "resource_type_id": type_id}
-                    for type_id in type_ids
-                ],
-            )
-        return ResourceTemplateRef.model_validate(template)
-
-    def add_child_resource_template(
-        self,
-        name: str,
-        resource_types: list[ResourceTypeSchema],
-        parent_resource_template: ResourceTemplateRef | ResourceTemplateSchema,
-        version: str = "1.0",
-    ) -> ResourceTemplateRef:
-        stmt = select(ResourceType).where(
-            ResourceType.id.in_([type.id for type in resource_types])
-        )
-        resource_type_results = self.session.scalars(stmt).all()
-
-        template = ResourceTemplate(
-            name=name,
-            version=version,
-            types=resource_type_results,
-            namespace_id=parent_resource_template.namespace_id,
-        )
-        parent_template = self.session.get(
-            ResourceTemplate, parent_resource_template.id
-        )
-        if parent_template is None:
-            raise NoResultFound(
-                f"Parent template: {parent_resource_template.name} with id {parent_resource_template.id} not found"
-            )
-        parent_template.children[template.name] = template
-        self.session.add(template)
-        self.session.flush()
-        return ResourceTemplateRef.model_validate(template)
-
-    def add_child_resources(
-        self,
-        parent_resource: ResourceSchema | ResourceRef,
-        child_resources: list[ResourceSchema | ResourceRef],
-    ):
-        parent = self.session.get(Resource, parent_resource.id)
-        children_stmt = select(Resource).where(
-            Resource.id.in_([r.id for r in child_resources])
-        )
-        child_resources_results = self.session.scalars(children_stmt).all()
-        if parent:
-            for c in child_resources_results:
-                parent.children[c.name] = c
-        self.session.add(parent)
-        self.session.flush()
+        with self._session_scope() as session:
+            process_template = load_single(session, statement, label="ProcessTemplate")
+            if expand:
+                return ProcessTemplateSchema.model_validate(process_template)
+            return ProcessTemplateRef.model_validate(process_template)
 
     def get_resource_template(
         self,
@@ -559,11 +269,11 @@ class LocalBackend(Backend):
                 chain_load(ResourceTemplate.children),
                 chain_load(ResourceTemplate.attribute_group_templates),
             )
-        template = load_single(self.session, statement, label="ResourceTemplate")
-
-        if expand:
-            return ResourceTemplateSchema.model_validate(template)
-        return ResourceTemplateRef.model_validate(template)
+        with self._session_scope() as session:
+            template = load_single(session, statement, label="ResourceTemplate")
+            if expand:
+                return ResourceTemplateSchema.model_validate(template)
+            return ResourceTemplateRef.model_validate(template)
 
     def find_resources_by_identity(
         self,
@@ -590,176 +300,8 @@ class LocalBackend(Backend):
             )
             .order_by(Resource.create_date, Resource.id)
         )
-        return list(self.session.scalars(stmt).all())
-
-    def create_resource(
-        self,
-        namespace_id: UUID,
-        name: str,
-        resource_template: ResourceTemplateRef | ResourceTemplateSchema,
-        parent_resource: ResourceRef | ResourceSchema | None = None,
-        expand=False,
-        on_existing: Literal["create", "silent", "warn", "raise"] = "create",
-    ) -> ResourceRef | ResourceSchema:
-        parent_id = parent_resource.id if parent_resource else None
-        template_model = self.session.get(ResourceTemplate, resource_template.id)
-
-        if on_existing != "create":
-            matches = self.find_resources_by_identity(
-                namespace_id, name, parent_id, resource_template.id
-            )
-            if matches:
-                existing = matches[0]
-                if on_existing == "raise":
-                    raise ExistingResourceError(f"Resource {name!r} already exists")
-                if on_existing == "warn":
-                    warnings.warn(
-                        f"Resource {name!r} already exists and will be reused; "
-                        "no new resource will be created.",
-                        ExistingResourceWarning,
-                        stacklevel=2,
-                    )
-                if expand:
-                    return ResourceSchema.model_validate(existing)
-                return ResourceRef.model_validate(existing)
-
-        resource = Resource(
-            namespace=self.session.get(Namespace, namespace_id),
-            name=name,
-            resource_template_id=resource_template.id,
-            parent_id=parent_id,
-            template=template_model,
-        )
-
-        # Guard against the DB UNIQUE constraint on (parent_id, name).
-        # This is a broader check than find_resources_by_identity (which also
-        # filters by template_id) — two children under the same parent cannot
-        # share a name regardless of template.
-        if parent_id is not None:
-            dup = self.session.scalars(
-                select(Resource).where(
-                    Resource.parent_id == parent_id,
-                    Resource.name == name,
-                )
-            ).first()
-            if dup is not None:
-                raise ValidationError(
-                    "name",
-                    f"Resource {name!r} already exists under parent {parent_id!r}",
-                )
-
-        self.session.add(resource)
-        self.session.flush()
-        if expand:
-            return ResourceSchema.model_validate(resource)
-        return ResourceRef.model_validate(resource)
-
-    def copy_resource(  # noqa: C901
-        self,
-        source_resource_id: UUID,
-        destination_namespace_id: UUID,
-        options: ResourceCopyOptions,
-    ) -> ResourceSchema:
-        source_resources = self._load_resource_subtrees(
-            self.session, [source_resource_id]
-        )
-        if not source_resources:
-            raise LookupError(f"Resource does not exist: {source_resource_id}")
-
-        source_by_id = {resource.id: resource for resource in source_resources}
-        source = source_by_id[source_resource_id]
-        if source.parent_id is not None:
-            raise ValueError("Source resource must be a resource graph root")
-
-        destination = self.session.get(Namespace, destination_namespace_id)
-        if destination is None:
-            raise LookupError(
-                f"Destination namespace does not exist: {destination_namespace_id}"
-            )
-        if not is_namespace_ancestor(source.namespace.path, destination.path):
-            raise ValueError(
-                "Destination namespace must be the source namespace or its descendant"
-            )
-
-        children_by_parent: dict[UUID, list[Resource]] = {}
-        for resource in source_resources:
-            if resource.parent_id is not None:
-                children_by_parent.setdefault(resource.parent_id, []).append(resource)
-
-        def clone_resource(
-            original: Resource, parent: Resource | None = None
-        ) -> Resource:
-            clone = Resource(
-                id=uuid4(),
-                name=original.name,
-                template=original.template,
-                namespace=destination,
-                parent=parent,
-                status=LifecycleStatus.MUTABLE,
-                revision=1,
-                _init_children=False,
-            )
-            for original_property in original.properties.values():
-                copied_property = Property(
-                    id=uuid4(), template=original_property.template, resource=clone
-                )
-                for name, original_value in original_property._values.items():
-                    copied_value = copied_property._values[name]
-                    copied_value.id = uuid4()
-                    copied_value.value_json = deepcopy(original_value.value_json)
-                    copied_value.unit = original_value.unit
-                    copied_value.metadata_json = deepcopy(original_value.metadata_json)
-            for child in children_by_parent.get(original.id, []):
-                clone_resource(child, clone)
-            return clone
-
-        copied_root = clone_resource(source)
-        copied_root.copied_from = source
-        self.session.add(copied_root)
-
-        if options.name is not None:
-            copied_root.name = options.name
-        for group_name, changes in options.changes.properties.items():
-            copied_property = next(
-                (
-                    prop
-                    for prop in copied_root.properties.values()
-                    if group_name in {prop.template.name, prop.template.slug}
-                ),
-                None,
-            )
-            if copied_property is None:
-                raise ValueError(
-                    f"Copied resource has no property group {group_name!r}"
-                )
-            for attribute_name, raw_value in changes.items():
-                copied_value = next(
-                    (
-                        value
-                        for value in copied_property._values.values()
-                        if attribute_name in {value.template.name, value.template.slug}
-                    ),
-                    None,
-                )
-                if copied_value is None:
-                    raise ValueError(
-                        f"Property {attribute_name!r} not found in group {group_name!r}"
-                    )
-                if isinstance(raw_value, dict):
-                    copied_value.set_value(deepcopy(raw_value.get("value")))
-                    if "unit" in raw_value:
-                        copied_value.unit = raw_value["unit"]
-                    if "metadata_json" in raw_value:
-                        copied_value.metadata_json = deepcopy(
-                            raw_value["metadata_json"]
-                        )
-                else:
-                    copied_value.set_value(deepcopy(raw_value))
-
-        if source.status is LifecycleStatus.MUTABLE:
-            source.activate()
-        self.session.flush()
-        return ResourceSchema.model_validate(copied_root)
+        with self._session_scope() as session:
+            return list(session.scalars(stmt).all())
 
     def get_resource(
         self,
@@ -803,146 +345,6 @@ class LocalBackend(Backend):
 
             return ResourceRef.model_validate(resource)
 
-    def create_process_run(
-        self,
-        namespace_id: UUID,
-        name: str,
-        description: str,
-        process_template: ProcessTemplateRef | ProcessTemplateSchema,
-    ) -> ProcessRunSchema:
-        statement = select(ProcessTemplate).where(
-            ProcessTemplate.id == process_template.id
-        )
-        process_template_model = load_single(
-            self.session, statement, label="ProcessTemplate"
-        )
-        process_run = ProcessRun(
-            namespace_id=namespace_id,
-            name=name,
-            description=description,
-            template=process_template_model,
-        )
-        self.session.add(process_run)
-        self.session.flush()
-        return ProcessRunSchema.model_validate(process_run)
-
-    def assign_resource(
-        self,
-        resource_slot: ResourceSlotSchema,
-        resource: ResourceRef | ResourceSchema,
-        process_run: ProcessRunSchema,
-    ) -> ProcessRunSchema:
-        resource_slot_model = load_single(
-            self.session,
-            select(ResourceSlot).where(ResourceSlot.id == resource_slot.id),
-            label="ResourceSlot",
-        )
-        resource_model = load_single(
-            self.session,
-            select(Resource)
-            .where(Resource.id == resource.id)
-            .options(chain_load(Resource.template, ResourceTemplate.types)),
-            label="Resource",
-        )
-        process_run_model = load_single(
-            self.session,
-            select(ProcessRun)
-            .where(ProcessRun.id == process_run.id)
-            .options(
-                chain_load(ProcessRun.assignments),
-                chain_load(ProcessRun.template),
-            ),
-            label="ProcessRun",
-        )
-
-        if (
-            resource_slot_model.process_template_id
-            != process_run_model.process_template_id
-        ):
-            raise ValueError(
-                f"Resource slot {resource_slot_model.name!r} does not belong to "
-                f"process template for run {process_run_model.name!r}"
-            )
-
-        if resource_model.template is None:
-            raise ValueError(
-                f"Resource {resource_model.name!r} must have a template with types"
-            )
-
-        template_type_ids = {rt.id for rt in resource_model.template.types}
-        if resource_slot_model.resource_type_id not in template_type_ids:
-            raise ValueError(
-                f"Resource {resource_model.name!r} does not match required type for "
-                f"slot {resource_slot_model.name!r}"
-            )
-
-        for existing in process_run_model.assignments.values():
-            if existing.resource_slot_id == resource_slot_model.id:
-                raise ValueError(
-                    f"Slot {resource_slot_model.name!r} is already assigned in "
-                    f"run {process_run_model.name!r}"
-                )
-
-        try:
-            process_run_model.resources[resource_slot_model] = resource_model
-        except ValueError as exc:
-            raise ValueError(
-                f"Could not assign resource {resource_model.name!r} "
-                f"to slot {resource_slot_model.name!r}: {exc}"
-            ) from exc
-
-        return ProcessRunSchema.model_validate(process_run_model)
-
-    def set_process_template_status(self, template_id: UUID, status: LifecycleStatus):
-        self._set_lifecycle_status(ProcessTemplate, template_id, status)
-
-    def set_process_run_status(self, run_id: UUID, status: LifecycleStatus):
-        self._set_lifecycle_status(ProcessRun, run_id, status)
-
-    def set_resource_template_status(self, template_id: UUID, status: LifecycleStatus):
-        self._set_lifecycle_status(ResourceTemplate, template_id, status)
-
-    def set_resource_status(self, resource_id: UUID, status: LifecycleStatus):
-        self._set_lifecycle_status(Resource, resource_id, status)
-
-    def _set_lifecycle_status(self, model, object_id: UUID, status: LifecycleStatus):
-        obj = self.session.get(model, object_id)
-        if obj is None:
-            raise LookupError(f"{model.__name__} does not exist: {object_id}")
-        if status is LifecycleStatus.ACTIVE:
-            if isinstance(obj, ProcessRun):
-                obj.finalize()
-            else:
-                obj.activate()
-        else:
-            obj.archive()
-        self.session.flush()
-
-    def check_resource_assignment(
-        self,
-        process_template: ProcessTemplateRef | ProcessTemplateSchema,
-        process_run: ProcessRunSchema,
-    ):
-        statement = select(ResourceSlot).where(
-            ResourceSlot.process_template_id == process_template.id,
-        )
-        _resource_slots = self.session.scalars(statement).all()
-        # Only required slots must be assigned
-        required_ids = {slot.id for slot in _resource_slots if slot.required}
-        assigned_ids = {ar.slot.id for ar in process_run.assigned_resources.values()}
-
-        missing_ids = required_ids - assigned_ids
-        if not missing_ids:
-            return
-
-        missing_names = [
-            slot.name for slot in _resource_slots if slot.id in missing_ids
-        ]
-        raise ValueError(
-            f"Process run {process_run.name} is missing resources for slots: "
-            f"{', '.join(missing_names)}"
-        )
-
     def get_steps(self, process_run: ProcessRunSchema) -> list[StepSchema]:
         statement = (
             select(Step)
@@ -956,214 +358,57 @@ class LocalBackend(Backend):
                 chain_load(Step.assignments, ResourceAssignment.resource_slot),
             )
         )
-        steps = self.session.scalars(statement).all()
-        return [StepSchema.model_validate(step) for step in steps]
+        with self._session_scope() as session:
+            steps = session.scalars(statement).all()
+            return [StepSchema.model_validate(step) for step in steps]
 
     def get_params(self, step_schema: StepSchema) -> type[BaseModel]:
         statement = select(Step).where(
             Step.id == step_schema.id,
         )
-        step: Step | None = self.session.scalars(statement).one_or_none()
-        if step is None:
-            raise LookupError(f"Step not found: {step_schema.name}")
-        params: dict[str, tuple] = {
-            "step_name": (
-                Literal[f"{step_schema.name}"],
-                Field(default=step_schema.name),
-            ),
-            "step_id": (UUID, Field(default=step.id)),
-        }
-        for _name, param in step.parameters.items():
-            tmpl_key = tuple(
-                (
-                    vt.name,
-                    vt.slug,
-                    vt.value_type,
-                    vt.metadata_json,
-                    vt.unit,
-                )
-                for vt in param.template.attribute_templates
-            )
-            values_model = build_param_values_model(param.template.slug, tmpl_key)
-            raw_values = {
-                av.template.name: {"value": av.value, "unit": av.unit}
-                for av in param._values.values()
+        with self._session_scope() as session:
+            step: Step | None = session.scalars(statement).one_or_none()
+            if step is None:
+                raise LookupError(f"Step not found: {step_schema.name}")
+            params: dict[str, tuple] = {
+                "step_name": (
+                    Literal[f"{step_schema.name}"],
+                    Field(default=step_schema.name),
+                ),
+                "step_id": (UUID, Field(default=step.id)),
             }
-            params[param.template.slug] = (
-                values_model,
-                Field(
-                    default_factory=lambda vm=values_model,
-                    values=raw_values: vm.model_validate(values),
-                    alias=param.template.name,
-                ),
-            )
-        model = create_model(
-            f"{step_schema.name}", **params, __base__=(AliasMixin, BaseModel)
-        )
-        return model()
-
-    def set_params(self, filled_params: type[BaseModel]):
-        statement = select(Step).where(Step.id == filled_params.step_id)
-        step: Step | None = self.session.scalars(statement).one_or_none()
-        if step is None:
-            raise LookupError(f"Step not found in database: {filled_params.step_name}")
-        for param in step.parameters.values():
-            filled_param = filled_params.get(param.template.name)
-            for value_name, av in param._values.items():
-                entry = filled_param.get(value_name)
-                if isinstance(entry, dict):
-                    av.set_value(entry.get("value"))
-                    unit = entry.get("unit")
-                else:
-                    av.set_value(getattr(entry, "value", entry))
-                    unit = getattr(entry, "unit", None)
-                av.unit = av.template.unit if unit is None else unit
-        # Flush so that _reload_process_run sees the updated values
-        self.session.flush()
-
-    def add_child_step(  # noqa
-        self, process_run: ProcessRunSchema, child_step: StepSchema
-    ) -> StepSchema:
-        pr_model = load_single(
-            self.session,
-            select(ProcessRun)
-            .where(ProcessRun.id == process_run.id)
-            .options(
-                chain_load(ProcessRun.steps, Step.parameters, Parameter._values),
-                chain_load(
-                    ProcessRun.steps,
-                    Step.assignments,
-                    ResourceAssignment.resource,
-                    Resource.template,
-                ),
-                chain_load(
-                    ProcessRun.steps, Step.assignments, ResourceAssignment.resource_slot
-                ),
-                chain_load(
-                    ProcessRun.assignments,
-                    ResourceAssignment.resource,
-                    Resource.children,
-                ),
-            ),
-            label="ProcessRun",
-        )
-
-        parent_step = next(
-            (s for s in pr_model.steps.values() if s.id == child_step.parent_id), None
-        )
-        if parent_step is None:
-            raise ValueError(
-                f"Parent step with id {child_step.parent_id} not found in run {pr_model.name}"
-            )
-
-        template = load_single(
-            self.session,
-            select(StepTemplate)
-            .where(
-                StepTemplate.process_template_id == pr_model.process_template_id,
-                StepTemplate.id == child_step.template.id,
-            )
-            .options(
-                chain_load(
-                    StepTemplate.bindings, StepTemplateResourceSlotBinding.resource_slot
-                )
-            ),
-            label="StepTemplate",
-        )
-
-        step_name = child_step.name if child_step.name else template.name
-        if pr_model.steps:
-            idx = 1
-            while step_name in pr_model.steps:
-                idx += 1
-                step_name = f"{step_name} ({idx})"
-
-        with self.session.no_autoflush:
-            step = Step(template=template, name=step_name)
-            # Add before setting parent/backrefs to avoid transient-child warnings.
-            self.session.add(step)
-            step.parent = parent_step
-            pr_model.steps[step.name] = step
-
-        if child_step.parameters:
-            for group_name, params in child_step.parameters.items():
-                if group_name not in step.parameters:
-                    raise ValueError(
-                        f"Step {step_name} has no parameter group {group_name}"
+            for param in step.parameters.values():
+                template_key = tuple(
+                    (
+                        value_template.name,
+                        value_template.slug,
+                        value_template.value_type,
+                        value_template.metadata_json,
+                        value_template.unit,
                     )
-                param = step.parameters[group_name]
-                for key, value in params.items():
-                    if key not in param._values:
-                        raise ValueError(
-                            f"Parameter {key} not found in group {group_name}"
-                        )
-                    av = param._values[key]
-                    if isinstance(value, dict):
-                        av.set_value(value.get("value"))
-                        unit = value.get("unit")
-                    else:
-                        av.set_value(getattr(value, "value", value))
-                        unit = getattr(value, "unit", None)
-                    av.unit = av.template.unit if unit is None else unit
-
-        if child_step.resources:
-            self._assign_step_resources(step, pr_model, child_step.resources)
-
-        self.session.flush()
-        return StepSchema.model_validate(step)
-
-    def _resource_is_descendant_or_same(self, candidate: Resource, root: Resource):
-        current = candidate
-        while current is not None:
-            if current.id == root.id:
-                return True
-            current = current.parent
-        return False
-
-    def _assign_step_resources(
-        self,
-        step: Step,
-        process_run_model: ProcessRun,
-        resources: dict[str, ResourceRef | ResourceSchema],
-    ):
-        slot_by_role = {
-            b.role: b.resource_slot for b in step.template.bindings.values()
-        }
-        for role, resource_ref in resources.items():
-            if role not in slot_by_role:
-                raise ValueError(
-                    f"Role {role} is not bound to a resource slot for step {step.template.name}"
+                    for value_template in param.template.attribute_templates
                 )
-            resource_model = self._load_resource_model(resource_ref)
-            slot = slot_by_role[role]
-            root_resource = process_run_model.resources.get(slot)
-            if root_resource is None:
-                raise ValueError(
-                    f"No resource assigned to slot {slot.name} for process run {process_run_model.name}"
+                values_model = build_param_values_model(
+                    param.template.slug, template_key
                 )
-            if not self._resource_is_descendant_or_same(resource_model, root_resource):
-                raise ValueError(
-                    f"Resource {resource_model.name} is not allowed for role {role}; "
-                    f"must be the assigned resource {root_resource.name} or its child"
+                raw_values = {
+                    value.template.name: {
+                        "value": value.value,
+                        "unit": value.unit,
+                    }
+                    for value in param._values.values()
+                }
+                params[param.template.slug] = (
+                    values_model,
+                    Field(
+                        default_factory=lambda vm=values_model, values=raw_values: vm.model_validate(values),
+                        alias=param.template.name,
+                    ),
                 )
-            with self.session.no_autoflush:
-                assignment = ResourceAssignment(
-                    process_run=process_run_model,
-                    resource_slot=slot,
-                    resource_slot_id=slot.id,
-                    step=step,
-                    step_id=step.id,
-                )
-                self.session.add(assignment)
-                assignment.resource = resource_model
-            step.assignments[slot.id] = assignment
-
-    def _load_resource_model(self, ref: ResourceRef | ResourceSchema) -> Resource:
-        return load_single(
-            self.session,
-            select(Resource).where(Resource.id == ref.id),
-            label="Resource",
-        )
+            model = create_model(
+                f"{step_schema.name}", **params, __base__=(AliasMixin, BaseModel)
+            )
+            return model()
 
     def _coerce_value(self, pf, left_expr):
         # For int/float, SQLite stores JSON numbers as native numeric types,
@@ -1560,12 +805,16 @@ class LocalBackend(Backend):
             if "__" not in raw_key:
                 simple_filters[raw_key] = value
                 continue
-            parts = tuple(raw_key.split("__"))
-            stmt, attr = resolve_path(model, stmt, parts, joined_paths)
-            stmt = stmt.where(attr == value)
 
         if simple_filters:
             stmt = stmt.filter_by(**simple_filters)
+
+        for raw_key, value in filters.items():
+            if "__" not in raw_key:
+                continue
+            parts = tuple(raw_key.split("__"))
+            stmt, attr = resolve_path(model, stmt, parts, joined_paths)
+            stmt = stmt.where(attr == value)
 
         if model is Resource:
             stmt = self._build_select_resource(model, stmt, spec)
@@ -1743,82 +992,3 @@ class LocalBackend(Backend):
 
     def get_opts_statements(self, schema, name):
         return preload_options(schema, name)
-
-    def update_process_run(self, process_run: ProcessRunSchema) -> ProcessRunSchema:
-        with self._session_scope() as session:
-            owns_tx = not session.in_transaction()
-            tx = session.begin() if owns_tx else None
-            for step_schema in process_run.steps.values():
-                step: Step = load_single(
-                    session,
-                    select(Step)
-                    .where(Step.id == step_schema.id)
-                    .options(chain_load(Step.parameters, Parameter._values)),
-                    label="Step",
-                )
-                for _, param_schema in step_schema.parameters.items():
-                    group_name = param_schema.template.name
-                    if group_name not in step.parameters:
-                        raise ValueError(
-                            f"Step {step_schema.name} has no parameter group {group_name}"
-                        )
-                    param = step.parameters[group_name]
-
-                    new_values = param_schema.values.model_dump(by_alias=True)
-                    for key, value in new_values.items():
-                        if key not in param._values:
-                            raise ValueError(
-                                f"Parameter {key} not found in group {group_name}"
-                            )
-                        av = param._values[key]
-                        if isinstance(value, dict):
-                            av.set_value(value.get("value"))
-                            unit = value.get("unit")
-                        else:
-                            av.set_value(value)
-                            unit = None
-                        av.unit = av.template.unit if unit is None else unit
-            session.flush()
-            if tx:
-                tx.commit()
-        return process_run
-
-    def update_resource(self, resource: ResourceSchema) -> ResourceSchema:
-        with self._session_scope() as session:
-            owns_tx = not session.in_transaction()
-            tx = session.begin() if owns_tx else None
-            res: Resource = load_single(
-                session,
-                select(Resource)
-                .where(Resource.id == resource.id)
-                .options(
-                    chain_load(Resource.properties, Property._values),
-                    chain_load(Resource.children),
-                ),
-                label="Resource",
-            )
-            for _, prop_schema in resource.properties.items():
-                tmpl_name = prop_schema.template.name
-                if tmpl_name not in res.properties:
-                    raise ValueError(
-                        f"Resource {resource.name} has no property group {tmpl_name}"
-                    )
-                prop = res.properties[tmpl_name]
-                new_values = prop_schema.values.model_dump(by_alias=True)
-                for key, value in new_values.items():
-                    if key not in prop._values:
-                        raise ValueError(
-                            f"Property {key} not found in group {tmpl_name}"
-                        )
-                    av = prop._values[key]
-                    if isinstance(value, dict):
-                        av.set_value(value.get("value"))
-                        unit = value.get("unit")
-                    else:
-                        av.set_value(value)
-                        unit = None
-                    av.unit = av.template.unit if unit is None else unit
-            session.flush()
-            if tx:
-                tx.commit()
-            return ResourceSchema.model_validate(res)

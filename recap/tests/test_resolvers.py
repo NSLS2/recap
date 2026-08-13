@@ -97,4 +97,4 @@ def test_resolve_namespaces_count(tmp_path):
     backend = make_backend(tmp_path)
     info = make_mock_info(backend)
     count = resolve_namespaces_count(info, namespace_path="test")
-    assert count == 1
+    assert count == 2

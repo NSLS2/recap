@@ -3,6 +3,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from sqlalchemy.orm import sessionmaker
+
 from recap.adapter.local import LocalBackend
 from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate
@@ -214,16 +216,26 @@ def test_aggregate_schemas_expose_namespace_lifecycle_and_copy_identity(db_sessi
     assert ResourceSchema.model_validate(copy).copied_from_id == source.id
 
 
-def test_backend_create_and_get_are_namespace_scoped(db_session):
+def test_backend_get_is_namespace_scoped(db_session):
     amx = _namespace("backend/amx")
     fmx = _namespace("backend/fmx")
-    db_session.add_all([amx, fmx])
-    db_session.flush()
-    backend = LocalBackend(lambda: db_session)
-    backend._session = db_session
-
-    amx_template = backend.create_process_template(amx.id, "data acquisition", "1")
-    fmx_template = backend.create_process_template(fmx.id, "data acquisition", "1")
+    factory = sessionmaker(bind=db_session.get_bind(), expire_on_commit=False)
+    with factory.begin() as session:
+        session.add_all(
+            [
+                amx,
+                fmx,
+                ProcessTemplate(namespace=amx, name="data acquisition", version="1"),
+                ProcessTemplate(namespace=fmx, name="data acquisition", version="1"),
+            ]
+        )
+    backend = LocalBackend(factory)
+    amx_template = backend.get_process_template(
+        amx.id, "data acquisition", "1", expand=False
+    )
+    fmx_template = backend.get_process_template(
+        fmx.id, "data acquisition", "1", expand=False
+    )
 
     assert amx_template.namespace_id == amx.id
     assert fmx_template.namespace_id == fmx.id

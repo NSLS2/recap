@@ -3,12 +3,8 @@ from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import update
 
 from recap.client import RecapClient
-from recap.db.process import ProcessRun, ProcessTemplate
-from recap.db.resource import Resource, ResourceTemplate
-from recap.lifecycle import LifecycleStatus
 
 
 def make_test_app(tmp_path):
@@ -43,12 +39,10 @@ def seed_resource_tree(db_path):
         builder.close_child()
     with client.build_resource("root", "Parent") as builder:
         builder.add_child("nested", "Child")
-    uow = client.backend.begin()
-    for model in (ProcessTemplate, ProcessRun, ResourceTemplate, Resource):
-        client.backend.session.execute(
-            update(model).values(status=LifecycleStatus.ACTIVE)
-        )
-    uow.commit()
+    root = client.get_resource("root", "Parent")
+    nested = client.create_resource("nested", "Child", parent=root)
+    client.build_resource(resource_id=nested.id).activate()
+    client.build_resource(resource_id=root.id).activate()
     client.close()
     return namespace_path
 
@@ -85,6 +79,29 @@ def test_graphql_endpoint_responds(tmp_path):
     assert "namespaces" in body["data"]
 
 
+def test_graphql_namespaces_include_mutable_namespaces(tmp_path):
+    from recap.server.app import create_app
+
+    api_key = "secret"
+    client = TestClient(create_app(tmp_path / "mutable.db", api_key=api_key))
+    headers = {"Authorization": f"Apikey {api_key}"}
+
+    response = client.put(
+        "/api/v1/namespaces/test",
+        headers={**headers, "Idempotency-Key": "test-namespace"},
+        json={"metadata": {}},
+    )
+    assert response.status_code == 201
+
+    response = client.post(
+        "/graphql",
+        headers=headers,
+        json={"query": '{ namespaces(namespace_path: "test") { path } }'},
+    )
+
+    assert response.json()["data"]["namespaces"] == [{"path": "test"}]
+
+
 def test_graphql_resources_empty(tmp_path):
     namespace_path = seed_namespace(tmp_path / "test.db")
     app = make_test_app(tmp_path)
@@ -117,7 +134,7 @@ def test_graphql_count_fields(tmp_path):
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["resources_count"] == 0
-    assert data["namespaces_count"] == 2
+    assert data["namespaces_count"] == 1
     assert data["resource_templates_count"] == 0
     assert data["process_templates_count"] == 0
 
@@ -125,7 +142,7 @@ def test_graphql_count_fields(tmp_path):
 def test_execute_query_posts_full_spec_and_returns_nested_transport_payload(tmp_path):
     db_path = tmp_path / "test.db"
     namespace_path = seed_resource_tree(db_path)
-    client = TestClient(make_test_app(tmp_path))
+    client = TestClient(make_test_app(db_path.parent))
 
     response = client.post(
         "/graphql",

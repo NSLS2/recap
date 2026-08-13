@@ -2,6 +2,7 @@ import warnings
 
 import pytest
 
+from recap.commands.models import UpdateResource, UpdateResourceTemplate
 from recap.dsl.process_builder import ProcessTemplateBuilder
 from recap.dsl.resource_builder import ResourceTemplateBuilder
 from recap.exceptions import (
@@ -19,12 +20,7 @@ from recap.utils.general import Direction
 
 def test_resource_builder_reuse_same_resource(client):
     # create once
-    with ResourceTemplateBuilder(
-        name="RB-Template",
-        type_names=["container"],
-        backend=client.backend,
-        namespace_id=client.namespace_context.id,
-    ) as rtb:
+    with client.build_resource_template(name="RB-Template", type_names=["container"]) as rtb:
         rtb.prop_group("details").add_attribute(
             "serial", "str", "", "abc"
         ).close_group()
@@ -39,23 +35,42 @@ def test_resource_builder_reuse_same_resource(client):
     assert refreshed.properties.details.values.serial.value == "xyz2"
 
 
+def test_reused_resource_clean_exit_skips_update_and_mutation_updates(client, monkeypatch):
+    with client.build_resource_template(
+        name="RB-Command-Template", type_names=["container"]
+    ) as template:
+        template.prop_group("properties").add_attribute(
+            "serial", "str", "", ""
+        ).close_group()
+    resource = client.create_resource("RB-Command-1", "RB-Command-Template")
+    commands = []
+    execute = client.backend.execute
+
+    def recording_execute(command, context):
+        commands.append(command)
+        return execute(command, context)
+
+    monkeypatch.setattr(client.backend, "execute", recording_execute)
+    with client.build_resource(
+        "RB-Command-1", "RB-Command-Template", on_existing="silent"
+    ):
+        pass
+    assert not any(isinstance(command, UpdateResource) for command in commands)
+
+    commands.clear()
+    with client.build_resource(
+        "RB-Command-1", "RB-Command-Template", on_existing="silent"
+    ) as builder:
+        builder.resource.properties["properties"].values["serial"] = "mutated"
+    assert sum(isinstance(command, UpdateResource) for command in commands) == 1
+
+
 def test_resource_template_builder_reuse_same_template(client):
-    with ResourceTemplateBuilder(
-        name="RTB",
-        type_names=["container"],
-        backend=client.backend,
-        namespace_id=client.namespace_context.id,
-    ) as rtb:
+    with client.build_resource_template(name="RTB", type_names=["container"]) as rtb:
         rtb.prop_group("meta").add_attribute("foo", "str", "", "").close_group()
     # reopen same template by ref and add another attribute
     existing = rtb.template
-    with ResourceTemplateBuilder(
-        name="RTB",
-        type_names=["container"],
-        backend=client.backend,
-        namespace_id=client.namespace_context.id,
-        resource_template_id=existing.id,
-    ) as rtb2:
+    with client.build_resource_template(resource_template_id=existing.id) as rtb2:
         rtb2.prop_group("meta").add_attribute("bar", "str", "", "").close_group()
 
     refreshed = rtb2.get_model(update=True)
@@ -65,13 +80,34 @@ def test_resource_template_builder_reuse_same_template(client):
     assert {"foo", "bar"} == fields
 
 
+def test_reused_resource_template_clean_exit_skips_update_and_mutation_updates(
+    client, monkeypatch
+):
+    with client.build_resource_template(name="RTB-Command", type_names=["container"]) as created:
+        pass
+    existing = created.template
+    commands = []
+    execute = client.backend.execute
+
+    def recording_execute(command, context):
+        commands.append(command)
+        return execute(command, context)
+
+    monkeypatch.setattr(client.backend, "execute", recording_execute)
+    with client.build_resource_template(resource_template_id=existing.id):
+        pass
+    assert not any(
+        isinstance(command, UpdateResourceTemplate) for command in commands
+    )
+
+    commands.clear()
+    with client.build_resource_template(resource_template_id=existing.id) as builder:
+        builder.prop_group("new").add_attribute("value", "str", "", "").close_group()
+    assert sum(isinstance(command, UpdateResourceTemplate) for command in commands) == 1
+
+
 def test_process_builder_reuse_same_run(client):
-    with ProcessTemplateBuilder(
-        backend=client.backend,
-        name="PTB",
-        version="1.0",
-        namespace_id=client.namespace_context.id,
-    ) as ptb:
+    with client.build_process_template("PTB", "1.0") as ptb:
         ptb.add_resource_slot(
             "slot1", "container", Direction.input, create_resource_type=True
         ).add_step("S1").param_group("pg").add_attribute(
@@ -113,12 +149,7 @@ def test_set_params_persists_after_reopen_by_id(client):
     4. Exit context (commit).
     5. Load in a fresh query — values must match what was set.
     """
-    with ProcessTemplateBuilder(
-        backend=client.backend,
-        name="PT-I4",
-        version="1.0",
-        namespace_id=client.namespace_context.id,
-    ) as ptb:
+    with client.build_process_template("PT-I4", "1.0") as ptb:
         ptb.add_resource_slot(
             "src", "container", Direction.input, create_resource_type=True
         ).add_step("Step-A").param_group("grp").add_attribute(
@@ -265,6 +296,7 @@ def test_process_run_builder_reuses_existing_with_warning(client):
         client.build_process_run("ReuseRun", "desc", "ReuseRunPT", "1.0") as prb,
     ):
         assert prb.process_run.name == "ReuseRun"
+        assert [step.name for step in prb._steps] == ["S1"]
 
 
 def test_process_run_builder_on_existing_raise_raises(client):
@@ -402,12 +434,7 @@ def test_slot_conflict_or_predicate(client):
 
 def _make_simple_template(client, name="OnExist-T"):
     """Helper: create a minimal resource template for on_existing tests."""
-    with ResourceTemplateBuilder(
-        name=name,
-        type_names=["container"],
-        backend=client.backend,
-        namespace_id=client.namespace_context.id,
-    ) as rtb:
+    with client.build_resource_template(name=name, type_names=["container"]) as rtb:
         rtb.prop_group("info").add_attribute("val", "str", "", "default").close_group()
     return rtb
 

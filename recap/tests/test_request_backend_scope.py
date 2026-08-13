@@ -19,7 +19,7 @@ class TrackingSession(Session):
         super().close()
 
 
-def test_each_request_gets_one_backend_and_session_and_closes_both():
+def test_each_request_gets_independent_backend_without_persistent_session():
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -34,8 +34,8 @@ def test_each_request_gets_one_backend_and_session_and_closes_both():
     @app.get("/scope")
     def scope(backend: LocalBackend = Depends(get_local_backend)):  # noqa: B008
         with observed_lock:
-            observed.append((backend, backend.session))
-        return {"backend": id(backend), "session": id(backend.session)}
+            observed.append(backend)
+        return {"backend": id(backend), "has_session": hasattr(backend, "_session")}
 
     with (
         TestClient(app) as client,
@@ -45,13 +45,12 @@ def test_each_request_gets_one_backend_and_session_and_closes_both():
 
     assert all(response.status_code == 200 for response in responses)
     assert len({response.json()["backend"] for response in responses}) == 2
-    assert len({response.json()["session"] for response in responses}) == 2
-    assert all(backend._session is None for backend, _ in observed)
-    assert all(session.closed for _, session in observed)
+    assert all(not response.json()["has_session"] for response in responses)
+    assert all(not hasattr(backend, "_session") for backend in observed)
     engine.dispose()
 
 
-def test_request_backend_closes_session_when_handler_raises():
+def test_request_backend_has_no_session_when_handler_raises():
     engine = create_engine("sqlite://")
     factory = sessionmaker(bind=engine, class_=TrackingSession)
     app = FastAPI()
@@ -60,15 +59,13 @@ def test_request_backend_closes_session_when_handler_raises():
 
     @app.get("/failure")
     def failure(backend: LocalBackend = Depends(get_local_backend)):  # noqa: B008
-        observed.append((backend, backend.session))
+        observed.append(backend)
         raise RuntimeError("boom")
 
     with TestClient(app, raise_server_exceptions=False) as client:
         assert client.get("/failure").status_code == 500
 
-    backend, session = observed[0]
-    assert backend._session is None
-    assert session.closed
+    assert not hasattr(observed[0], "_session")
     engine.dispose()
 
 

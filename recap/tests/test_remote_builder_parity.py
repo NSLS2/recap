@@ -3,11 +3,14 @@
 from unittest.mock import patch
 
 import httpx2
+import pytest
 from fastapi.testclient import TestClient
 
 from recap.adapter.graphql import GraphQLAdapter
 from recap.client import RecapClient
-from recap.schemas.resource import ResourceTemplateSchema
+from recap.dsl.query import QuerySpec
+from recap.schemas.process import ProcessRunSchema
+from recap.schemas.resource import ResourceSchema
 from recap.server.app import create_app
 
 
@@ -74,7 +77,14 @@ def test_remote_writes_are_visible_to_graphql_and_match_rest_entities(tmp_path):
         assert namespace_result.path == namespace.namespace_path
         assert copied["name"] == "S-001-copy"
         assert process_run["name"] == "run-001"
-        assert [item.name for item in namespace.query_maker().resources().all()] == [
+        assert [
+            item.name
+            for item in namespace._read_backend.query(
+                ResourceSchema,
+                QuerySpec(include_mutable=True),
+                namespace_path=namespace.namespace_path,
+            )
+        ] == [
             "S-001",
             "S-001-copy",
         ]
@@ -84,9 +94,14 @@ def test_remote_writes_are_visible_to_graphql_and_match_rest_entities(tmp_path):
         assert "Measure" in [
             item.name for item in namespace.query_maker().process_templates().all()
         ]
-        assert [item.name for item in namespace.query_maker().process_runs().all()] == [
-            "run-001"
-        ]
+        assert [
+            item.name
+            for item in namespace._read_backend.query(
+                ProcessRunSchema,
+                QuerySpec(include_mutable=True),
+                namespace_path=namespace.namespace_path,
+            )
+        ] == ["run-001"]
 
 
 def test_scoped_remote_query_uses_view_namespace():
@@ -125,9 +140,7 @@ def test_scoped_remote_public_builders_use_namespace_routes(tmp_path):
         patch.object(
             GraphQLAdapter,
             "get_resource_template",
-            side_effect=lambda *args, **kwargs: ResourceTemplateSchema.model_validate(
-                template_entity
-            ),
+            side_effect=AssertionError("builder must use GraphQL query()"),
         ),
         patch.object(GraphQLAdapter, "find_resources_by_identity", return_value=[]),
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
@@ -174,9 +187,7 @@ def test_scoped_remote_create_resource_uses_namespace_route(tmp_path):
         patch.object(
             GraphQLAdapter,
             "get_resource_template",
-            side_effect=lambda *args, **kwargs: ResourceTemplateSchema.model_validate(
-                template_entity
-            ),
+            side_effect=AssertionError("existing-resource reload must use query()"),
         ),
         patch.object(GraphQLAdapter, "find_resources_by_identity", return_value=[]),
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
@@ -188,7 +199,50 @@ def test_scoped_remote_create_resource_uses_namespace_route(tmp_path):
             pass
 
         resource = namespace.create_resource("S-001", "Sample")
+        query_paths = []
+
+        def query(_adapter, schema, spec, *, namespace_path):
+            query_paths.append(namespace_path)
+            return [resource]
+
+        with patch.object(GraphQLAdapter, "query", query):
+            with namespace.build_resource(resource_id=resource.id) as builder:
+                assert builder.resource.id == resource.id
+        assert query_paths == ["beamline/amx"]
 
         assert resource.name == "S-001"
         assert ("POST", "/api/v1/resources/beamline/amx") in request_paths
+        namespace.close()
+
+
+def test_remote_resource_builder_reports_missing_template_without_lookup(tmp_path):
+    db_path = tmp_path / "remote-missing-template.db"
+    api_key = "remote-secret"
+    app_client = TestClient(create_app(db_path, api_key=api_key))
+
+    def request(_client, method, url, **kwargs):
+        path = url.removeprefix("http://recap.test")
+        return app_client.request(method, path, **kwargs)
+
+    def post(_client, url, **kwargs):
+        return app_client.post("/graphql", **kwargs)
+
+    with (
+        patch.object(httpx2.Client, "request", request),
+        patch.object(httpx2.Client, "post", post),
+        patch.object(GraphQLAdapter, "query", return_value=[]),
+        patch.object(GraphQLAdapter, "get_resource_template") as get_template,
+        RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
+    ):
+        namespace = remote.namespace("beamline/amx")
+        remote.create_namespace("beamline")
+        namespace.create_namespace(namespace.namespace_path)
+
+        with pytest.raises(
+            ValueError,
+            match="Resource template 'Missing' version '1.0' not found",
+        ):
+            namespace.build_resource("S-001", "Missing")
+
+        get_template.assert_not_called()
         namespace.close()

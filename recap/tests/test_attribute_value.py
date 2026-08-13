@@ -1,9 +1,7 @@
 import pytest
 
-from recap.adapter.local import LocalBackend
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate, AttributeValue
 from recap.db.resource import Resource, ResourceTemplate
-from recap.schemas.resource import ResourceTemplateSchema
 
 
 def test_attribute_value_coercion_and_json_storage(db_session):
@@ -111,17 +109,22 @@ def test_enum_attribute_value_rejects_invalid_choice(db_session):
         av.value = "x"
 
 
-def test_add_attr_group_reuses_existing_group(db_session):
-    tmpl = ResourceTemplate(name="RT")
-    db_session.add(tmpl)
-    db_session.flush()
+def test_resource_template_builder_reuses_existing_group(client):
+    context = client.create_namespace("attribute-group")
+    scoped = client.namespace(context.path)
+    with scoped.build_resource_template(
+        name="RT", type_names=["sample"]
+    ) as builder:
+        builder.add_properties(
+            {"content": [{"name": "serial", "type": "str", "default": ""}]}
+        )
+    template_id = builder.template.id
 
-    backend = LocalBackend(lambda: db_session)
-    # Manually bind the existing session for this test
-    backend._session = db_session
-    ref = ResourceTemplateSchema.model_validate(tmpl)
+    with scoped.build_resource_template(resource_template_id=template_id) as update:
+        update.prop_group("content").add_attribute(
+            "serial", "str", "", ""
+        ).close_group()
 
-    first = backend.add_attr_group("content", ref)
-    second = backend.add_attr_group("content", ref)
-
-    assert first.id == second.id
+    assert [
+        group.name for group in update.template.attribute_group_templates
+    ].count("content") == 1

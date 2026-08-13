@@ -79,6 +79,13 @@ class UpdateProcessRun(CommandModel):
     steps: dict[str, dict[str, dict[str, object]]] | None = None
 
 
+class SetLifecycleStatus(CommandModel):
+    object_type: str
+    object_id: UUID
+    expected_revision: int
+    status: str
+
+
 @dataclass(frozen=True, slots=True)
 class CommandContext:
     actor: RequestActor

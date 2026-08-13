@@ -88,6 +88,17 @@ def test_query_request_serializes_complete_supported_query_spec():
     }
     assert request.spec["load_mode"] == "eager"
     assert "full" not in request.spec.values()
+    assert "include_mutable" not in request.spec
+
+
+def test_query_request_serializes_include_mutable_when_true():
+    request = QueryRequest.from_query(
+        ResourceSchema,
+        QuerySpec(include_mutable=True),
+        namespace_path="beamline/amx",
+    )
+
+    assert request.spec["include_mutable"] is True
 
 
 def test_query_request_serializes_structured_predicates_and_orderings():

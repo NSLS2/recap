@@ -6,10 +6,11 @@ from copy import deepcopy
 from typing import Any
 from uuid import UUID, uuid4
 
+from json_merge_patch import merge
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import joinedload, sessionmaker
 
 from recap.authorization.scopes import Scope
 from recap.client.permissions import DenialCode
@@ -33,6 +34,7 @@ from recap.commands.models import (
     UpdateProcessTemplate,
     UpdateResource,
     UpdateResourceTemplate,
+    SetLifecycleStatus,
 )
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.audit import MutationAuditRepository
@@ -55,7 +57,11 @@ from recap.lifecycle import LifecycleStatus, validate_transition
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.namespace import NamespaceSchema
 from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
-from recap.schemas.resource import ResourceCopyOptions, ResourceSchema
+from recap.schemas.resource import (
+    ResourceCopyOptions,
+    ResourceSchema,
+    ResourceTemplateSchema,
+)
 from recap.schemas.step import ParameterSchema, StepSchema
 from recap.server.audit import AuditOutcome, AuditRecord
 from recap.server.errors import AuthorizationDenied, ErrorCode
@@ -176,9 +182,75 @@ class CommandService:
                 assignments=command.assignments,
                 steps=command.steps,
             )
+        if isinstance(command, SetLifecycleStatus):
+            return self.set_lifecycle_status(
+                context,
+                object_type=command.object_type,
+                object_id=command.object_id,
+                expected_revision=command.expected_revision,
+                status=command.status,
+            )
         raise CommandValidationError(
             f"Unsupported command type: {type(command).__name__}"
         )
+
+    def set_lifecycle_status(
+        self,
+        context: CommandContext,
+        *,
+        object_type: str,
+        object_id: UUID,
+        expected_revision: int,
+        status: str,
+    ):
+        models = {
+            "process_template": (ProcessTemplate, Scope.PROCESS_TEMPLATE_WRITE),
+            "resource_template": (ResourceTemplate, Scope.RESOURCE_TEMPLATE_WRITE),
+            "resource": (Resource, Scope.RESOURCE_WRITE),
+            "process_run": (ProcessRun, Scope.PROCESS_RUN_WRITE),
+        }
+        model_scope = models.get(object_type)
+        if model_scope is None:
+            raise CommandValidationError(f"Unsupported lifecycle object: {object_type}")
+        model, scope = model_scope
+        try:
+            target_status = LifecycleStatus(status)
+        except ValueError as error:
+            raise CommandValidationError(str(error)) from error
+        try:
+            with self._session_factory.begin() as session:
+                obj = session.get(model, object_id)
+                if obj is None:
+                    raise CommandNotFoundError(f"{object_type} not found")
+                self._authorize_scope(context, obj.namespace.path, scope, "set_lifecycle_status")
+                validate_transition(obj.status, target_status)
+                if target_status is LifecycleStatus.ACTIVE:
+                    if isinstance(obj, ProcessRun):
+                        obj.finalize()
+                    else:
+                        obj.activate()
+                else:
+                    obj.archive()
+                compare_and_swap_revision(
+                    session, model, object_id, expected_revision=expected_revision, values={}
+                )
+                session.flush()
+                session.refresh(obj)
+                result = {
+                    ProcessTemplate: ProcessTemplateSchema,
+                    ResourceTemplate: ResourceTemplateSchema,
+                    Resource: ResourceSchema,
+                    ProcessRun: ProcessRunSchema,
+                }[model].model_validate(obj)
+                self._emit_success(
+                    session, context, "set_lifecycle_status", str(object_id), resource_type=object_type
+                )
+                return result
+        except Exception as error:
+            self._emit_failure(
+                context, "set_lifecycle_status", str(object_id), error, resource_type=object_type
+            )
+            raise
 
     def create_resource(  # noqa: C901
         self,
@@ -238,8 +310,10 @@ class CommandService:
                     name=name,
                     template=template,
                     parent=parent,
+                    _init_children=False,
                 )
                 session.add(resource)
+                resource._initialize_from_resource_template(template)
                 if properties:
                     self._apply_resource_changes(resource, properties)
                 session.flush()
@@ -646,7 +720,7 @@ class CommandService:
 
                 values: dict[str, Any] = {}
                 if local_metadata is not None:
-                    values["metadata_json"] = local_metadata
+                    values["metadata_json"] = merge(namespace.metadata_json, local_metadata)
                 if status is not None:
                     try:
                         validate_transition(namespace.status, status)
@@ -1259,7 +1333,11 @@ class CommandService:
             )
             if slot is None:
                 raise CommandValidationError(f"Resource slot {slot_name!r} not found")
-            resource = session.get(Resource, resource_id)
+            resource = session.scalar(
+                select(Resource)
+                .where(Resource.id == resource_id)
+                .options(joinedload(Resource.template).joinedload(ResourceTemplate.types))
+            )
             if resource is None:
                 raise CommandNotFoundError("Resource not found")
             CommandService._authorize_scope(
@@ -1268,7 +1346,13 @@ class CommandService:
                 Scope.RESOURCE_READ,
                 "create_process_run",
             )
-            run.resources[slot] = resource
+            existing = run.assignments.get(slot)
+            if existing is not None and existing.resource_id != resource.id:
+                raise ValueError(
+                    f"Slot {slot.name} is already occupied in run {run.id}"
+                )
+            with session.no_autoflush:
+                run.resources[slot] = resource
 
     @staticmethod
     def _apply_run_steps(run, steps):
@@ -1276,7 +1360,12 @@ class CommandService:
             step = run.steps.get(step_name)
             if step is None:
                 raise CommandValidationError(f"Step {step_name!r} not found")
-            for group_name, values in (step_data.parameters or {}).items():
+            parameters = (
+                step_data.parameters
+                if hasattr(step_data, "parameters")
+                else step_data.get("parameters", step_data)
+            )
+            for group_name, values in (parameters or {}).items():
                 param = step.parameters.get(group_name)
                 if param is None:
                     raise CommandValidationError(

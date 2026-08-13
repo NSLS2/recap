@@ -16,7 +16,7 @@ from recap.schemas.resource import (
 )
 
 if TYPE_CHECKING:
-    from recap.adapter import Backend
+    from recap.adapter import ReadBackend
 from recap.schemas.process import (
     ProcessRunRef,
     ProcessRunSchema,
@@ -226,7 +226,7 @@ class QuerySpec(BaseModel):
     parent_resource_id: UUID | None = None
     parameter_filters: list[ParameterFilter] = PydanticField(default_factory=list)
     include_archived: bool = False
-    include_mutable: bool = PydanticField(default=False, exclude=True)
+    include_mutable: bool = False
     local_metadata_filters: dict[str, Any] = PydanticField(default_factory=dict)
     effective_metadata_filters: dict[str, Any] = PydanticField(default_factory=dict)
     load_mode: LoadMode | None = None
@@ -271,7 +271,7 @@ class BaseQuery(Generic[SchemaT]):
 
     def __init__(
         self: Self,
-        backend: "Backend",
+        backend: "ReadBackend",
         *,
         context: NamespaceContext,
         model: type[SchemaT] | None = None,
@@ -472,7 +472,7 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
 
     def __init__(
         self,
-        backend: "Backend",
+        backend: "ReadBackend",
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
@@ -600,7 +600,7 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
 
     def __init__(
         self,
-        backend: "Backend",
+        backend: "ReadBackend",
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
@@ -757,7 +757,7 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateR
 
     def __init__(
         self,
-        backend: "Backend",
+        backend: "ReadBackend",
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
@@ -838,7 +838,7 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]
 
     def __init__(
         self,
-        backend: "Backend",
+        backend: "ReadBackend",
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
@@ -908,7 +908,7 @@ class QueryDSL:
 
     def __init__(
         self,
-        backend: "Backend",
+        backend: "ReadBackend",
         *,
         context: NamespaceContext,
         on_unloaded: OnUnloadedPolicy = "warn",

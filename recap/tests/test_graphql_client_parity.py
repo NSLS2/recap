@@ -1,20 +1,11 @@
-from contextlib import ExitStack, nullcontext
+from contextlib import nullcontext
 
-import httpx2
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import update
 
-from recap.client import RecapClient
-from recap.db.process import ProcessRun, ProcessTemplate
-from recap.db.resource import Resource, ResourceTemplate
-from recap.dsl.query import Field
+from recap.dsl.query import Field, QuerySpec
 from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
-from recap.lifecycle import LifecycleStatus
 from recap.schemas.process import ProcessRunRef, ProcessTemplateRef
-from recap.schemas.resource import ResourceRef, ResourceTemplateRef
-from recap.server.app import create_app
-from recap.utils.general import Direction
+from recap.schemas.resource import ResourceRef, ResourceSchema, ResourceTemplateRef
 
 
 def _public_dump(value):
@@ -27,94 +18,13 @@ def _public_dump(value):
     return value.model_dump(mode="json", by_alias=True)
 
 
-def _assert_query_parity(clients, query):
+def _assert_query_parity(clients, query, namespace_path=None):
     local, remote = clients
-    namespace_path = local.namespace_context.path
+    namespace_path = namespace_path or local.namespace_context.path
     local_result = query(local.namespace(namespace_path).query_maker())
     remote_result = query(remote.namespace(namespace_path).query_maker())
     assert _public_dump(remote_result) == _public_dump(local_result)
     return local_result, remote_result
-
-
-@pytest.fixture
-def parity_clients(tmp_path, monkeypatch):
-    db_path = tmp_path / "parity.db"
-    with ExitStack() as stack:
-        local = stack.enter_context(RecapClient.from_sqlite(db_path))
-
-        local.create_namespace("test")
-        local.create_namespace("test/mx-parity", metadata={"beamline": "AMX"})
-        with local.build_resource_template(
-            name="Parity plate", type_names=["container", "plate"]
-        ) as template:
-            template.add_properties(
-                {"metrics": [{"name": "rating", "type": "int", "default": 1}]}
-            )
-            (
-                template.add_child("sample", ["sample"])
-                .add_properties(
-                    {"contents": [{"name": "mass", "type": "float", "default": 2.5}]}
-                )
-                .close_child()
-            )
-
-        first_plate = local.create_resource("plate-1", "Parity plate")
-        second_plate = local.create_resource("plate-2", "Parity plate")
-        for plate, rating in ((first_plate, 12), (second_plate, 3)):
-            with local.build_resource(resource_id=plate.id) as builder:
-                model = builder.get_model()
-                model.properties.metrics.rating = rating
-                builder.set_model(model)
-        uow = local.backend.begin()
-        local.backend.session.execute(
-            update(Resource).values(status=LifecycleStatus.ACTIVE)
-        )
-        uow.commit()
-
-        with local.build_process_template("Parity workflow", "1.0") as template:
-            template.add_resource_slot("plate", "container", Direction.input)
-            (
-                template.add_step("Collect")
-                .add_parameters(
-                    {"exposure": [{"name": "dwell", "type": "int", "default": 1}]}
-                )
-                .bind_slot("source", "plate")
-                .close_step()
-            )
-
-        for name, plate, dwell in (
-            ("run-high", first_plate, 15),
-            ("run-low", second_plate, 5),
-        ):
-            with local.build_process_run(
-                name, "GraphQL parity run", "Parity workflow", "1.0"
-            ) as run:
-                run.assign_resource("plate", plate)
-                parameters = run.get_params("Collect")
-                parameters.exposure.dwell = dwell
-                run.set_params(parameters)
-
-        uow = local.backend.begin()
-        for model in (ProcessTemplate, ProcessRun, ResourceTemplate, Resource):
-            local.backend.session.execute(
-                update(model).values(status=LifecycleStatus.ACTIVE)
-            )
-        uow.commit()
-
-        api_key = "parity-secret"
-        app_client = stack.enter_context(
-            TestClient(create_app(db_path, api_key=api_key))
-        )
-
-        def post(_client, url, *, json, **kwargs):
-            assert url.endswith("/graphql")
-            return app_client.post("/graphql", json=json, **kwargs)
-
-        monkeypatch.setattr(httpx2.Client, "post", post)
-        remote = stack.enter_context(
-            RecapClient.from_url("http://recap.test", api_key=api_key)
-        )
-        yield local, remote
 
 
 @pytest.mark.parametrize(
@@ -154,24 +64,60 @@ def test_process_run_loading_parity(parity_clients, query):
     assert [item.id for item in remote] == [item.id for item in local]
 
 
-def test_namespace_and_template_loading_parity(parity_clients):
-    queries = [
+def test_namespace_loading_parity(parity_clients):
+    local, remote = _assert_query_parity(
+        parity_clients,
         lambda q: q.namespaces().all(),
+        namespace_path="test/mx-parity",
+    )
+    expected_paths = []
+    assert [item.path for item in local] == expected_paths
+    assert [item.path for item in remote] == expected_paths
+    scoped_clients = [client.namespace("test/mx-parity") for client in parity_clients]
+    try:
+        for client in scoped_clients:
+            assert client.namespace_path == "test/mx-parity"
+    finally:
+        for client in scoped_clients:
+            client.close()
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
         lambda q: q.resource_templates().all(),
-        lambda q: (
-            q.resource_templates()
-            .include(["children", "attribute_group_templates", "types"])
-            .all()
-        ),
+        lambda q: q.resource_templates()
+        .include(["children", "attribute_group_templates", "types"])
+        .all(),
         lambda q: q.resource_templates(load="eager").all(),
+    ],
+)
+def test_resource_template_loading_parity(parity_clients, query):
+    local, remote = _assert_query_parity(
+        parity_clients, query, namespace_path="test/mx-parity"
+    )
+    expected = [("Parity plate", "1.0")]
+    assert [(item.name, item.version) for item in local] == expected
+    assert [(item.name, item.version) for item in remote] == expected
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
         lambda q: q.process_templates().all(),
-        lambda q: (
-            q.process_templates().include(["step_templates", "resource_slots"]).all()
-        ),
+        lambda q: q.process_templates()
+        .include(["step_templates", "resource_slots"])
+        .all(),
         lambda q: q.process_templates(load="eager").all(),
-    ]
-    for query in queries:
-        _assert_query_parity(parity_clients, query)
+    ],
+)
+def test_process_template_loading_parity(parity_clients, query):
+    local, remote = _assert_query_parity(
+        parity_clients, query, namespace_path="test/mx-parity"
+    )
+    expected = [("Parity workflow", "1.0")]
+    assert [(item.name, item.version) for item in local] == expected
+    assert [(item.name, item.version) for item in remote] == expected
 
 
 def test_current_actor_permissions_are_typed(parity_clients):
@@ -183,7 +129,26 @@ def test_current_actor_permissions_are_typed(parity_clients):
 
     assert isinstance(permissions, ActorPermissions)
     assert Scope.RESOURCE_READ in permissions.effective_scopes
+    assert permissions.identities[0].provider == "api-key"
     assert permissions.identities[0].subject == "single-user"
+
+
+def test_mutable_resource_visibility_parity(parity_clients):
+    local, remote = parity_clients
+    hidden = local.create_resource("mutable-only", "Parity plate")
+    namespace_path = local.namespace_context.path
+
+    default_local = local._read_backend.query(
+        ResourceSchema,
+        QuerySpec(filters={"name": hidden.name}),
+        namespace_path=namespace_path,
+    )
+    default_remote = remote._read_backend.query(
+        ResourceSchema,
+        QuerySpec(filters={"name": hidden.name}),
+        namespace_path=namespace_path,
+    )
+    assert default_local == default_remote == []
 
 
 @pytest.mark.parametrize(
