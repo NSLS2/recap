@@ -344,10 +344,8 @@ def namespaced_session(db_session):
     event.remove(db_session, "before_flush", assign_namespace)
 
 
-@pytest.fixture(scope="function")
-def client(db_path, apply_migrations):
-    with RecapClient.from_sqlite(db_path) as client:
-        parent_path = f"test-{uuid4()}"
-        client.create_namespace(parent_path)
-        client.create_namespace(f"{parent_path}/{uuid4()}")
-        yield client
+@pytest.fixture
+def client(blank_database_path, copy_database, tmp_path):
+    db_path = copy_database(blank_database_path, tmp_path / "client.db")
+    with RecapClient.from_sqlite(db_path) as recap_client:
+        yield recap_client

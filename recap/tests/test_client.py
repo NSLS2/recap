@@ -81,6 +81,11 @@ def test_blank_database_copies_are_isolated(blank_database_path, copy_database, 
         assert second.backend.list_child_namespace_paths("") == []
 
 
+def test_client_fixture_starts_at_root_scope(client):
+    assert client.namespace_path == ""
+    assert client.backend.list_child_namespace_paths("") == []
+
+
 def test_query_maker_uses_client_namespace_scope(apply_migrations, db_path):
     with RecapClient.from_sqlite(db_path) as client:
         context = client.create_namespace("query-name")
