@@ -151,6 +151,12 @@ def test_mutable_resource_visibility_parity(parity_clients):
     assert default_local == default_remote == []
 
 
+def test_parity_clients_use_isolated_seed_copy(parity_clients):
+    local, _ = parity_clients
+    local.create_resource("fixture-isolation", "Parity plate")
+    assert local.get_resource("fixture-isolation", "Parity plate").name == "fixture-isolation"
+
+
 @pytest.mark.parametrize(
     ("query", "expected_type"),
     [
