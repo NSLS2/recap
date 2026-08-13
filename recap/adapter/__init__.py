@@ -1,8 +1,11 @@
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from uuid import UUID
 
 from recap.client.permissions import ActorPermissions
 from recap.commands.models import CommandContext, CommandModel
 from recap.dsl.query import QuerySpec, SchemaT
+from recap.lifecycle import LifecycleStatus
+from recap.schemas.namespace import NamespaceContext
 
 if TYPE_CHECKING:
     from recap.authorization.query import AuthorizedQuery
@@ -42,10 +45,13 @@ class AuthorizedReadBackend(ReadBackend, Protocol):
 
 
 @runtime_checkable
-class NamespaceChildrenBackend(Protocol):
-    """Local namespace-child listing capability."""
+class NamespaceContextResolver(Protocol):
+    def get_namespace_context(self, path: str) -> NamespaceContext: ...
 
-    def list_child_namespace_paths(self, parent_path: str) -> list[str]: ...
+
+@runtime_checkable
+class NamespaceCatalog(Protocol):
+    def list_child_namespaces(self, parent_path: str) -> list[str]: ...
 
 
 @runtime_checkable
@@ -61,5 +67,21 @@ class WriteBackend(Protocol):
 
 
 @runtime_checkable
-class Backend(ReadBackend, WriteBackend, NamespaceChildrenBackend, Protocol):
-    """Combined read+write protocol. Implemented by LocalBackend."""
+class NamespaceWriter(Protocol):
+    def create_namespace(
+        self,
+        path: str,
+        metadata: dict[str, Any] | None,
+        context: CommandContext,
+    ) -> NamespaceContext: ...
+
+    def update_namespace(
+        self,
+        namespace_id: UUID,
+        expected_revision: int,
+        metadata: dict[str, Any] | None,
+        status: LifecycleStatus | None,
+        context: CommandContext,
+        *,
+        etag: str | None = None,
+    ) -> NamespaceContext: ...

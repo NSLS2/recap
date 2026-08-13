@@ -38,7 +38,7 @@ def test_remote_writes_are_visible_to_graphql_and_match_rest_entities(tmp_path):
             namespace.namespace_path, metadata={"beamline": "amx"}
         )
 
-        resource_template = namespace.backend.create(
+        resource_template = namespace.backend.writer.create(
             "resource-templates",
             namespace.namespace_path,
             {
@@ -47,22 +47,22 @@ def test_remote_writes_are_visible_to_graphql_and_match_rest_entities(tmp_path):
                 "type_names": ["sample"],
             },
         ).entity
-        process_template = namespace.backend.create(
+        process_template = namespace.backend.writer.create(
             "process-templates",
             namespace.namespace_path,
             {"name": "Measure", "version": "1.0"},
         ).entity
-        resource = namespace.backend.create(
+        resource = namespace.backend.writer.create(
             "resources",
             namespace.namespace_path,
             {"name": "S-001", "template_id": resource_template["id"]},
         ).entity
-        copied = namespace.backend.copy_resource(
+        copied = namespace.backend.writer.copy_resource(
             resource["id"],
             namespace.namespace_path,
             changes={"name": "S-001-copy", "changes": {"properties": {}}},
         ).entity
-        process_run = namespace.backend.create(
+        process_run = namespace.backend.writer.create(
             "process-runs",
             namespace.namespace_path,
             {
@@ -79,7 +79,7 @@ def test_remote_writes_are_visible_to_graphql_and_match_rest_entities(tmp_path):
         assert process_run["name"] == "run-001"
         assert [
             item.name
-            for item in namespace._read_backend.query(
+            for item in namespace.backend.reader.query(
                 ResourceSchema,
                 QuerySpec(include_mutable=True),
                 namespace_path=namespace.namespace_path,
@@ -96,7 +96,7 @@ def test_remote_writes_are_visible_to_graphql_and_match_rest_entities(tmp_path):
         ]
         assert [
             item.name
-            for item in namespace._read_backend.query(
+            for item in namespace.backend.reader.query(
                 ProcessRunSchema,
                 QuerySpec(include_mutable=True),
                 namespace_path=namespace.namespace_path,

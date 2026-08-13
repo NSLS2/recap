@@ -25,38 +25,33 @@ class FakeEngine:
 
 
 def test_shared_state_closes_backends_only_after_last_view_releases():
-    read = FakeClosable()
-    write = FakeClosable()
-    state = _ConnectionState(read_backend=read, write_backend=write)
+    backend = FakeClosable()
+    state = _ConnectionState(backend=backend)
 
     state.acquire()
     state.acquire()
     state.release()
 
-    assert read.closed is False
-    assert write.closed is False
+    assert backend.closed is False
 
     state.release()
 
-    assert read.closed is True
-    assert write.closed is True
+    assert backend.closed is False
 
 
 def test_shared_state_release_is_idempotent_after_close():
-    read = FakeClosable()
-    write = FakeClosable()
-    state = _ConnectionState(read_backend=read, write_backend=write)
+    backend = FakeClosable()
+    state = _ConnectionState(backend=backend)
     state.acquire()
     state.release()
     state.release()
 
     assert state.closed is True
-    assert read.close_calls == 1
-    assert write.close_calls == 1
+    assert backend.close_calls == 0
 
 
 def test_shared_state_rejects_acquisition_after_close():
-    state = _ConnectionState(read_backend=FakeClosable(), write_backend=FakeClosable())
+    state = _ConnectionState(backend=FakeClosable())
     state.acquire()
     state.release()
 
@@ -67,7 +62,7 @@ def test_shared_state_rejects_acquisition_after_close():
 def test_shared_state_disposes_optional_engine_when_last_view_releases():
     engine = FakeEngine()
     state = _ConnectionState(
-        read_backend=FakeClosable(), write_backend=FakeClosable(), engine=engine
+        backend=FakeClosable(), engine=engine
     )
     state.acquire()
     state.release()
@@ -76,13 +71,23 @@ def test_shared_state_disposes_optional_engine_when_last_view_releases():
     assert engine.dispose_calls == 1
 
 
-def test_shared_state_closes_backend_shared_by_read_and_write_once():
+def test_shared_state_does_not_close_backend():
     backend = FakeClosable()
-    state = _ConnectionState(read_backend=backend, write_backend=backend)
+    state = _ConnectionState(backend=backend)
     state.acquire()
     state.release()
 
-    assert backend.close_calls == 1
+    assert backend.close_calls == 0
+
+
+def test_connection_state_stores_single_backend():
+    backend = object()
+
+    state = _ConnectionState(backend=backend)
+
+    assert state.backend is backend
+    assert not hasattr(state, "read_backend")
+    assert not hasattr(state, "write_backend")
 
 
 def test_namespace_returns_same_type_and_shares_connection_state(tmp_path):
@@ -97,6 +102,21 @@ def test_namespace_returns_same_type_and_shares_connection_state(tmp_path):
     scoped.close()
     assert root.backend is not None
     root.close()
+
+
+def test_scoped_close_does_not_close_shared_backend_until_last_view(tmp_path):
+    root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    scoped = root.namespace("beamline/amx")
+    state = root._connection_state
+
+    scoped.close()
+
+    assert state.closed is False
+    assert state._active_views == 1
+
+    root.close()
+
+    assert state.closed is True
 
 
 def test_namespace_normalizes_root_and_slashes(tmp_path):

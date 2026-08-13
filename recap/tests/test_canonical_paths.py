@@ -15,13 +15,34 @@ def test_builders_reject_direct_construction_without_command_context():
     namespace_id = uuid4()
 
     with pytest.raises(ValueError, match="command"):
-        ProcessTemplateBuilder(backend, namespace_id, "process", "1.0")
+        ProcessTemplateBuilder(
+            namespace_id,
+            "process",
+            "1.0",
+            backend=backend,
+        )
     with pytest.raises(ValueError, match="command"):
-        ProcessRunBuilder("run", "description", "process", namespace_id, backend)
+        ProcessRunBuilder(
+            "run",
+            "description",
+            "process",
+            namespace_id,
+            backend=backend,
+        )
     with pytest.raises(ValueError, match="command"):
-        ResourceTemplateBuilder("resource", ["sample"], backend=backend, namespace_id=namespace_id)
+        ResourceTemplateBuilder(
+            "resource",
+            ["sample"],
+            backend=backend,
+            namespace_id=namespace_id,
+        )
     with pytest.raises(ValueError, match="command"):
-        ResourceBuilder("resource", "template", backend=backend, namespace_id=namespace_id)
+        ResourceBuilder(
+            "resource",
+            "template",
+            backend=backend,
+            namespace_id=namespace_id,
+        )
 
 
 @pytest.mark.parametrize("attribute", ["begin", "session"])

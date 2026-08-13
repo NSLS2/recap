@@ -5,9 +5,244 @@ from uuid import UUID
 import pytest
 
 from recap.client.base_client import RecapClient
+from recap.client.backend import ClientBackend
+from recap.dsl.query import QuerySpec
 from recap.schemas.namespace import NamespaceContext
-from recap.schemas.resource import ResourceRef
+from recap.schemas.resource import ResourceRef, ResourceSchema
 from recap.lifecycle import LifecycleStatus
+
+
+class _Reader:
+    def __init__(self, result=None):
+        self.result = result or []
+
+    def query(self, schema, spec, *, namespace_path):
+        return self.result
+
+    def count(self, schema, spec, *, namespace_path):
+        return len(self.result)
+
+
+class _Writer:
+    def __init__(self, result=None):
+        self.commands = []
+        self.result = result
+
+    def execute(self, command, context):
+        self.commands.append((command, context))
+        return self.result
+
+
+class _Namespaces:
+    def list_child_namespaces(self, parent_path):
+        return [parent_path]
+
+
+class _NamespaceWriter:
+    def create_namespace(self, path, metadata, context):
+        return (path, metadata, context)
+
+    def update_namespace(
+        self, namespace_id, expected_revision, metadata, status, context, *, etag=None
+    ):
+        return (namespace_id, expected_revision, metadata, status, context, etag)
+
+
+class _ClosableFake:
+    def __init__(self):
+        self.close_count = 0
+
+    def query(self, schema, spec, *, namespace_path):
+        return []
+
+    def count(self, schema, spec, *, namespace_path):
+        return 0
+
+    def execute(self, command, context):
+        return None
+
+    def list_child_namespaces(self, parent_path):
+        return []
+
+    def create_namespace(self, path, metadata, context):
+        return None
+
+    def update_namespace(
+        self, namespace_id, expected_revision, metadata, status, context, *, etag=None
+    ):
+        return None
+
+    def close(self):
+        self.close_count += 1
+
+
+def _backend_values():
+    return {
+        "reader": _Reader(),
+        "writer": _Writer(),
+        "namespaces": _Namespaces(),
+        "namespace_writer": _NamespaceWriter(),
+    }
+
+
+def test_client_backend_accepts_distinct_capability_objects():
+    values = _backend_values()
+    backend = ClientBackend(**values)
+
+    assert backend.reader is values["reader"]
+    assert backend.writer is values["writer"]
+    assert backend.namespaces is values["namespaces"]
+    assert backend.namespace_writer is values["namespace_writer"]
+
+
+def test_client_backend_delegates_query_count_and_execute():
+    reader = _Reader()
+    reader.result = ["read"]
+    writer = _Writer("written")
+    backend = ClientBackend(
+        reader=reader,
+        writer=writer,
+        namespaces=_Namespaces(),
+        namespace_writer=_NamespaceWriter(),
+    )
+    spec = QuerySpec()
+
+    assert backend.query(ResourceSchema, spec, namespace_path="scope") == ["read"]
+    assert backend.count(ResourceSchema, spec, namespace_path="scope") == 1
+    assert backend._execute("command", "context") == "written"
+
+
+def test_client_backend_delegates_namespace_operations():
+    namespaces = _Namespaces()
+    namespace_writer = _NamespaceWriter()
+    backend = ClientBackend(
+        reader=_Reader(),
+        writer=_Writer(),
+        namespaces=namespaces,
+        namespace_writer=namespace_writer,
+    )
+
+    assert backend.list_child_namespaces("scope") == ["scope"]
+    assert backend.create_namespace("scope", {}, "context") == ("scope", {}, "context")
+    assert backend.update_namespace("id", 1, {}, None, "context", etag="etag") == (
+        "id",
+        1,
+        {},
+        None,
+        "context",
+        "etag",
+    )
+
+
+def test_client_backend_closes_shared_capability_once():
+    shared = _ClosableFake()
+    backend = ClientBackend(
+        reader=shared,
+        writer=shared,
+        namespaces=shared,
+        namespace_writer=shared,
+    )
+
+    backend.close()
+
+    assert shared.close_count == 1
+
+
+def test_client_close_delegates_to_backend():
+    shared = _ClosableFake()
+    backend = ClientBackend(
+        reader=shared,
+        writer=shared,
+        namespaces=shared,
+        namespace_writer=shared,
+    )
+    client = RecapClient._from_backends(backend)
+
+    client.close()
+
+    assert shared.close_count == 1
+
+def test_client_backend_is_frozen():
+    backend = ClientBackend(**_backend_values())
+
+    with pytest.raises(AttributeError):
+        backend.reader = _Reader()
+
+
+@pytest.mark.parametrize("field", ["reader", "writer", "namespaces", "namespace_writer"])
+def test_client_backend_rejects_missing_required_capability(field):
+    values = _backend_values()
+    values[field] = object()
+
+    with pytest.raises(TypeError, match=field):
+        ClientBackend(**values)
+
+
+def test_client_stores_typed_reader_and_writer():
+    reader = _Reader()
+    writer = _Writer()
+    backend = ClientBackend(
+        reader=reader,
+        writer=writer,
+        namespaces=_Namespaces(),
+        namespace_writer=_NamespaceWriter(),
+    )
+    client = RecapClient._from_backends(backend)
+
+    assert client.backend is backend
+    assert client.backend.reader is reader
+    assert client.backend.writer is writer
+    client.close()
+
+
+def test_copy_resource_routes_through_write_capability():
+    expected = ResourceSchema.model_construct(id=UUID(int=1), name="copy")
+    reader = _Reader()
+    writer = _Writer(expected)
+    backend = ClientBackend(
+        reader=reader,
+        writer=writer,
+        namespaces=_Namespaces(),
+        namespace_writer=_NamespaceWriter(),
+    )
+    client = RecapClient._from_backends(backend, namespace="scope")
+
+    assert client.copy_resource(UUID(int=2)) is expected
+    assert writer.commands[0][0].source_resource_id == UUID(int=2)
+    client.close()
+
+
+def test_namespace_operations_route_through_namespace_writer():
+    context = NamespaceContext(
+        id=UUID(int=3),
+        path="scope",
+        metadata={},
+        status=LifecycleStatus.ACTIVE,
+        revision=1,
+    )
+
+    class NamespaceWriter(_Writer):
+        def create_namespace(self, path, metadata, context):
+            return self.context
+
+        def update_namespace(
+            self, namespace_id, expected_revision, metadata, status, context, *, etag=None
+        ):
+            return self.context
+
+    writer = NamespaceWriter()
+    writer.context = context
+    backend = ClientBackend(
+        reader=_Reader(),
+        writer=writer,
+        namespaces=_Namespaces(),
+        namespace_writer=writer,
+    )
+    client = RecapClient._from_backends(backend)
+
+    assert client.create_namespace("scope") == context
+    assert client.update_namespace() == context
+    client.close()
 
 
 def test_build_process_run_resolves_root_namespace(tmp_path):
@@ -78,12 +313,12 @@ def test_blank_database_copies_are_isolated(blank_database_path, copy_database, 
         first.create_namespace("only-first")
 
     with RecapClient.from_sqlite(second_path) as second:
-        assert second.backend.list_child_namespace_paths("") == []
+        assert second.backend.namespaces.list_child_namespace_paths("") == []
 
 
 def test_client_fixture_starts_at_root_scope(client):
     assert client.namespace_path == ""
-    assert client.backend.list_child_namespace_paths("") == []
+    assert client.backend.namespaces.list_child_namespace_paths("") == []
 
 
 def test_query_maker_uses_client_namespace_scope(apply_migrations, db_path):
@@ -95,6 +330,12 @@ def test_query_maker_uses_client_namespace_scope(apply_migrations, db_path):
         assert qm.resources()._context == context
         assert qm.process_templates()._context == context
         assert qm.process_runs()._spec.on_unloaded == "warn"
+
+
+def test_query_maker_receives_client_backend_reader_facade(client):
+    query = client.query_maker()
+
+    assert query.backend is client.backend
 
 
 def test_query_maker_uses_scoped_namespace_view(apply_migrations, db_path):
@@ -126,7 +367,7 @@ def test_scoped_permissions_use_client_namespace(monkeypatch):
     client = RecapClient.from_url("http://recap.test", api_key="secret")
     calls = []
     monkeypatch.setattr(
-        client._read_backend,
+        client.backend.reader,
         "permissions",
         lambda path: calls.append(path) or object(),
     )
@@ -146,9 +387,9 @@ def test_remote_get_resource_uses_read_backend(monkeypatch):
         calls.append((args, kwargs))
         return [expected]
 
-    monkeypatch.setattr(client._read_backend, "query", read)
+    monkeypatch.setattr(client.backend.reader, "query", read)
     monkeypatch.setattr(
-        client.backend,
+        client.backend.writer,
         "get_resource",
         lambda *args, **kwargs: pytest.fail("remote read used REST backend"),
         raising=False,
@@ -168,7 +409,7 @@ def test_get_resource_uses_supported_relationship_filters(monkeypatch, tmp_path)
         calls.append((args, kwargs))
         return [expected]
 
-    monkeypatch.setattr(client._read_backend, "query", read)
+    monkeypatch.setattr(client.backend.reader, "query", read)
 
     assert client.get_resource("sample", "Sample", "2.0") is expected
     assert calls[0][0][1].filters == {
@@ -185,7 +426,7 @@ def test_get_resource_rejects_multiple_matches(monkeypatch, tmp_path):
         ResourceRef.model_construct(id=UUID(int=5), name="sample"),
         ResourceRef.model_construct(id=UUID(int=6), name="sample"),
     ]
-    monkeypatch.setattr(client._read_backend, "query", lambda *args, **kwargs: matches)
+    monkeypatch.setattr(client.backend.reader, "query", lambda *args, **kwargs: matches)
 
     with pytest.raises(ValueError, match="[Mm]ultiple resources"):
         client.get_resource("sample", "Sample")
@@ -201,9 +442,9 @@ def test_uuid_parent_resolution_uses_read_backend(monkeypatch):
         calls.append((args, kwargs))
         return [expected]
 
-    monkeypatch.setattr(client._read_backend, "query", read)
+    monkeypatch.setattr(client.backend.reader, "query", read)
     monkeypatch.setattr(
-        client.backend,
+        client.backend.writer,
         "query",
         lambda *args, **kwargs: pytest.fail("parent lookup used write backend"),
         raising=False,

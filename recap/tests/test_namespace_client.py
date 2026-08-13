@@ -1,9 +1,8 @@
-from datetime import UTC, datetime
 from uuid import uuid4
 
-from recap.adapter.rest import RESTResult
 from recap.client import RecapClient
 from recap.lifecycle import LifecycleStatus
+from recap.schemas.namespace import NamespaceContext
 
 
 def test_namespace_returns_scoped_client_with_shared_backend(tmp_path):
@@ -53,22 +52,25 @@ def test_namespace_context_tracks_metadata_revision_and_local_etag(tmp_path):
 def test_remote_namespace_context_preserves_response_etag(monkeypatch):
     client = RecapClient.from_url("http://recap.test", api_key="secret")
     namespace_id = uuid4()
-    monkeypatch.setattr(
-        client.backend,
-        "create_namespace",
-        lambda path, metadata: RESTResult(
-            entity={
-                "id": str(namespace_id),
-                "path": path,
-                "metadata": metadata,
-                "status": "ACTIVE",
-                "revision": 7,
-                "create_date": datetime.now(UTC),
-                "modified_date": datetime.now(UTC),
-            },
+
+    captured_context = None
+
+    def create_namespace(path, metadata, context):
+        nonlocal captured_context
+        captured_context = context
+        return NamespaceContext(
+            id=namespace_id,
+            path=path,
+            metadata=metadata or {},
+            status=LifecycleStatus.ACTIVE,
+            revision=7,
             etag='W/"remote-7"',
-            request_id="request-1",
-        ),
+        )
+
+    monkeypatch.setattr(
+        client.backend.namespace_writer,
+        "create_namespace",
+        create_namespace,
     )
 
     context = client.create_namespace("beamline", {"owner": "amx"})
@@ -77,4 +79,5 @@ def test_remote_namespace_context_preserves_response_etag(monkeypatch):
     assert context.metadata == {"owner": "amx"}
     assert context.revision == 7
     assert context.etag == 'W/"remote-7"'
+    assert captured_context is not None
     client.close()

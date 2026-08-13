@@ -13,6 +13,7 @@ from pydantic import SecretStr
 
 from recap.commands.models import (
     CommandModel,
+    CommandContext,
     CopyResource,
     CreateProcessRun,
     CreateProcessTemplate,
@@ -24,6 +25,8 @@ from recap.commands.models import (
     UpdateResourceTemplate,
 )
 from recap.exceptions import RecapConnectionError, RecapHTTPError
+from recap.lifecycle import LifecycleStatus
+from recap.schemas.namespace import NamespaceContext, NamespaceSchema
 from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
 from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
 
@@ -120,29 +123,53 @@ class RESTAdapter:
         )
 
     def create_namespace(
-        self, path: str, metadata: dict[str, Any] | None = None, *, idempotency_key=None
-    ):
-        return self._request(
+        self,
+        path: str,
+        metadata: dict[str, Any] | None,
+        context: CommandContext,
+    ) -> NamespaceContext:
+        result = self._request(
             "PUT",
             f"/api/v1/namespaces/{path.strip('/')}",
             body={"metadata": metadata or {}},
-            idempotency_key=idempotency_key,
+            idempotency_key=getattr(context, "idempotency_key", None),
         )
+        return self._namespace_context(result)
 
     def update_namespace(
         self,
         namespace_id: UUID,
-        body: dict[str, Any],
+        expected_revision: int,
+        metadata: dict[str, Any] | None,
+        status: LifecycleStatus | None,
+        context: CommandContext,
         *,
-        etag: str,
-        idempotency_key=None,
-    ):
-        return self._request(
+        etag: str | None = None,
+    ) -> NamespaceContext:
+        body: dict[str, Any] = {}
+        if metadata is not None:
+            body["metadata"] = dict(metadata)
+        if status is not None:
+            body["status"] = status.value
+        result = self._request(
             "PATCH",
             f"/api/v1/namespaces/{namespace_id}",
             body=body,
-            etag=etag,
-            idempotency_key=idempotency_key,
+            etag=etag if etag is not None else f'"{expected_revision}"',
+            idempotency_key=getattr(context, "idempotency_key", None),
+        )
+        return self._namespace_context(result)
+
+    @staticmethod
+    def _namespace_context(result: RESTResult) -> NamespaceContext:
+        namespace = NamespaceSchema.model_validate(result.entity)
+        return NamespaceContext(
+            id=namespace.id,
+            path=namespace.path,
+            metadata=namespace.metadata,
+            status=namespace.status,
+            revision=namespace.revision,
+            etag=result.etag,
         )
 
     def list_child_namespaces(self, parent_path: str) -> list[str]:
@@ -209,12 +236,12 @@ class RESTAdapter:
         data = command.model_dump(mode="json")
         key = getattr(context, "idempotency_key", None)
         if isinstance(command, CopyResource):
-            return self.copy_resource(
+            return ResourceSchema.model_validate(self.copy_resource(
                 command.source_resource_id,
                 command.destination_namespace_path,
                 changes=command.options.model_dump(mode="json"),
                 idempotency_key=key,
-            ).entity
+            ).entity)
         if isinstance(command, CreateProcessRun):
             return ProcessRunSchema.model_validate(
                 self.create(

@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, create_model
 from sqlalchemy.exc import NoResultFound
 
-from recap.adapter import Backend
+from recap.client.backend import ClientBackend
 from recap.commands.models import (
     CommandContext,
     CreateProcessRun,
@@ -54,10 +54,11 @@ class ProcessTemplateBuilder:
 
     def __init__(  # noqa: C901
         self,
-        backend: Backend,
         namespace_id: UUID,
         name: str | None,
         version: str | None,
+        *,
+        backend: ClientBackend,
         process_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
         namespace_path: str | None = None,
@@ -89,7 +90,7 @@ class ProcessTemplateBuilder:
             self._initialize_command_update(process_template_id)
         elif name is None or version is None:
             raise ValueError("name and version are required to create a process template")
-        elif hasattr(self.backend, "query"):
+        else:
             existing = self.backend.query(
                 ProcessTemplateSchema,
                 QuerySpec(
@@ -114,24 +115,6 @@ class ProcessTemplateBuilder:
                 self._expected_revision = existing[0].revision
                 self._initialize_command_update(existing[0].id)
 
-    def _initialize_template(self, process_template_id: UUID | None):
-        if process_template_id is not None:
-            tmpl = self.backend.get_process_template(
-                self.namespace_id,
-                name=None,
-                version=None,
-                id=process_template_id,
-                expand=False,
-            )
-            self.name = tmpl.name
-            self.version = tmpl.version
-            self._template = tmpl
-            return
-        if self.name is None or self.version is None:
-            raise ValueError(
-                "name and version are required to create a process template"
-            )
-
     def __enter__(self):
         return self
 
@@ -153,7 +136,7 @@ class ProcessTemplateBuilder:
                 draft=draft,
             )
         )
-        result = self.backend.execute(command, self._command_context)
+        result = self.backend._execute(command, self._command_context)
         if result is not None:
             self._template = result
             self._expected_revision = result.revision
@@ -166,7 +149,7 @@ class ProcessTemplateBuilder:
         self._ensure_template()
         if self._template is None:
             self.save()
-        self._template = self.backend.execute(
+        self._template = self.backend._execute(
             SetLifecycleStatus(
                 object_type="process_template",
                 object_id=self.template.id,
@@ -182,7 +165,7 @@ class ProcessTemplateBuilder:
         self._ensure_template()
         if self._template is None:
             self.save()
-        self._template = self.backend.execute(
+        self._template = self.backend._execute(
             SetLifecycleStatus(
                 object_type="process_template",
                 object_id=self.template.id,
@@ -281,29 +264,18 @@ class ProcessTemplateBuilder:
         )
 
     def _initialize_command_update(self, process_template_id: UUID) -> None:
-        if hasattr(self.backend, "query"):
-            templates = self.backend.query(
-                ProcessTemplateSchema,
-                QuerySpec(
-                    filters={"id": process_template_id},
-                    preloads=["step_templates", "resource_slots"],
-                    include_mutable=True,
-                ),
-                namespace_path=self.namespace_path,
-            )
-            if not templates:
-                raise ValueError(
-                    f"ProcessTemplate with id {process_template_id} not found"
-                )
-            template = templates[0]
-        else:
-            template = self.backend.get_process_template(
-                self.namespace_id,
-                name=None,
-                version=None,
-                id=process_template_id,
-                expand=True,
-            )
+        templates = self.backend.query(
+            ProcessTemplateSchema,
+            QuerySpec(
+                filters={"id": process_template_id},
+                preloads=["step_templates", "resource_slots"],
+                include_mutable=True,
+            ),
+            namespace_path=self.namespace_path,
+        )
+        if not templates:
+            raise ValueError(f"ProcessTemplate with id {process_template_id} not found")
+        template = templates[0]
         self._template = template
         self.name = template.name
         self.version = template.version
@@ -348,7 +320,6 @@ class StepTemplateBuilder:
         draft_name: str | None = None,
     ):
         self.parent: ProcessTemplateBuilder = parent
-        self.backend: Backend = parent.backend
         self._draft_name = draft_name
         self._draft_role_bindings: dict[str, str] = {}
         self._draft_parameter_groups: list[DraftAttributeGroupBuilder] = []
@@ -460,19 +431,18 @@ class ProcessRunBuilder:
         description: str | None,
         template_name: str | None,
         namespace_id: UUID | None,
-        backend: Backend,
         version: str | None = None,
+        *,
+        backend: ClientBackend,
         process_run_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
         namespace_path: str | None = None,
         command_context: CommandContext | None = None,
         template_id: UUID | None = None,
-        read_backend: Backend | None = None,
     ):
         if command_context is None:
             raise ValueError("ProcessRunBuilder requires command context")
         self.backend = backend
-        self._read_backend = read_backend or backend
         if namespace_id is None:
             raise ValueError("Namespace context is required")
         self.namespace_id = namespace_id
@@ -507,52 +477,51 @@ class ProcessRunBuilder:
             self.name = self._process_run.name
             self.description = self._process_run.description
             self._template_id = self._process_run.template.id
-        if hasattr(self._read_backend, "query"):
-            filters = (
-                {"id": self._template_id}
-                if self._template_id is not None
-                else {"name": self.template_name, "version": self.version}
+        filters = (
+            {"id": self._template_id}
+            if self._template_id is not None
+            else {"name": self.template_name, "version": self.version}
+        )
+        templates = self.backend.query(
+            ProcessTemplateSchema,
+            QuerySpec(
+                filters=filters,
+                preloads=["step_templates", "resource_slots"],
+                include_mutable=True,
+            ),
+            namespace_path=namespace_path,
+        )
+        if not templates:
+            raise ValueError(
+                f"Process template {self.template_name!r} version "
+                f"{self.version!r} not found"
             )
-            templates = self._read_backend.query(
-                ProcessTemplateSchema,
+        self._process_template = templates[0]
+        self._template_id = self._process_template.id
+        if self._process_run is None:
+            existing_runs = self.backend.query(
+                ProcessRunSchema,
                 QuerySpec(
-                    filters=filters,
-                    preloads=["step_templates", "resource_slots"],
+                    filters={"name": name},
+                    preloads=["steps", "steps.parameters", "resources"],
                     include_mutable=True,
                 ),
                 namespace_path=namespace_path,
             )
-            if not templates:
-                raise ValueError(
-                    f"Process template {self.template_name!r} version "
-                    f"{self.version!r} not found"
-                )
-            self._process_template = templates[0]
-            self._template_id = self._process_template.id
-            if self._process_run is None:
-                existing_runs = self._read_backend.query(
-                    ProcessRunSchema,
-                    QuerySpec(
-                        filters={"name": name},
-                        preloads=["steps", "steps.parameters", "resources"],
-                        include_mutable=True,
-                    ),
-                    namespace_path=namespace_path,
-                )
-                if existing_runs:
-                    if on_existing == "raise":
-                        raise ExistingProcessRunError(
-                            f"Process run {name!r} already exists"
-                        )
-                    if on_existing == "warn":
-                        warnings.warn(
-                            f"Process run {name!r} already exists and will be reused",
-                            ExistingProcessRunWarning,
-                            stacklevel=2,
-                        )
-                    self._process_run = existing_runs[0]
-                    self.name = self._process_run.name
-                    self.description = self._process_run.description
+            if existing_runs:
+                if on_existing == "raise":
+                    raise ExistingProcessRunError(
+                        f"Process run {name!r} already exists"
+                    )
+                if on_existing == "warn":
+                    warnings.warn(
+                        f"Process run {name!r} already exists and will be reused",
+                        ExistingProcessRunWarning,
+                        stacklevel=2,
+                    )
+                self._process_run = existing_runs[0]
+                self.name = self._process_run.name
+                self.description = self._process_run.description
         self._steps = (
             list(self._process_run.steps.values()) if self._process_run is not None else []
         )
@@ -593,7 +562,7 @@ class ProcessRunBuilder:
                 assignments=self._draft_assignments or None,
                 steps=self._draft_steps or None,
             )
-        result = self.backend.execute(command, self._command_context)
+        result = self.backend._execute(command, self._command_context)
         self._process_run = result
         if result is not None and hasattr(result, "steps"):
             self._steps = list(result.steps.values())
@@ -604,7 +573,7 @@ class ProcessRunBuilder:
     def finalize(self):
         """Transition process run to ACTIVE/finalized state."""
         self._ensure_command_saved()
-        self._process_run = self.backend.execute(
+        self._process_run = self.backend._execute(
             UpdateProcessRun(
                 process_run_id=self._process_run.id,
                 expected_revision=self._process_run.revision,
@@ -617,7 +586,7 @@ class ProcessRunBuilder:
     def archive(self):
         """Transition process run to ARCHIVED."""
         self._ensure_command_saved()
-        self._process_run = self.backend.execute(
+        self._process_run = self.backend._execute(
             UpdateProcessRun(
                 process_run_id=self._process_run.id,
                 expected_revision=self._process_run.revision,
@@ -769,17 +738,14 @@ class ProcessRunBuilder:
             self.save()
 
     def _reload_process_run(self, process_run_id: UUID) -> ProcessRunSchema:
-        runs = self._read_backend.query(
+        runs = self.backend.query(
             ProcessRunSchema,
             QuerySpec(
                 filters={"id": process_run_id},
                 preloads=["steps", "steps.parameters", "resources"],
                 include_mutable=True,
             ),
-            namespace_path=(
-                self.namespace_path
-                or self._read_backend.get_namespace_path(self.namespace_id)
-            ),
+            namespace_path=self.namespace_path,
         )
         if not runs:
             raise ValueError(f"ProcessRun with id {process_run_id} not found")

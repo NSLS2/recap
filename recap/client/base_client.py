@@ -7,8 +7,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from recap.adapter import Backend, NamespaceChildrenBackend
-from recap.adapter.local import LocalBackend
+from recap.client.backend import ClientBackend
 from recap.client.connection_state import _ConnectionState
 from recap.client.permissions import ActorPermissions
 from recap.commands.context import build_local_command_context
@@ -18,7 +17,7 @@ from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
 from recap.lifecycle import LifecycleStatus
-from recap.schemas.namespace import NamespaceContext, NamespaceSchema
+from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceCopyOptions, ResourceRef, ResourceSchema
 from recap.utils.migrations import apply_migrations
 
@@ -53,7 +52,7 @@ class RecapClient:
         self._connection_state: _ConnectionState | None = None
         self._closed = False
         self.database_path: Path | None = None
-        self.backend: Backend | None = None
+        self.backend: ClientBackend | None = None
 
     def __repr__(self) -> str:
         return f"RecapClient({self.namespace_path=})"
@@ -75,19 +74,12 @@ class RecapClient:
         if state is not None:
             state.release()
             self._connection_state = None
+            if state.closed and self.backend is not None:
+                self.backend.close()
             return
         backend = getattr(self, "backend", None)
-        if backend and hasattr(backend, "close"):
+        if backend is not None:
             backend.close()
-        # Close read_backend separately when it differs from backend
-        # (e.g. GraphQLAdapter).
-        read_backend = getattr(self, "_read_backend", None)
-        if (
-            read_backend
-            and read_backend is not backend
-            and hasattr(read_backend, "close")
-        ):
-            read_backend.close()
         engine = getattr(self, "engine", None)
         if engine:
             engine.dispose()
@@ -103,23 +95,15 @@ class RecapClient:
     @classmethod
     def _from_backends(
         cls,
-        read_backend: "Backend",
-        write_backend: "Backend",
+        backend: ClientBackend,
         *,
         namespace: str | None = None,
         engine: Any = None,
         sessionmaker_: Any = None,
     ) -> "RecapClient":
-        """Construct a RecapClient with split read/write backends.
-
-        Internal classmethod used by :meth:`from_url` and :meth:`from_sqlite`.
-        The ``backend`` attribute is set to ``write_backend`` for backward
-        compatibility with builder methods that reference ``self.backend``.
-        ``read_backend`` is stored separately and used by :meth:`query_maker`.
-        """
+        """Construct a RecapClient with composed backend capabilities."""
         state = _ConnectionState(
-            read_backend=read_backend,
-            write_backend=write_backend,
+            backend=backend,
             engine=engine,
             sessionmaker=sessionmaker_,
         )
@@ -127,8 +111,7 @@ class RecapClient:
         state.acquire()
         instance._connection_state = state
         instance.database_path = None
-        instance.backend = write_backend
-        instance._read_backend = read_backend
+        instance.backend = backend
         return instance
 
     @classmethod
@@ -176,23 +159,27 @@ class RecapClient:
 
         base = url.rstrip("/")
         header_provider = _RedactedAuthHeaders(api_key)
-        read_backend = GraphQLAdapter(
+        graphql = GraphQLAdapter(
             graphql_url=f"{base}/graphql", _header_provider=header_provider
         )
-        write_backend = RESTAdapter(base_url=base, api_key=api_key, timeout=timeout)
+        rest = RESTAdapter(base_url=base, api_key=api_key, timeout=timeout)
         client = cls._from_backends(
-            read_backend=read_backend,
-            write_backend=write_backend,
+            backend=ClientBackend(
+                reader=graphql,
+                writer=rest,
+                namespaces=rest,
+                namespace_writer=rest,
+                permissions=graphql,
+            ),
             namespace=namespace,
         )
         return client
 
     def permissions(self) -> ActorPermissions:
         """Return typed effective permissions for this client's namespace."""
-        read_backend = getattr(self, "_read_backend", None)
-        if read_backend is None or not hasattr(read_backend, "permissions"):
+        if self.backend is None or self.backend.permissions is None:
             raise RuntimeError("Permissions API requires a remote read backend")
-        return read_backend.permissions(self.namespace_path)
+        return self.backend.permissions.permissions(self.namespace_path)
 
     def namespace(self, path: str) -> "RecapClient":
         """Return a view scoped to an additive namespace path."""
@@ -209,7 +196,6 @@ class RecapClient:
         view._connection_state = state
         view.database_path = self.database_path
         view.backend = self.backend
-        view._read_backend = getattr(self, "_read_backend", self.backend)
         if hasattr(self, "engine"):
             view.engine = self.engine
         if hasattr(self, "_sessionmaker"):
@@ -243,9 +229,9 @@ class RecapClient:
             ):
                 raise ValueError("Namespace context must match client view scope")
             return self._namespace_context
-        if isinstance(self.backend, LocalBackend):
+        if self.backend is not None and self.backend.context_resolver is not None:
             try:
-                return self.backend.get_namespace_context(requested_path)
+                return self.backend.context_resolver.get_namespace_context(requested_path)
             except LookupError as exc:
                 if not requested_path:
                     raise ValueError("Namespace context is required") from exc
@@ -309,10 +295,17 @@ class RecapClient:
 
         engine = create_engine(db_url, echo=echo)
         sessionmaker_ = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+        from recap.adapter.local import LocalBackend
+
         backend = LocalBackend(sessionmaker_)
         client = cls._from_backends(
-            read_backend=backend,
-            write_backend=backend,
+            backend=ClientBackend(
+                reader=backend,
+                writer=backend,
+                namespaces=backend,
+                namespace_writer=backend,
+                context_resolver=backend,
+            ),
             namespace=namespace,
             engine=engine,
             sessionmaker_=sessionmaker_,
@@ -525,7 +518,6 @@ class RecapClient:
             command_context=self._command_context(),
             version=version,
             namespace_path=namespace_context.path,
-            read_backend=getattr(self, "_read_backend", self.backend),
             on_existing=on_existing,
         )
 
@@ -594,9 +586,6 @@ class RecapClient:
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
         namespace_context = self._resolve_namespace_context()
-        builder_backend = getattr(self, "_read_backend", self.backend)
-        command_backend = self.backend
-
         if resource_template_id is not None:
             if name is not None or type_names is not None:
                 raise TypeError(
@@ -607,8 +596,7 @@ class RecapClient:
                 name=None,
                 type_names=None,
                 version=version,
-                backend=builder_backend,
-                command_backend=command_backend,
+                backend=self.backend,
                 command_context=self._command_context(),
                 namespace_id=namespace_context.id,
                 namespace_path=namespace_context.path,
@@ -627,8 +615,7 @@ class RecapClient:
             name=name,
             type_names=type_names,
             version=version,
-            backend=builder_backend,
-            command_backend=command_backend,
+            backend=self.backend,
             command_context=self._command_context(),
             namespace_id=namespace_context.id,
             namespace_path=namespace_context.path,
@@ -704,9 +691,6 @@ class RecapClient:
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
         namespace_context = self._resolve_namespace_context()
-        builder_backend = getattr(self, "_read_backend", self.backend)
-        command_backend = self.backend
-
         if resource_id is not None:
             if args or kwargs:
                 raise TypeError(
@@ -722,8 +706,7 @@ class RecapClient:
                 name=None,
                 template_name=None,
                 template_version="1.0",
-                backend=builder_backend,
-                command_backend=command_backend,
+                backend=self.backend,
                 command_context=self._command_context(),
                 namespace_id=namespace_context.id,
                 namespace_path=namespace_context.path,
@@ -738,8 +721,7 @@ class RecapClient:
             name=name,
             template_name=template_name,
             template_version=template_version,
-            backend=builder_backend,
-            command_backend=command_backend,
+            backend=self.backend,
             command_context=self._command_context(),
             namespace_id=namespace_context.id,
             namespace_path=namespace_context.path,
@@ -758,8 +740,7 @@ class RecapClient:
         if isinstance(parent, UUID):
             from recap.dsl.query import QuerySpec
 
-            read_backend = getattr(self, "_read_backend", self.backend)
-            results = read_backend.query(
+            results = self.backend.query(
                 ResourceSchema,
                 QuerySpec(
                     filters={"id": parent},
@@ -840,15 +821,12 @@ class RecapClient:
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
         namespace_context = self._resolve_namespace_context()
-        builder_backend = getattr(self, "_read_backend", self.backend)
-        command_backend = self.backend
         return ResourceBuilder.create(
             name=name,
             template_name=template_name,
             template_version=template_version,
-            backend=builder_backend,
+            backend=self.backend,
             namespace_path=namespace_context.path,
-            command_backend=command_backend,
             command_context=self._command_context(),
             namespace_id=namespace_context.id,
             parent=parent,
@@ -869,26 +847,17 @@ class RecapClient:
             raise RuntimeError("Backend not initialized")
         namespace_context = self._resolve_namespace_context()
         copy_options = options or ResourceCopyOptions()
-        if self.backend.__class__.__name__ == "RESTAdapter":
-            result = self.backend.copy_resource(
-                source_resource_id,
-                self.namespace_path,
-                changes=copy_options.model_dump(mode="json"),
+        try:
+            return self.backend._execute(
+                CopyResource(
+                    source_resource_id=source_resource_id,
+                    destination_namespace_path=namespace_context.path,
+                    options=copy_options,
+                ),
+                self._command_context(),
             )
-            return ResourceSchema.model_validate(result.entity)
-        if isinstance(self.backend, LocalBackend):
-            try:
-                return self.backend.execute(
-                    CopyResource(
-                        source_resource_id=source_resource_id,
-                        destination_namespace_path=namespace_context.path,
-                        options=copy_options,
-                    ),
-                    self._command_context(),
-                )
-            except CommandValidationError as error:
-                raise ValueError(str(error)) from error
-        raise TypeError("Backend does not support local command execution")
+        except CommandValidationError as error:
+            raise ValueError(str(error)) from error
 
     @overload
     def get_resource(
@@ -950,11 +919,10 @@ class RecapClient:
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
         namespace_context = self._resolve_namespace_context()
-        read_backend = getattr(self, "_read_backend", self.backend)
         from recap.dsl.query import QuerySpec
 
         schema = ResourceSchema if expand else ResourceRef
-        results = read_backend.query(
+        results = self.backend.query(
             schema,
             QuerySpec(
                 filters={
@@ -982,36 +950,10 @@ class RecapClient:
         """Create a namespace and make it active for subsequent writes."""
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        if self.backend.__class__.__name__ == "RESTAdapter":
-            result = self.backend.create_namespace(path, metadata)
-            namespace = NamespaceSchema.model_validate(result.entity)
-            self._namespace_context = NamespaceContext(
-                id=namespace.id,
-                path=namespace.path,
-                metadata=namespace.metadata,
-                status=namespace.status,
-                revision=namespace.revision,
-                etag=result.etag,
-            )
-            return self._namespace_context
-        if isinstance(self.backend, LocalBackend):
-            namespace = self.backend.create_namespace(
-                path,
-                metadata,
-                self._command_context(),
-            )
-            if isinstance(namespace, NamespaceContext):
-                self._namespace_context = namespace
-            else:
-                self._namespace_context = NamespaceContext(
-                    id=namespace.id,
-                    path=namespace.path,
-                    metadata=namespace.metadata,
-                    status=namespace.status,
-                    revision=namespace.revision,
-                )
-            return self._namespace_context
-        raise TypeError("Backend does not support local command execution")
+        self._namespace_context = self.backend.create_namespace(
+            path, metadata, self._command_context()
+        )
+        return self._namespace_context
 
     def update_namespace(
         self,
@@ -1034,46 +976,15 @@ class RecapClient:
                 raise ValueError("Expected namespace revision is required")
             expected_revision = context.revision
 
-        if self.backend.__class__.__name__ == "RESTAdapter":
-            body: dict[str, Any] = {}
-            if metadata is not None:
-                body["metadata"] = dict(metadata)
-            if status is not None:
-                body["status"] = status.value
-            result = self.backend.update_namespace(
-                namespace_id,
-                body,
-                etag=context.etag if context is not None else f'"{expected_revision}"',
-            )
-            namespace = NamespaceSchema.model_validate(result.entity)
-            self._namespace_context = NamespaceContext(
-                id=namespace.id,
-                path=namespace.path,
-                metadata=namespace.metadata,
-                status=namespace.status,
-                revision=namespace.revision,
-                etag=result.etag,
-            )
-            return self._namespace_context
-
-        if isinstance(self.backend, LocalBackend):
-            namespace = self.backend.update_namespace(
-                namespace_id,
-                expected_revision,
-                None if metadata is None else dict(metadata),
-                status,
-                self._command_context(),
-            )
-            self._namespace_context = NamespaceContext(
-                id=namespace.id,
-                path=namespace.path,
-                metadata=namespace.metadata,
-                status=namespace.status,
-                revision=namespace.revision,
-            )
-            return self._namespace_context
-
-        raise TypeError("Backend does not support namespace updates")
+        self._namespace_context = self.backend.update_namespace(
+            namespace_id,
+            expected_revision,
+            None if metadata is None else dict(metadata),
+            status,
+            self._command_context(),
+            etag=context.etag if context is not None else None,
+        )
+        return self._namespace_context
 
     @property
     def namespace_context(self) -> NamespaceContext | None:
@@ -1083,14 +994,7 @@ class RecapClient:
         """Return relative names of direct child namespaces."""
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        read_backend = getattr(self, "_read_backend", self.backend)
-        if isinstance(read_backend, NamespaceChildrenBackend):
-            child_paths = read_backend.list_child_namespace_paths(self.namespace_path)
-            prefix = f"{self.namespace_path}/" if self.namespace_path else ""
-            return [child_path[len(prefix) :] for child_path in child_paths]
-        if hasattr(self.backend, "list_child_namespaces"):
-            return self.backend.list_child_namespaces(self.namespace_path)
-        raise TypeError("Backend does not support namespace child listing")
+        return self.backend.list_child_namespaces(self.namespace_path)
 
     def query_maker(
         self,
@@ -1102,11 +1006,8 @@ class RecapClient:
             raise RuntimeError("Backend not initialized")
         context = self._resolve_namespace_context()
 
-        read_backend = getattr(self, "_read_backend", self.backend) or self.backend
-        if read_backend is None:
-            raise RuntimeError("No read backend available")
         return QueryDSL(
-            read_backend,
+            self.backend,
             context=context,
             on_unloaded=on_unloaded,
         )

@@ -42,16 +42,16 @@ def test_list_namespaces_only_direct_children_not_grandchildren(client_with_name
 def test_local_backend_lists_full_direct_child_paths(client_with_namespaces):
     client = client_with_namespaces
 
-    assert sorted(client.backend.list_child_namespace_paths("")) == [
+    assert sorted(client.backend.namespaces.list_child_namespace_paths("")) == [
         "beamline",
         "staff",
     ]
-    assert sorted(client.backend.list_child_namespace_paths("beamline")) == [
+    assert sorted(client.backend.namespaces.list_child_namespace_paths("beamline")) == [
         "beamline/amx",
         "beamline/fmx",
     ]
-    assert client.backend.list_child_namespace_paths("beamline/amx") == []
-    assert client.backend.list_child_namespace_paths("missing") == []
+    assert client.backend.namespaces.list_child_namespace_paths("beamline/amx") == []
+    assert client.backend.namespaces.list_child_namespace_paths("missing") == []
 
 
 def test_list_namespaces_remote_calls_scoped_rest_children_endpoint():
@@ -64,7 +64,7 @@ def test_list_namespaces_remote_calls_scoped_rest_children_endpoint():
         calls.append((method, path))
         return RESTResult(entity=["amx", "fmx"], etag=None, request_id=None)
 
-    client.backend._request = fake_request
+    client.backend.namespaces._request = fake_request
 
     result = client["beamline"].list_namespaces()
 
@@ -83,7 +83,7 @@ def test_list_namespaces_remote_root_calls_correct_url():
         calls.append((method, path))
         return RESTResult(entity=["beamline", "staff"], etag=None, request_id=None)
 
-    client.backend._request = fake_request
+    client.backend.namespaces._request = fake_request
 
     result = client.list_namespaces()
 

@@ -22,6 +22,7 @@ from recap.db.audit import MutationAudit
 from recap.db.base import Base
 from recap.db.process import ProcessRun, ProcessTemplate
 from recap.db.namespace import Namespace
+from recap.client.backend import ClientBackend
 from recap.dsl.drafts import (
     AttributeDraft,
     AttributeGroupDraft,
@@ -247,17 +248,44 @@ class RecordingCommandBackend:
     def get_process_template(self, *args, **kwargs):
         return self.existing
 
+    def query(self, *args, **kwargs):
+        return [self.existing] if self.existing is not None else []
+
     def execute(self, command, context):
         self.commands.append((command, context))
         return None
 
+    def count(self, *args, **kwargs):
+        return 0
+
+    def list_child_namespaces(self, parent_path):
+        return []
+
+    def create_namespace(self, path, metadata, context):
+        return None
+
+    def update_namespace(
+        self, namespace_id, expected_revision, metadata, status, context, *, etag=None
+    ):
+        return None
+
+
+def process_client_backend(existing=None):
+    adapter = RecordingCommandBackend(existing)
+    return ClientBackend(
+        reader=adapter,
+        writer=adapter,
+        namespaces=adapter,
+        namespace_writer=adapter,
+    ), adapter
+
 
 def test_builder_submits_one_complete_command_on_success(command_setup):
     _, _, context, namespace, _ = command_setup
-    backend = RecordingCommandBackend()
+    client_backend, backend = process_client_backend()
 
     with ProcessTemplateBuilder(
-        backend=backend,
+        backend=client_backend,
         namespace_id=namespace.id,
         namespace_path=namespace.path,
         name="builder-template",
@@ -283,12 +311,12 @@ def test_builder_submits_one_complete_command_on_success(command_setup):
 
 def test_builder_submits_nothing_when_context_body_raises(command_setup):
     _, _, context, namespace, _ = command_setup
-    backend = RecordingCommandBackend()
+    client_backend, backend = process_client_backend()
 
     with (
         pytest.raises(RuntimeError, match="stop"),
         ProcessTemplateBuilder(
-            backend=backend,
+            backend=client_backend,
             namespace_id=namespace.id,
             namespace_path=namespace.path,
             name="builder-template",
@@ -308,10 +336,10 @@ def test_builder_serializes_existing_template_into_one_update(command_setup):
         context, namespace_path=namespace.path, draft=process_draft()
     )
     update_context = replace(context, idempotency_key="template-2")
-    backend = RecordingCommandBackend(existing)
+    client_backend, backend = process_client_backend(existing)
 
     with ProcessTemplateBuilder(
-        backend=backend,
+        backend=client_backend,
         namespace_id=namespace.id,
         namespace_path=namespace.path,
         name=None,

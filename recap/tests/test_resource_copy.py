@@ -95,7 +95,7 @@ def _create_source(client):
 
 def _load_tree(client, root_id):
     with client._sessionmaker.begin() as session:
-        resources = client.backend._load_resource_subtrees(session, [root_id])
+        resources = client.backend.writer._load_resource_subtrees(session, [root_id])
         by_id = {resource.id: resource for resource in resources}
         root = by_id[root_id]
         # Snapshot while ORM relationships remain attached to active session.

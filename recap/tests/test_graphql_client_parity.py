@@ -151,12 +151,12 @@ def test_mutable_resource_visibility_parity(parity_clients):
     hidden = local.create_resource("mutable-only", "Parity plate")
     namespace_path = local.namespace_path
 
-    default_local = local._read_backend.query(
+    default_local = local.backend.reader.query(
         ResourceSchema,
         QuerySpec(filters={"name": hidden.name}),
         namespace_path=namespace_path,
     )
-    default_remote = remote._read_backend.query(
+    default_remote = remote.backend.reader.query(
         ResourceSchema,
         QuerySpec(filters={"name": hidden.name}),
         namespace_path=namespace_path,

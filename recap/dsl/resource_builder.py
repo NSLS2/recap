@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, create_model
 
-from recap.adapter import Backend
+from recap.client.backend import ClientBackend
 from recap.commands.models import (
     CommandContext,
     CopyResource,
@@ -45,14 +45,14 @@ class ResourceBuilder:
         name: str | None,
         template_name: str | None,
         template_version: str = "1.0",
-        backend: Backend | None = None,
+        *,
+        backend: ClientBackend,
         namespace_id: UUID | None = None,
         parent: "ResourceBuilder | ResourceSchema | None" = None,
         resource_id: UUID | None = None,
         on_existing: Literal["create", "silent", "warn", "raise"] = "warn",
         namespace_path: str | None = None,
         command_context: CommandContext | None = None,
-        command_backend: Backend | None = None,
     ):
         if command_context is None:
             raise ValueError("ResourceBuilder requires command context")
@@ -74,7 +74,7 @@ class ResourceBuilder:
         self.on_existing = on_existing
         self.namespace_path = namespace_path
         self._command_context = command_context
-        self._command_backend = command_backend or backend
+        self.backend = backend
         self._submitted = False
         self._last_properties_payload = None
         self._reused_existing = False
@@ -82,7 +82,6 @@ class ResourceBuilder:
         self._is_new_resource = resource_id is None
         self._resource: ResourceSchema | None = None
         self._configure_parent(parent)
-        self._configure_backend(backend)
         if namespace_path is None:
             raise ValueError("namespace_path is required for command-backed builders")
         if resource_id is not None:
@@ -97,15 +96,6 @@ class ResourceBuilder:
         elif isinstance(parent, ResourceSchema):
             self.parent_resource = parent
 
-    def _configure_backend(self, backend: Backend | None):
-        if backend:
-            self.backend = backend
-            return
-        if self.parent:
-            self.backend = self.parent.backend
-            return
-        raise ValueError("backend is required")
-
     def _load_existing_resource(self, resource_id: UUID):
         self._resource = self._reload_resource(resource_id)
         self._expected_revision = self._resource.revision
@@ -119,34 +109,24 @@ class ResourceBuilder:
     def _prepare_new_resource(self):
         if self.name is None or self.template_name is None:
             raise ValueError("name and template_name are required")
-        query = getattr(self.backend, "query", None)
-        if query is not None:
-            templates = query(
-                ResourceTemplateSchema,
-                QuerySpec(
-                    filters={
-                        "name": self.template_name,
-                        "version": self.template_version,
-                    },
-                    include_mutable=True,
-                    load_mode="eager",
-                ),
-                namespace_path=self.namespace_path,
+        templates = self.backend.query(
+            ResourceTemplateSchema,
+            QuerySpec(
+                filters={
+                    "name": self.template_name,
+                    "version": self.template_version,
+                },
+                include_mutable=True,
+                load_mode="eager",
+            ),
+            namespace_path=self.namespace_path,
+        )
+        if not templates:
+            raise ValueError(
+                f"Resource template {self.template_name!r} version "
+                f"{self.template_version!r} not found"
             )
-            if templates:
-                template = templates[0]
-            else:
-                raise ValueError(
-                    f"Resource template {self.template_name!r} version "
-                    f"{self.template_version!r} not found"
-                )
-        else:
-            template = self.backend.get_resource_template(
-                self.namespace_id,
-                name=self.template_name,
-                version=self.template_version,
-                expand=True,
-            )
+        template = templates[0]
         self._template_id = template.id
         if isinstance(template, ResourceTemplateSchema):
             self._resource = self._draft_resource(template)
@@ -234,10 +214,10 @@ class ResourceBuilder:
         name: str,
         template_name: str,
         template_version: str,
-        backend: Backend,
+        *,
+        backend: ClientBackend,
         namespace_id: UUID,
         namespace_path: str | None = None,
-        command_backend: Backend | None = None,
         command_context: CommandContext | None = None,
         parent=None,
         on_existing: Literal["create", "silent", "warn", "raise"] = "create",
@@ -246,10 +226,9 @@ class ResourceBuilder:
             name,
             template_name,
             template_version,
-            backend,
+            backend=backend,
             namespace_id=namespace_id,
             namespace_path=namespace_path,
-            command_backend=command_backend,
             command_context=command_context,
             parent=parent,
             on_existing=on_existing,
@@ -296,7 +275,7 @@ class ResourceBuilder:
                 name=self._resource.name,
                 properties=properties,
             )
-        result = self._command_backend.execute(command, self._command_context)
+        result = self.backend._execute(command, self._command_context)
         if result is not None:
             self._resource = result
             self._expected_revision = result.revision
@@ -328,7 +307,7 @@ class ResourceBuilder:
     def activate(self):
         if self._is_new_resource:
             self.save()
-        self._resource = self._command_backend.execute(
+        self._resource = self.backend._execute(
             SetLifecycleStatus(
                 object_type="resource",
                 object_id=self.resource.id,
@@ -342,7 +321,7 @@ class ResourceBuilder:
     def archive(self):
         if self._is_new_resource:
             self.save()
-        self._resource = self._command_backend.execute(
+        self._resource = self.backend._execute(
             SetLifecycleStatus(
                 object_type="resource",
                 object_id=self.resource.id,
@@ -403,7 +382,7 @@ class ResourceBuilder:
             template_name=template_name,
             template_version=template_version,
             namespace_path=self.namespace_path,
-            command_backend=self._command_backend,
+            backend=self.backend,
             command_context=self._command_context,
             parent=self,
         )
@@ -471,19 +450,19 @@ class ResourceTemplateBuilder:
         type_names: list[str] | None = None,
         version: str = "1.0",
         parent: Optional["ResourceTemplateBuilder"] = None,
-        backend: Backend | None = None,
+        *,
+        backend: ClientBackend,
         namespace_id: UUID | None = None,
         resource_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
         namespace_path: str | None = None,
-        command_backend: Backend | None = None,
         command_context=None,
     ):
         if command_context is None:
             raise ValueError("ResourceTemplateBuilder requires command context")
         self.namespace_path = namespace_path
         self._command_context = command_context
-        self._command_backend = command_backend or backend
+        self.backend = backend
         self._submitted = False
         self._last_draft = None
         self._expected_revision = 1
@@ -502,7 +481,6 @@ class ResourceTemplateBuilder:
             raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
         self.on_existing = on_existing
         self._template: ResourceTemplateRef | ResourceTemplateSchema | None = None
-        self._configure_backend(backend)
         if namespace_path is None:
             raise ValueError("namespace_path is required for command-backed builders")
         if resource_template_id is not None:
@@ -511,7 +489,7 @@ class ResourceTemplateBuilder:
             raise ValueError(
                 "name and type_names are required to create a resource template"
             )
-        elif hasattr(self.backend, "query"):
+        else:
             existing = self.backend.query(
                 ResourceTemplateSchema,
                 QuerySpec(
@@ -534,15 +512,6 @@ class ResourceTemplateBuilder:
                     )
                 self._initialize_command_update(existing[0].id)
 
-    def _configure_backend(self, backend: Backend | None):
-        if backend:
-            self.backend = backend
-            return
-        if self.parent:
-            self.backend = self.parent.backend
-            return
-        raise ValueError("No parent builder or backend provided")
-
     def __enter__(self):
         return self
 
@@ -564,7 +533,7 @@ class ResourceTemplateBuilder:
                 expected_revision=self._expected_revision,
                 draft=draft,
             )
-        result = self._command_backend.execute(command, self._command_context)
+        result = self.backend._execute(command, self._command_context)
         if result is not None:
             self._template = result
             self._expected_revision = result.revision
@@ -575,7 +544,7 @@ class ResourceTemplateBuilder:
     def activate(self):
         if self._template is None:
             self.save()
-        self._template = self._command_backend.execute(
+        self._template = self.backend._execute(
             SetLifecycleStatus(
                 object_type="resource_template",
                 object_id=self.template.id,
@@ -589,7 +558,7 @@ class ResourceTemplateBuilder:
     def archive(self):
         if self._template is None:
             self.save()
-        self._template = self._command_backend.execute(
+        self._template = self.backend._execute(
             SetLifecycleStatus(
                 object_type="resource_template",
                 object_id=self.template.id,
@@ -668,20 +637,25 @@ class ResourceTemplateBuilder:
             parent=self,
             namespace_id=self.namespace_id,
             namespace_path=self.namespace_path,
-            command_backend=self._command_backend,
+            backend=self.backend,
             command_context=self._command_context,
         )
         self._draft_children.append(child_builder)
         return child_builder
 
     def _reload_template(self):
-        self._template = self.backend.get_resource_template(
-            self.namespace_id,
-            self.name,
-            version=self.version,
-            id=self._template.id if self._template else None,
-            expand=True,
+        templates = self.backend.query(
+            ResourceTemplateSchema,
+            QuerySpec(
+                filters={"id": self._template.id if self._template else None},
+                include_mutable=True,
+                load_mode="eager",
+            ),
+            namespace_path=self.namespace_path,
         )
+        if not templates:
+            raise ValueError("Resource template not found")
+        self._template = templates[0]
 
     def get_model(self, *, update: bool = False) -> ResourceTemplateSchema:
         """
@@ -722,29 +696,18 @@ class ResourceTemplateBuilder:
         )
 
     def _initialize_command_update(self, resource_template_id: UUID) -> None:
-        if hasattr(self.backend, "query"):
-            templates = self.backend.query(
-                ResourceTemplateSchema,
-                QuerySpec(
-                    filters={"id": resource_template_id},
-                    include_mutable=True,
-                    load_mode="eager",
-                ),
-                namespace_path=self.namespace_path,
-            )
-            if not templates:
-                raise ValueError(
-                    f"ResourceTemplate with id {resource_template_id} not found"
-                )
-            template = templates[0]
-        else:
-            template = self.backend.get_resource_template(
-                self.namespace_id,
-                name=None,
-                version=None,
-                id=resource_template_id,
-                expand=True,
-            )
+        templates = self.backend.query(
+            ResourceTemplateSchema,
+            QuerySpec(
+                filters={"id": resource_template_id},
+                include_mutable=True,
+                load_mode="eager",
+            ),
+            namespace_path=self.namespace_path,
+        )
+        if not templates:
+            raise ValueError(f"ResourceTemplate with id {resource_template_id} not found")
+        template = templates[0]
         self._template = template
         self.name = template.name
         self.version = template.version

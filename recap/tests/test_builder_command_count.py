@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from recap.commands.models import UpdateProcessTemplate
+from recap.client.backend import ClientBackend
 from recap.dsl.process_builder import ProcessTemplateBuilder
 
 
@@ -13,12 +14,38 @@ class RecordingBackend:
     def get_process_template(self, *args, **kwargs):
         return self.existing
 
+    def query(self, schema, spec, *, namespace_path):
+        return [self.existing] if "id" in spec.filters else []
+
     def execute(self, command, context):
         self.commands.append(command)
         values = vars(self.existing).copy()
         values["revision"] += 1
         self.existing = SimpleNamespace(**values)
         return self.existing
+
+    def count(self, *args, **kwargs):
+        return 0
+
+    def list_child_namespaces(self, parent_path):
+        return []
+
+    def create_namespace(self, path, metadata, context):
+        return None
+
+    def update_namespace(
+        self, namespace_id, expected_revision, metadata, status, context, *, etag=None
+    ):
+        return None
+
+
+def client_backend(adapter):
+    return ClientBackend(
+        reader=adapter,
+        writer=adapter,
+        namespaces=adapter,
+        namespace_writer=adapter,
+    )
 
 
 def test_repeated_save_uses_latest_revision():
@@ -34,7 +61,7 @@ def test_repeated_save_uses_latest_revision():
     )
     backend = RecordingBackend(existing)
     builder = ProcessTemplateBuilder(
-        backend=backend,
+        backend=client_backend(backend),
         namespace_id=uuid4(),
         namespace_path="beamline/amx",
         name=None,
@@ -67,7 +94,7 @@ def test_clean_repeated_save_does_not_duplicate_command():
     )
     backend = RecordingBackend(existing)
     builder = ProcessTemplateBuilder(
-        backend=backend,
+        backend=client_backend(backend),
         namespace_id=uuid4(),
         namespace_path="beamline/amx",
         name=None,

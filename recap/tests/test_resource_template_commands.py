@@ -17,6 +17,7 @@ from recap.commands.models import (
     CreateResourceTemplate,
 )
 from recap.commands.service import CommandService
+from recap.client.backend import ClientBackend
 from recap.db.audit import MutationAudit
 from recap.db.base import Base
 from recap.db.resource import ResourceTemplate
@@ -218,8 +219,25 @@ class RecordingBackend:
     def get_resource_template(self, *args, **kwargs):
         return self.existing
 
+    def query(self, schema, spec, *, namespace_path):
+        return [self.existing] if "id" in spec.filters and self.existing else []
+
     def execute(self, command, context):
         self.commands.append((command, context))
+        return None
+
+    def count(self, schema, spec, *, namespace_path):
+        return 0
+
+    def list_child_namespaces(self, parent_path):
+        return []
+
+    def create_namespace(self, path, metadata, context):
+        return None
+
+    def update_namespace(
+        self, namespace_id, expected_revision, metadata, status, context, *, etag=None
+    ):
         return None
 
 
@@ -227,9 +245,15 @@ def test_builder_submits_one_complete_command():
     from recap.dsl.resource_builder import ResourceTemplateBuilder
 
     backend = RecordingBackend()
+    client_backend = ClientBackend(
+        reader=backend,
+        writer=backend,
+        namespaces=backend,
+        namespace_writer=backend,
+    )
     context = object()
     with ResourceTemplateBuilder(
-        backend=backend,
+        backend=client_backend,
         namespace_id=uuid4(),
         namespace_path="beamline/amx",
         name="plate",
@@ -240,23 +264,30 @@ def test_builder_submits_one_complete_command():
         builder.add_properties(
             {"dimensions": [{"name": "rows", "type": "int", "default": 8}]}
         )
-        builder.add_child("well", ["container", "well"])
+        child = builder.add_child("well", ["container", "well"])
 
     assert len(backend.commands) == 1
     command, submitted_context = backend.commands[0]
     assert isinstance(command, CreateResourceTemplate)
     assert submitted_context is context
     assert command.draft.children[0].name == "well"
+    assert child.backend is client_backend
 
 
 def test_builder_submits_nothing_when_body_raises():
     from recap.dsl.resource_builder import ResourceTemplateBuilder
 
     backend = RecordingBackend()
+    client_backend = ClientBackend(
+        reader=backend,
+        writer=backend,
+        namespaces=backend,
+        namespace_writer=backend,
+    )
     with (
         pytest.raises(RuntimeError, match="stop"),
         ResourceTemplateBuilder(
-            backend=backend,
+            backend=client_backend,
             namespace_id=uuid4(),
             namespace_path="beamline/amx",
             name="plate",

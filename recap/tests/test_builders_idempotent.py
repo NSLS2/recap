@@ -44,13 +44,13 @@ def test_reused_resource_clean_exit_skips_update_and_mutation_updates(client, mo
         ).close_group()
     resource = client.create_resource("RB-Command-1", "RB-Command-Template")
     commands = []
-    execute = client.backend.execute
+    execute = client.backend.writer.execute
 
     def recording_execute(command, context):
         commands.append(command)
         return execute(command, context)
 
-    monkeypatch.setattr(client.backend, "execute", recording_execute)
+    monkeypatch.setattr(client.backend.writer, "execute", recording_execute)
     with client.build_resource(
         "RB-Command-1", "RB-Command-Template", on_existing="silent"
     ):
@@ -87,13 +87,13 @@ def test_reused_resource_template_clean_exit_skips_update_and_mutation_updates(
         pass
     existing = created.template
     commands = []
-    execute = client.backend.execute
+    execute = client.backend.writer.execute
 
     def recording_execute(command, context):
         commands.append(command)
         return execute(command, context)
 
-    monkeypatch.setattr(client.backend, "execute", recording_execute)
+    monkeypatch.setattr(client.backend.writer, "execute", recording_execute)
     with client.build_resource_template(resource_template_id=existing.id):
         pass
     assert not any(

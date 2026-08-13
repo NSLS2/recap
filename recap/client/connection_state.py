@@ -1,11 +1,12 @@
 from dataclasses import dataclass
 from typing import Any
 
+from recap.client.backend import ClientBackend
+
 
 @dataclass
 class _ConnectionState:
-    read_backend: Any
-    write_backend: Any
+    backend: ClientBackend
     engine: Any = None
     sessionmaker: Any = None
     _active_views: int = 0
@@ -28,11 +29,5 @@ class _ConnectionState:
         if self.closed:
             return
         self.closed = True
-        if hasattr(self.read_backend, "close"):
-            self.read_backend.close()
-        if self.write_backend is not self.read_backend and hasattr(
-            self.write_backend, "close"
-        ):
-            self.write_backend.close()
         if self.engine is not None:
             self.engine.dispose()

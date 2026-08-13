@@ -20,7 +20,13 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import and_, or_
 from sqlalchemy.sql.functions import count
 
-from recap.adapter import Backend
+from recap.adapter import (
+    NamespaceCatalog,
+    NamespaceContextResolver,
+    NamespaceWriter,
+    ReadBackend,
+    WriteBackend,
+)
 from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
 from recap.adapter.query_loaders import (
     preload_options,
@@ -156,7 +162,13 @@ def _apply_field_expressions(model, stmt, spec, joined_paths):
     return stmt
 
 
-class LocalBackend(Backend):
+class LocalBackend(
+    ReadBackend,
+    WriteBackend,
+    NamespaceCatalog,
+    NamespaceContextResolver,
+    NamespaceWriter,
+):
     def __init__(self, session_factory):
         self._session_factory = session_factory
 
@@ -179,16 +191,14 @@ class LocalBackend(Backend):
     def create_namespace(
         self,
         path: str,
-        metadata: dict[str, Any] | None = None,
-        context: CommandContext | None = None,
-    ) -> NamespaceContext | NamespaceSchema:
-        if context is None:
-            raise ValueError("Command context is required")
-        return CommandService(self._session_factory).create_namespace(
+        metadata: dict[str, Any] | None,
+        context: CommandContext,
+    ) -> NamespaceContext:
+        return self._namespace_context(CommandService(self._session_factory).create_namespace(
             context,
             path=path,
             metadata=metadata,
-        )
+        ))
 
     def update_namespace(
         self,
@@ -197,13 +207,30 @@ class LocalBackend(Backend):
         metadata: dict[str, Any] | None,
         status: LifecycleStatus | None,
         context: CommandContext,
-    ) -> NamespaceSchema:
-        return CommandService(self._session_factory).update_namespace(
+        *,
+        etag: str | None = None,
+    ) -> NamespaceContext:
+        return self._namespace_context(CommandService(self._session_factory).update_namespace(
             context,
             namespace_id=namespace_id,
             expected_revision=expected_revision,
             metadata=metadata,
             status=status,
+        ))
+
+    @staticmethod
+    def _namespace_context(
+        namespace: NamespaceContext | NamespaceSchema,
+    ) -> NamespaceContext:
+        if isinstance(namespace, NamespaceContext):
+            return namespace
+        return NamespaceContext(
+            id=namespace.id,
+            path=namespace.path,
+            metadata=namespace.metadata,
+            status=namespace.status,
+            revision=namespace.revision,
+            etag=None,
         )
 
     def get_process_template(
@@ -710,6 +737,13 @@ class LocalBackend(Backend):
                 return []
             statement = select(Namespace).where(Namespace.parent_id == parent.id)
             return [namespace.path for namespace in session.scalars(statement)]
+
+    def list_child_namespaces(self, parent_path: str) -> list[str]:
+        prefix = f"{parent_path.strip('/')}/" if parent_path.strip("/") else ""
+        return [
+            path.removeprefix(prefix)
+            for path in self.list_child_namespace_paths(parent_path)
+        ]
 
     def _apply_namespace_visibility(
         self, model, stmt, spec: QuerySpec, namespace_path: str

@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -43,17 +45,29 @@ def _non_dict_error_response():
 
 def test_create_namespace_sends_exact_authenticated_request_and_parses_etag():
     from recap.adapter.rest import RESTAdapter
+    from recap.schemas.namespace import NamespaceContext
 
+    namespace_id = uuid4()
     response = _response(
         headers={"ETag": '"7"', "X-Request-ID": "req-1"},
-        body={"id": str(uuid4()), "path": "beamline/amx", "revision": 7},
+        body={
+            "id": str(namespace_id),
+            "path": "beamline/amx",
+            "revision": 7,
+            "status": "ACTIVE",
+            "metadata": {"beamline": "amx"},
+            "create_date": datetime.now(timezone.utc).isoformat(),
+            "modified_date": datetime.now(timezone.utc).isoformat(),
+        },
     )
     with patch("recap.adapter.rest.httpx.Client") as client_type:
         client_type.return_value.request.return_value = response
         adapter = RESTAdapter("https://recap.test/", api_key="secret")
 
         result = adapter.create_namespace(
-            "beamline/amx", {"beamline": "amx"}, idempotency_key="idem-1"
+            "beamline/amx",
+            {"beamline": "amx"},
+            SimpleNamespace(idempotency_key="idem-1"),
         )
 
     client_type.return_value.request.assert_called_once_with(
@@ -62,9 +76,10 @@ def test_create_namespace_sends_exact_authenticated_request_and_parses_etag():
         headers={"Authorization": "Apikey secret", "Idempotency-Key": "idem-1"},
         json={"metadata": {"beamline": "amx"}},
     )
+    assert isinstance(result, NamespaceContext)
+    assert result.id == namespace_id
     assert result.etag == '"7"'
-    assert result.request_id == "req-1"
-    assert result.entity["revision"] == 7
+    assert result.revision == 7
     assert "secret" not in repr(adapter)
 
 
@@ -73,17 +88,36 @@ def test_update_and_copy_send_preconditions_and_destination_path():
 
     source = uuid4()
     responses = [
-        _response(headers={"ETag": '"2"', "X-Request-ID": "update"}),
+        _response(
+            headers={"ETag": '"2"', "X-Request-ID": "update"},
+            body={
+                "id": str(source),
+                "path": "beamline/amx",
+                "revision": 2,
+                "status": "ACTIVE",
+                "metadata": {"owner": "amx"},
+                "create_date": datetime.now(timezone.utc).isoformat(),
+                "modified_date": datetime.now(timezone.utc).isoformat(),
+            },
+        ),
         _response(headers={"ETag": '"1"', "X-Request-ID": "copy"}),
     ]
     with patch("recap.adapter.rest.httpx.Client") as client_type:
         client_type.return_value.request.side_effect = responses
         adapter = RESTAdapter("https://recap.test", api_key="secret")
-        adapter.update_namespace(uuid4(), {"metadata": {"owner": "amx"}}, etag='"1"')
+        adapter.update_namespace(
+            uuid4(),
+            1,
+            {"owner": "amx"},
+            None,
+            SimpleNamespace(idempotency_key=None),
+            etag='"1"',
+        )
         adapter.copy_resource(source, "beamline/amx", changes={"name": "copy"})
 
     calls = client_type.return_value.request.call_args_list
     assert calls[0].kwargs["headers"]["If-Match"] == '"1"'
+    assert calls[0].kwargs["json"] == {"metadata": {"owner": "amx"}}
     assert calls[0].kwargs["headers"]["Idempotency-Key"]
     assert calls[1].args[:2] == (
         "POST",
@@ -94,6 +128,59 @@ def test_update_and_copy_send_preconditions_and_destination_path():
         "name": "copy",
     }
     assert calls[1].kwargs["headers"]["Idempotency-Key"]
+
+
+def test_update_namespace_preserves_explicit_empty_etag():
+    from recap.adapter.rest import RESTAdapter
+
+    namespace_id = uuid4()
+    response = _response(
+        headers={"ETag": '"2"'},
+        body={
+            "id": str(namespace_id),
+            "path": "beamline/amx",
+            "revision": 2,
+            "status": "ACTIVE",
+            "metadata": {},
+            "create_date": datetime.now(timezone.utc).isoformat(),
+            "modified_date": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    with patch("recap.adapter.rest.httpx.Client") as client_type:
+        client_type.return_value.request.return_value = response
+        RESTAdapter("https://recap.test", api_key="secret").update_namespace(
+            namespace_id,
+            1,
+            None,
+            None,
+            SimpleNamespace(idempotency_key=None),
+            etag="",
+        )
+
+    assert client_type.return_value.request.call_args.kwargs["headers"]["If-Match"] == ""
+
+
+def test_execute_copy_returns_resource_schema():
+    from recap.adapter.rest import RESTAdapter
+    from recap.commands.models import CopyResource
+    from recap.schemas.resource import ResourceSchema
+
+    source = uuid4()
+    result = object()
+    response = _response(body={"resource": "payload"})
+    with patch("recap.adapter.rest.httpx.Client") as client_type:
+        client_type.return_value.request.return_value = response
+        with patch.object(ResourceSchema, "model_validate", return_value=result) as validate:
+            returned = RESTAdapter("https://recap.test", api_key="secret").execute(
+                CopyResource(
+                    source_resource_id=source,
+                    destination_namespace_path="beamline/amx",
+                ),
+                SimpleNamespace(idempotency_key="idem-copy"),
+            )
+
+    assert returned is result
+    validate.assert_called_once_with({"resource": "payload"})
 
 
 def test_list_child_namespaces_uses_get_endpoint_without_write_headers():
@@ -130,7 +217,9 @@ def test_transport_failures_map_to_typed_connection_error_without_secret(exc_typ
     with patch("recap.adapter.rest.httpx.Client") as client_type:
         client_type.return_value.request.side_effect = error
         with pytest.raises(RecapConnectionError) as caught:
-            RESTAdapter("https://recap.test", api_key="secret").create_namespace("amx")
+            RESTAdapter("https://recap.test", api_key="secret").create_namespace(
+                "amx", None, SimpleNamespace(idempotency_key=None)
+            )
     assert caught.value.status_code is None
     assert "secret" not in str(caught.value)
 
@@ -143,7 +232,9 @@ def test_http_error_exposes_status_and_request_id_as_typed_error():
     with patch("recap.adapter.rest.httpx.Client") as client_type:
         client_type.return_value.request.return_value = response
         with pytest.raises(RecapHTTPError) as caught:
-            RESTAdapter("https://recap.test", api_key="secret").create_namespace("amx")
+            RESTAdapter("https://recap.test", api_key="secret").create_namespace(
+                "amx", None, SimpleNamespace(idempotency_key=None)
+            )
     assert caught.value.status_code == 409
     assert caught.value.request_id == "req-9"
     assert "secret" not in str(caught.value)
@@ -161,7 +252,9 @@ def test_http_error_exposes_structured_validation_message():
     with patch("recap.adapter.rest.httpx.Client") as client_type:
         client_type.return_value.request.return_value = response
         with pytest.raises(RecapHTTPError) as caught:
-            RESTAdapter("https://recap.test", api_key="secret").create_namespace("amx")
+            RESTAdapter("https://recap.test", api_key="secret").create_namespace(
+                "amx", None, SimpleNamespace(idempotency_key=None)
+            )
 
     assert caught.value.message == "name is required"
     assert "name is required" in str(caught.value)
@@ -188,7 +281,9 @@ def test_http_error_hides_unstructured_response_details(make_response, expects_j
     with patch("recap.adapter.rest.httpx.Client") as client_type:
         client_type.return_value.request.return_value = response
         with pytest.raises(RecapHTTPError) as caught:
-            RESTAdapter("https://recap.test", api_key="secret").create_namespace("amx")
+            RESTAdapter("https://recap.test", api_key="secret").create_namespace(
+                "amx", None, SimpleNamespace(idempotency_key=None)
+            )
 
     assert caught.value.message is None
     assert str(caught.value) == (

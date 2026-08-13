@@ -3,7 +3,9 @@ import tempfile
 
 from recap.adapter import (
     AuthorizedReadBackend,
-    NamespaceChildrenBackend,
+    NamespaceCatalog,
+    NamespaceContextResolver,
+    NamespaceWriter,
     ReadBackend,
     WriteBackend,
 )
@@ -27,22 +29,24 @@ def test_write_backend_is_protocol():
     )
 
 
-def test_local_backend_satisfies_backend():
-    # LocalBackend must still satisfy the combined Backend protocol
+def test_local_backend_satisfies_independent_capabilities():
     with tempfile.TemporaryDirectory() as d:
         db_path = os.path.join(d, "test.db")
         lb = LocalBackend(db_path)
         assert isinstance(lb, ReadBackend)
-        assert isinstance(lb, NamespaceChildrenBackend)
-        assert hasattr(lb, "create_namespace")
         assert isinstance(lb, WriteBackend)
+        assert isinstance(lb, NamespaceCatalog)
+        assert isinstance(lb, NamespaceContextResolver)
+        assert isinstance(lb, NamespaceWriter)
 
 
 def test_graphql_adapter_satisfies_read_backend():
     adapter = GraphQLAdapter("http://recap.test/graphql")
     try:
         assert isinstance(adapter, ReadBackend)
-        assert not isinstance(adapter, NamespaceChildrenBackend)
+        assert not isinstance(adapter, NamespaceCatalog)
+        assert not isinstance(adapter, NamespaceContextResolver)
+        assert not isinstance(adapter, NamespaceWriter)
         assert not isinstance(adapter, AuthorizedReadBackend)
     finally:
         adapter.close()
