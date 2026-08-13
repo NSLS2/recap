@@ -5,8 +5,9 @@ title: Server Configuration
 # Server Configuration
 
 `ServerConfig` reads direct keyword arguments and environment variables with
-`RECAP_` prefix. `ServerConfig.from_yaml(path)` reads values below top-level
-`server:`.
+the `RECAP_` prefix when constructed directly. `ServerConfig.from_yaml(path)`
+reads values below top-level `server:`. `recap-server` applies explicit
+`--host`, `--port`, and `--log-level` flags after loading its configuration.
 
 ## Fields
 
@@ -45,5 +46,17 @@ server:
   api_key: secret
 ```
 
-Equivalent environment variables include `RECAP_DB_PATH`, `RECAP_HOST`,
-`RECAP_PORT`, `RECAP_AUTHENTICATION_MODE`, and `RECAP_API_KEY`.
+Environment variables include `RECAP_DB_PATH`, `RECAP_HOST`, `RECAP_PORT`,
+`RECAP_AUTHENTICATION_MODE`, and `RECAP_API_KEY` when `ServerConfig` is
+constructed directly. Do not assume environment variables override values
+loaded by `ServerConfig.from_yaml()` until that precedence is covered by an
+end-to-end server configuration test.
+
+`audit_log_path` is currently a configuration field, but the server application
+does not yet connect it to a durable audit sink.
+
+`authentication_mode: multi-user` and
+`entitlement_snapshot_path` are validated by `ServerConfig`, but the current
+`recap-server` startup path does not pass those settings into the application.
+Multi-user deployment therefore remains unavailable until that wiring and
+end-to-end startup coverage are implemented.

@@ -8,16 +8,81 @@ RECAP can run behind a local or remote server. In both cases, the server owns
 the database and clients connect with `RecapClient.from_url()`. GraphQL serves
 reads, while authenticated REST endpoints handle creates, updates, and copies.
 
-## Start a local server
+This guide documents the currently runnable single-user API-key deployment.
+Multi-user authorization configuration is described separately as an
+implementation gap because its server startup wiring is not complete.
 
-Install the server extra and start the server against a local SQLite database:
+## Install the server
+
+Install the server extra on the host that owns the RECAP database:
+
+```bash
+pip install "pyrecap[server]"
+```
+
+The server extra includes Uvicorn, GraphQL/FastAPI integration, PostgreSQL
+support, and server configuration dependencies.
+
+## Configure a single-user server
+
+Create a configuration file on the server. Keep the API key in a secret
+manager or provision the file with restricted permissions; do not commit the
+key to source control.
+
+```yaml
+server:
+  db_path: /data/recap/recap.db
+  host: 127.0.0.1
+  port: 8000
+  authentication_mode: single-user
+  api_key: replace-with-secret
+```
+
+Exactly one of `db_path` and `database_uri` is required. Use `database_uri`
+for a non-file database such as PostgreSQL. Single-user mode requires a
+non-empty `api_key`.
+
+For a local server, start directly against SQLite:
 
 ```bash
 pip install "pyrecap[server]"
 recap-server --db /path/to/recap.db --port 8000
 ```
 
-Connect to it from Python:
+The direct `--db` form uses server configuration defaults. Configure its API
+key through the supported server configuration or environment settings rather
+than placing credentials in command arguments.
+
+For a configured deployment, start with:
+
+```bash
+recap-server --config /etc/recap/recap-server.yaml
+```
+
+## Run a remote server
+
+For a remote deployment, install the server extra on the host that owns the
+database and run `recap-server` under your chosen hosting platform. A typical
+provider-neutral boundary is:
+
+```text
+Client -> HTTPS endpoint or reverse proxy -> recap-server -> database
+```
+
+The deployment platform is intentionally outside RECAP's scope. Configure its
+process manager, network access, TLS termination, backups, and secrets using
+your organization's standards.
+
+```text
+[Deployment-specific: add reverse-proxy and TLS configuration.]
+[Deployment-specific: add process-manager configuration and restart policy.]
+[Deployment-specific: add database backup and restore procedure.]
+[Deployment-specific: add secret provisioning and rotation procedure.]
+```
+
+## Connect a remote client
+
+Connect to the reachable base URL from Python:
 
 ```python
 from recap.client import RecapClient
@@ -33,29 +98,112 @@ Once connected, follow [Quick Start: Create and Store Data Locally](quick-start-
 Use `RecapClient.from_url()` in place of `RecapClient.from_sqlite()`; the
 namespace, builders, queries, and provenance workflow are the same.
 
-## Run a remote server
+Remote clients use GraphQL for reads and counts. Creates, updates, and resource
+copies use authenticated REST commands. Applications do not need direct access
+to the server's database filesystem.
 
-For a remote deployment, install the server extra on the host that will own the
-database and expose the server base URL through your chosen hosting platform.
-The deployment platform is intentionally outside RECAP's scope. Configure its
-process manager, network access, TLS termination, backups, and secrets using
-your organization's standards.
+## Authentication and authorization
 
-The client only needs the reachable base URL and an API key:
+The current runnable server authentication mode uses one configured API key.
+The client sends this exact header on GraphQL and REST requests:
 
-```python
-client = RecapClient.from_url(
-    "https://recap.example.org",
-    api_key="your-api-key",
-)
+```text
+Authorization: Apikey your-api-key
 ```
 
-Keep API keys outside source control. The client sends them as
-`Authorization: Apikey ...` and redacts credentials from transport errors and
-representations.
+Missing, malformed, or invalid credentials return `401` before query or
+command execution. Credentials are compared using constant-time comparison
+and are redacted from client representations and connection errors.
 
-For production deployments, configure authentication and database settings
-through server configuration rather than embedding credentials in command
-arguments. See [remote authentication](use-remote-authentication.qmd) for
-client credentials and [local and remote transport](../explanation/local-remote-architecture.qmd)
-for the transport boundary.
+The single-user actor currently receives all defined scopes and has no
+namespace restriction. Authorization still applies to namespace operations:
+
+- Read and write permissions are separate scopes.
+- Write permission does not implicitly grant read permission.
+- Grants on ancestor namespaces can apply to descendants.
+- Sibling namespaces remain isolated.
+- Resource copy requires source read permission and destination write permission.
+- Process-run access requires exact namespace context.
+- GraphQL authorization visibility is applied before filtering, ordering,
+  pagination, and counts.
+
+Inspect effective permissions from a client:
+
+```python
+permissions = client.namespace("beamline/amx").permissions()
+print(permissions.effective_scopes)
+print(permissions.matched_namespace_paths)
+```
+
+See [Authentication and Authorization](../explanation/authentication-authorization.qmd)
+for policy evaluation details and
+[REST and GraphQL Architecture](../explanation/rest-graphql-architecture.qmd)
+for transport behavior.
+
+### Multi-user authorization status
+
+The authorization compiler can convert a YAML source file into an immutable
+SQLite entitlement snapshot:
+
+```bash
+recap-authz-compile authorization.yml entitlement-snapshot.db
+```
+
+The source format binds provider identities to groups, roles, scopes, and
+namespace paths:
+
+```yaml
+source_revision: revision-42
+
+roles:
+  reader:
+    scopes:
+      - namespace:read
+      - resource:read
+
+groups:
+  scientists:
+    identities:
+      - provider: oidc
+        subject: user@example.org
+
+namespaces:
+  beamline/amx:
+    groups:
+      - name: scientists
+        role: reader
+```
+
+```text
+[Code gap: ServerConfig accepts multi-user snapshot settings, but
+recap-server currently does not pass authentication_mode,
+entitlement_snapshot_path, or entitlement_snapshot_max_age_seconds into
+create_app(). Do not use multi-user mode in production until server wiring and
+end-to-end startup tests exist.]
+```
+
+Snapshot loading is fail-closed when the snapshot is missing, stale, corrupt,
+has an unsupported format, or fails its integrity check.
+
+## Verify and troubleshoot
+
+Send an authenticated GraphQL request after starting the server:
+
+```bash
+curl https://recap.example.org/graphql \
+  -H 'Authorization: Apikey your-api-key' \
+  -H 'Content-Type: application/json' \
+  --data '{"query":"{ __typename }"}'
+```
+
+Use responses as follows:
+
+- `200`: request authenticated and reached GraphQL.
+- `401`: credential is missing, malformed, or invalid.
+- `403`: authenticated actor lacks required permission.
+- `404`: resource or namespace may be concealed by authorization policy.
+- `503`: authorization snapshot is unavailable.
+
+Use the `X-Request-ID` response header when reporting server-side failures.
+
+For client credential details, see [Authenticate a Remote Client](use-remote-authentication.qmd).
