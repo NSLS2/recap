@@ -146,6 +146,11 @@ check-build = { cmd = ["twine", "check", "dist/*"] }
 
 [tool]
 
+[tool.pytest.ini_options]
+markers = [
+    "performance: SQL statement-budget regression tests; run with test-performance",
+]
+
 [tool.pixi.feature.lint.tasks]
 lint = { cmd = ["pre-commit", "run", "--all-files"] }
 
@@ -162,7 +167,9 @@ docs-preview = { cmd = ["great-docs", "preview"] }
 docs-check-links = { cmd = ["great-docs", "check-links", "--ignore", "recap\\.test"] }
 
 [tool.pixi.feature.test.tasks]
-test = { cmd = ["pytest", "-s", "-ra", "recap/tests"] }
+test = { cmd = ["pytest", "-ra", "-m", "not performance", "recap/tests"] }
+test-performance = { cmd = ["pytest", "-ra", "-m", "performance", "recap/tests"] }
+test-all = { cmd = ["pytest", "-ra", "recap/tests"] }
 
 [tool.pixi.tasks]
 
