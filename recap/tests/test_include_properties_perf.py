@@ -12,6 +12,8 @@ fetched with ``include(["properties"])`` issues **zero** additional SQL
 statements.
 """
 
+import pytest
+
 from .conftest import count_statements
 
 
@@ -27,6 +29,7 @@ def _make_template(client, name="IncPropT"):
         rtb.prop_group("status").add_attribute("state", "str", "", "new").close_group()
 
 
+@pytest.mark.performance
 def test_build_property_model_after_include_properties_no_lazy_loads(client):
     """build_property_model() on a resource fetched with include(["properties"])
     must not trigger any additional SQL (no per-group template lazy load)."""
@@ -57,6 +60,7 @@ def test_build_property_model_after_include_properties_no_lazy_loads(client):
     )
 
 
+@pytest.mark.performance
 def test_include_properties_matches_load_eager_statement_count(client):
     """include(['properties']) must load property templates as efficiently as
     the load="eager" path. Both go through

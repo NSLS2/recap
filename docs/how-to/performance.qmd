@@ -19,6 +19,12 @@ Use `descendants()` or `under_parent()` for targeted resource subtree queries
 instead of eager-loading an entire large hierarchy. See [Trace Provenance](provenance-queries.qmd)
 for traversal patterns.
 
+## Test suites
+
+Run default tests with `pixi run test`. This excludes SQL statement-budget
+regressions. Run those regressions with `pixi run test-performance`; run all
+tests with `pixi run test-all` before release or when changing query loading.
+
 ## Update known records by ID
 
 Builders accept `resource_id=` and `process_run_id=` for existing records. These

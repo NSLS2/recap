@@ -14,6 +14,7 @@ on demand -- an N+1 that scales with the assigned resource's tree depth.
 
 from uuid import uuid4
 
+import pytest
 from sqlalchemy.orm import sessionmaker
 
 from recap.adapter.local import LocalBackend
@@ -96,6 +97,7 @@ def _walk_depth(resource):
     return n
 
 
+@pytest.mark.performance
 def test_process_run_include_resources_is_depth_independent(db_session):
     """``include('resources')`` on a process run query must issue a bounded,
     depth-independent number of SQL statements regardless of the assigned
@@ -136,6 +138,7 @@ def test_process_run_include_resources_is_depth_independent(db_session):
     )
 
 
+@pytest.mark.performance
 def test_process_run_include_resources_hydrates_full_chain(db_session):
     """The assigned resource's entire child chain must be hydrated with the
     correct structure (not just bounded statement count)."""

@@ -10,6 +10,8 @@ The regression these tests guard against is hydrating the tree by walking
 that grows with tree depth.
 """
 
+import pytest
+
 from recap.dsl.resource_builder import ResourceTemplateBuilder
 
 from .conftest import count_statements
@@ -51,6 +53,7 @@ def _walk_depth(resource):
     return n
 
 
+@pytest.mark.performance
 def test_get_resource_expand_is_depth_independent(client):
     """``get_resource(expand=True)`` must issue a bounded, depth-independent
     number of SQL statements regardless of tree depth."""
@@ -77,6 +80,7 @@ def test_get_resource_expand_is_depth_independent(client):
     )
 
 
+@pytest.mark.performance
 def test_get_resource_expand_matches_query_eager(client):
     """``get_resource(expand=True)`` must return the same hydrated tree as a
     ``load="eager"`` query for the same root (behaviour-preserving refactor)."""

@@ -13,6 +13,7 @@ The key assertion is *depth-independence*: a 3-level and a 4-level chain must
 issue the **same** number of statements.
 """
 
+import pytest
 
 from .conftest import count_statements
 
@@ -53,6 +54,7 @@ def _walk_depth(resource):
     return n
 
 
+@pytest.mark.performance
 def test_load_eager_resource_tree_is_depth_independent(client):
     """A ``load="eager"`` resource query must issue a bounded, depth-independent
     number of SQL statements regardless of tree depth."""
@@ -81,6 +83,7 @@ def test_load_eager_resource_tree_is_depth_independent(client):
     )
 
 
+@pytest.mark.performance
 def test_load_eager_resource_tree_bounded_count(client):
     """The absolute statement count for a deep tree must be a small constant."""
     _make_template(client, name="TreePerfBounded")
