@@ -25,17 +25,9 @@ from recap.commands.idempotency import command_fingerprint
 from recap.commands.models import (
     CommandContext,
     CommandModel,
-    CopyResource,
-    CreateProcessRun,
-    CreateProcessTemplate,
-    CreateResource,
-    CreateResourceTemplate,
     SetLifecycleStatus,
-    UpdateProcessRun,
-    UpdateProcessTemplate,
-    UpdateResource,
-    UpdateResourceTemplate,
 )
+from recap.commands.registry import COMMAND_REGISTRY
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.audit import MutationAuditRepository
 from recap.db.base import compare_and_swap_revision
@@ -60,7 +52,6 @@ from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
 from recap.schemas.resource import (
     ResourceCopyOptions,
     ResourceSchema,
-    ResourceTemplateSchema,
 )
 from recap.schemas.step import ParameterSchema, StepSchema
 from recap.server.audit import AuditOutcome, AuditRecord
@@ -125,79 +116,15 @@ class CommandService:
     def __init__(self, session_factory: sessionmaker) -> None:
         self._session_factory = session_factory
 
-    def execute(self, command: CommandModel, context: CommandContext):  # noqa: C901
-        if isinstance(command, CreateResource):
-            return self.create_resource(
-                context,
-                namespace_path=command.namespace_path,
-                name=command.name,
-                template_id=command.template_id,
-                parent_id=command.parent_id,
-                properties=command.properties,
-            )
-        if isinstance(command, UpdateResource):
-            return self.update_resource(
-                context,
-                resource_id=command.resource_id,
-                expected_revision=command.expected_revision,
-                name=command.name,
-                properties=command.properties,
-            )
-        if isinstance(command, CopyResource):
-            return self.copy_resource(
-                context,
-                source_resource_id=command.source_resource_id,
-                destination_namespace_path=command.destination_namespace_path,
-                options=command.options,
-            )
-        if isinstance(command, CreateProcessTemplate):
-            return self.create_process_template(
-                context,
-                namespace_path=command.namespace_path,
-                draft=command.draft,
-            )
-        if isinstance(command, UpdateProcessTemplate):
-            return self.update_process_template(
-                context,
-                template_id=command.template_id,
-                expected_revision=command.expected_revision,
-                draft=command.draft,
-            )
-        if isinstance(command, CreateResourceTemplate):
-            return self.create_resource_template(
-                context, namespace_path=command.namespace_path, draft=command.draft
-            )
-        if isinstance(command, UpdateResourceTemplate):
-            return self.update_resource_template(
-                context,
-                template_id=command.template_id,
-                expected_revision=command.expected_revision,
-                draft=command.draft,
-            )
-        if isinstance(command, CreateProcessRun):
-            return self.create_process_run(
-                context, namespace_path=command.namespace_path, draft=command.draft
-            )
-        if isinstance(command, UpdateProcessRun):
-            return self.update_process_run(
-                context,
-                process_run_id=command.process_run_id,
-                expected_revision=command.expected_revision,
-                description=command.description,
-                status=command.status,
-                assignments=command.assignments,
-                steps=command.steps,
-            )
-        if isinstance(command, SetLifecycleStatus):
-            return self.set_lifecycle_status(
-                context,
-                object_type=command.object_type,
-                object_id=command.object_id,
-                expected_revision=command.expected_revision,
-                status=command.status,
-            )
-        raise CommandValidationError(
-            f"Unsupported command type: {type(command).__name__}"
+    def execute(self, command: CommandModel, context: CommandContext):
+        registration = COMMAND_REGISTRY.by_command(command)
+        handler = getattr(self, registration.service_handler)
+        return handler(
+            context,
+            **{
+                field_name: getattr(command, field_name)
+                for field_name in type(command).model_fields
+            },
         )
 
     def set_lifecycle_status(
@@ -249,13 +176,16 @@ class CommandService:
                 )
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
-                    schema = {
-                        ProcessTemplate: ProcessTemplateSchema,
-                        ResourceTemplate: ResourceTemplateSchema,
-                        Resource: ResourceSchema,
-                        ProcessRun: ProcessRunSchema,
-                    }[model]
-                    return schema.model_validate(decision.response)
+                    return COMMAND_REGISTRY.by_type(SetLifecycleStatus).decode_response(
+                        decision.response,
+                        None,
+                        command=SetLifecycleStatus(
+                            object_type=object_type,
+                            object_id=object_id,
+                            expected_revision=expected_revision,
+                            status=status,
+                        ),
+                    )
                 validate_transition(obj.status, target_status)
                 if target_status is LifecycleStatus.ACTIVE:
                     if isinstance(obj, ProcessRun):
@@ -269,12 +199,15 @@ class CommandService:
                 )
                 session.flush()
                 session.refresh(obj)
-                result = {
-                    ProcessTemplate: ProcessTemplateSchema,
-                    ResourceTemplate: ResourceTemplateSchema,
-                    Resource: ResourceSchema,
-                    ProcessRun: ProcessRunSchema,
-                }[model].model_validate(obj)
+                lifecycle_command = SetLifecycleStatus(
+                    object_type=object_type,
+                    object_id=object_id,
+                    expected_revision=expected_revision,
+                    status=status,
+                )
+                result = COMMAND_REGISTRY.by_type(
+                    SetLifecycleStatus
+                ).decode_response(obj, None, command=lifecycle_command)
                 if decision is not None:
                     idempotency.complete(
                         decision,

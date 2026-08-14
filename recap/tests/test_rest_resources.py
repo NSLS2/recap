@@ -1,4 +1,7 @@
-from recap.server.rest import router
+from dataclasses import replace
+
+from recap.commands.registry import CommandRegistration
+from recap.server.rest import command_registration, router
 
 
 def test_resource_routes_are_canonical(api_client):
@@ -8,7 +11,14 @@ def test_resource_routes_are_canonical(api_client):
     assert "/api/v1/resources/{source_resource_id}/copies" in paths
 
 
-def test_create_and_patch_resource(api_client, idempotency_headers):
+def test_registry_dependency_resolves_named_command():
+    resolved = command_registration("update_resource")()
+
+    assert isinstance(resolved, CommandRegistration)
+    assert resolved.name == "update_resource"
+
+
+def test_create_and_patch_resource(api_client, idempotency_headers, monkeypatch):
     namespace = api_client.put(
         "/api/v1/namespaces/beamline",
         headers=idempotency_headers("namespace-1"),
@@ -34,6 +44,25 @@ def test_create_and_patch_resource(api_client, idempotency_headers):
     )
     assert resource.status_code == 201
     assert resource.json()["name"] == "plate-1"
+    from recap.commands.registry import CommandRegistry
+
+    decoded = []
+    original_by_name = CommandRegistry.by_name
+
+    def by_name(registry, name):
+        registration = original_by_name(registry, name)
+        if name == "update_resource":
+            decoder = registration.decode_command
+
+            def decode(path_params, headers, body):
+                command = decoder(path_params, headers, body)
+                decoded.append(command)
+                return command
+
+            return replace(registration, decode_command=decode)
+        return registration
+
+    monkeypatch.setattr(CommandRegistry, "by_name", by_name)
     updated = api_client.patch(
         f"/api/v1/resources/{resource.json()['id']}",
         headers=idempotency_headers("resource-2", **{"If-Match": resource.headers["ETag"]}),
@@ -44,6 +73,8 @@ def test_create_and_patch_resource(api_client, idempotency_headers):
     assert updated.request.content == b'{"name":"plate-2"}'
     assert "expected_revision" not in updated.request.content.decode()
     assert updated.headers["ETag"] == '"2"'
+    assert str(decoded[0].resource_id) == resource.json()["id"]
+    assert decoded[0].expected_revision == 1
 
 
 def test_create_resource_replays_sequentially_with_same_idempotency_key(

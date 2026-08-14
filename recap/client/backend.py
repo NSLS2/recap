@@ -69,8 +69,16 @@ class ClientBackend:
             etag=etag,
         )
 
-    def _execute(self, command: CommandModel, context: CommandContext) -> object:
-        return self.writer.execute(command, context)
+    def _execute(
+        self,
+        command: CommandModel,
+        context: CommandContext,
+        *,
+        etag_override: str | None = None,
+    ) -> object:
+        if etag_override is None:
+            return self.writer.execute(command, context)
+        return self.writer.execute(command, context, etag_override=etag_override)
 
     def close(self) -> None:
         closed: set[int] = set()

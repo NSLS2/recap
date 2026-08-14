@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -12,6 +13,7 @@ from recap.dsl.drafts import (
     ProcessTemplateDraft,
     ResourceTemplateDraft,
 )
+from recap.lifecycle import LifecycleStatus
 from recap.schemas.resource import ResourceCopyOptions
 from recap.server.audit import AuditSink
 
@@ -35,6 +37,18 @@ class UpdateResource(CommandModel):
     expected_revision: int
     name: str | None = None
     properties: dict[str, dict[str, object]] | None = None
+
+
+class CreateNamespace(CommandModel):
+    path: str
+    metadata: dict[str, Any] | None = None
+
+
+class UpdateNamespace(CommandModel):
+    namespace_id: UUID
+    expected_revision: int
+    metadata: dict[str, Any] | None = None
+    status: LifecycleStatus | None = None
 
 
 class CopyResource(CommandModel):

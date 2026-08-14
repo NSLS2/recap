@@ -63,7 +63,13 @@ class PermissionsBackend(Protocol):
 class WriteBackend(Protocol):
     """Write contract accepting closed commands plus trusted request context."""
 
-    def execute(self, command: CommandModel, context: CommandContext) -> object: ...
+    def execute(
+        self,
+        command: CommandModel,
+        context: CommandContext,
+        *,
+        etag_override: str | None = None,
+    ) -> object: ...
 
 
 @runtime_checkable

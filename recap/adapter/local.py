@@ -34,7 +34,12 @@ from recap.adapter.query_loaders import (
 )
 from recap.adapter.resource_construct import ResourceSchemaHydrator
 from recap.authorization.query import AuthorizedQuery
-from recap.commands.models import CommandContext, CommandModel
+from recap.commands.models import (
+    CommandContext,
+    CommandModel,
+    CreateNamespace,
+    UpdateNamespace,
+)
 from recap.commands.service import CommandService
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate, AttributeValue
 from recap.db.base import Base
@@ -176,7 +181,13 @@ class LocalBackend(
         """Retained for client lifecycle compatibility; sessions are short-lived."""
         return None
 
-    def execute(self, command: CommandModel, context: CommandContext) -> object:
+    def execute(
+        self,
+        command: CommandModel,
+        context: CommandContext,
+        *,
+        etag_override: str | None = None,
+    ) -> object:
         return CommandService(self._session_factory).execute(command, context)
 
     @contextmanager
@@ -194,11 +205,8 @@ class LocalBackend(
         metadata: dict[str, Any] | None,
         context: CommandContext,
     ) -> NamespaceContext:
-        return self._namespace_context(CommandService(self._session_factory).create_namespace(
-            context,
-            path=path,
-            metadata=metadata,
-        ))
+        result = self.execute(CreateNamespace(path=path, metadata=metadata), context)
+        return self._namespace_context(result)
 
     def update_namespace(
         self,
@@ -210,13 +218,16 @@ class LocalBackend(
         *,
         etag: str | None = None,
     ) -> NamespaceContext:
-        return self._namespace_context(CommandService(self._session_factory).update_namespace(
+        result = self.execute(
+            UpdateNamespace(
+                namespace_id=namespace_id,
+                expected_revision=expected_revision,
+                metadata=metadata,
+                status=status,
+            ),
             context,
-            namespace_id=namespace_id,
-            expected_revision=expected_revision,
-            metadata=metadata,
-            status=status,
-        ))
+        )
+        return self._namespace_context(result)
 
     @staticmethod
     def _namespace_context(

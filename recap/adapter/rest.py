@@ -11,31 +11,16 @@ from uuid import UUID
 import httpx2 as httpx
 from pydantic import SecretStr
 
-from recap.adapter.transport import _prepare_dynamic_models
 from recap.commands.models import (
     CommandContext,
     CommandModel,
-    CopyResource,
-    CreateProcessRun,
-    CreateProcessTemplate,
-    CreateResource,
-    CreateResourceTemplate,
-    SetLifecycleStatus,
-    UpdateProcessRun,
-    UpdateProcessTemplate,
-    UpdateResource,
-    UpdateResourceTemplate,
+    CreateNamespace,
+    UpdateNamespace,
 )
+from recap.commands.registry import COMMAND_REGISTRY
 from recap.exceptions import RecapConnectionError, RecapHTTPError
 from recap.lifecycle import LifecycleStatus
-from recap.schemas.namespace import NamespaceContext, NamespaceSchema
-from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
-from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
-
-
-def _resource_schema(entity: dict[str, Any]) -> ResourceSchema:
-    _prepare_dynamic_models(entity)
-    return ResourceSchema.model_validate(entity)
+from recap.schemas.namespace import NamespaceContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,13 +120,7 @@ class RESTAdapter:
         metadata: dict[str, Any] | None,
         context: CommandContext,
     ) -> NamespaceContext:
-        result = self._request(
-            "PUT",
-            f"/api/v1/namespaces/{path.strip('/')}",
-            body={"metadata": metadata or {}},
-            idempotency_key=getattr(context, "idempotency_key", None),
-        )
-        return self._namespace_context(result)
+        return self.execute(CreateNamespace(path=path, metadata=metadata), context)
 
     def update_namespace(
         self,
@@ -153,31 +132,15 @@ class RESTAdapter:
         *,
         etag: str | None = None,
     ) -> NamespaceContext:
-        body: dict[str, Any] = {}
-        if metadata is not None:
-            body["metadata"] = dict(metadata)
-        if status is not None:
-            body["status"] = status.value
-        result = self._request(
-            "PATCH",
-            f"/api/v1/namespaces/{namespace_id}",
-            body=body,
-            etag=etag if etag is not None else f'"{expected_revision}"',
-            idempotency_key=getattr(context, "idempotency_key", None),
+        command = UpdateNamespace(
+            namespace_id=namespace_id,
+            expected_revision=expected_revision,
+            metadata=metadata,
+            status=status,
         )
-        return self._namespace_context(result)
-
-    @staticmethod
-    def _namespace_context(result: RESTResult) -> NamespaceContext:
-        namespace = NamespaceSchema.model_validate(result.entity)
-        return NamespaceContext(
-            id=namespace.id,
-            path=namespace.path,
-            metadata=namespace.metadata,
-            status=namespace.status,
-            revision=namespace.revision,
-            etag=result.etag,
-        )
+        if etag is None:
+            return self.execute(command, context)
+        return self.execute(command, context, etag_override=etag)
 
     def list_child_namespaces(self, parent_path: str) -> list[str]:
         path = parent_path.strip("/")
@@ -238,123 +201,23 @@ class RESTAdapter:
             idempotency_key=idempotency_key,
         )
 
-    def execute(self, command: CommandModel, context) -> Any:  # noqa: C901
+    def _execute_registered(
+        self, command: CommandModel, context, *, etag_override: str | None = None
+    ) -> RESTResult:
+        registration = COMMAND_REGISTRY.by_command(command)
+        encoded = registration.encode_request(command)
+        return self._request(
+            encoded.method,
+            encoded.path,
+            body=encoded.body,
+            etag=encoded.etag if etag_override is None else etag_override,
+            idempotency_key=getattr(context, "idempotency_key", None),
+        )
+
+    def execute(
+        self, command: CommandModel, context, *, etag_override: str | None = None
+    ) -> Any:
         """Submit command DTO using its canonical REST route."""
-        data = command.model_dump(mode="json")
-        key = getattr(context, "idempotency_key", None)
-        if isinstance(command, CopyResource):
-            return _resource_schema(
-                self.copy_resource(
-                    command.source_resource_id,
-                    command.destination_namespace_path,
-                    changes=command.options.model_dump(mode="json"),
-                    idempotency_key=key,
-                ).entity
-            )
-        if isinstance(command, CreateProcessRun):
-            return ProcessRunSchema.model_validate(
-                self.create(
-                    "process-runs",
-                    command.namespace_path,
-                    data["draft"],
-                    idempotency_key=key,
-                ).entity
-            )
-        if isinstance(command, UpdateProcessRun):
-            return ProcessRunSchema.model_validate(
-                self.update(
-                    "process-runs",
-                    command.process_run_id,
-                    {
-                        key: value
-                        for key, value in data.items()
-                        if key not in {"process_run_id", "expected_revision"}
-                    },
-                    etag=f'"{command.expected_revision}"',
-                    idempotency_key=key,
-                ).entity
-            )
-        if isinstance(command, UpdateResource):
-            entity = self.update(
-                "resources",
-                command.resource_id,
-                {
-                    key: value
-                    for key, value in data.items()
-                    if key not in {"resource_id", "expected_revision"}
-                },
-                etag=f'"{command.expected_revision}"',
-                idempotency_key=key,
-            ).entity
-            return _resource_schema(entity)
-        if isinstance(command, CreateProcessTemplate):
-            return ProcessTemplateSchema.model_validate(
-                self.create(
-                    "process-templates",
-                    command.namespace_path,
-                    data["draft"],
-                    idempotency_key=key,
-                ).entity
-            )
-        if isinstance(command, CreateResourceTemplate):
-            return ResourceTemplateSchema.model_validate(
-                self.create(
-                    "resource-templates",
-                    command.namespace_path,
-                    data["draft"],
-                    idempotency_key=key,
-                ).entity
-            )
-        if isinstance(command, CreateResource):
-            return _resource_schema(
-                self.create(
-                    "resources",
-                    command.namespace_path,
-                    {
-                        key: value
-                        for key, value in data.items()
-                        if key != "namespace_path"
-                    },
-                    idempotency_key=key,
-                ).entity
-            )
-        if isinstance(command, UpdateProcessTemplate | UpdateResourceTemplate):
-            resource = (
-                "process-templates"
-                if isinstance(command, UpdateProcessTemplate)
-                else "resource-templates"
-            )
-            schema = (
-                ProcessTemplateSchema
-                if isinstance(command, UpdateProcessTemplate)
-                else ResourceTemplateSchema
-            )
-            return schema.model_validate(
-                self.update(
-                    resource,
-                    command.template_id,
-                    data["draft"],
-                    etag=f'"{command.expected_revision}"',
-                    idempotency_key=key,
-                ).entity
-            )
-        if isinstance(command, SetLifecycleStatus):
-            result = self._request(
-                "POST",
-                f"/api/v1/lifecycle/{command.object_type}/{command.object_id}",
-                body={"status": command.status},
-                etag=f'"{command.expected_revision}"',
-                idempotency_key=key,
-            )
-            schema = {
-                "resource": ResourceSchema,
-                "resource_template": ResourceTemplateSchema,
-                "process_template": ProcessTemplateSchema,
-                "process_run": ProcessRunSchema,
-            }.get(command.object_type)
-            if schema is None:
-                raise TypeError(f"Unsupported lifecycle object: {command.object_type}")
-            if schema is ResourceSchema:
-                return _resource_schema(result.entity)
-            return schema.model_validate(result.entity)
-        raise TypeError(f"Unsupported REST command: {type(command).__name__}")
+        registration = COMMAND_REGISTRY.by_command(command)
+        result = self._execute_registered(command, context, etag_override=etag_override)
+        return registration.decode_response(result.entity, result.etag, command=command)

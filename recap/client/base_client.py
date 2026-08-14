@@ -12,7 +12,7 @@ from recap.client.connection_state import _ConnectionState
 from recap.client.permissions import ActorPermissions
 from recap.commands.context import build_local_command_context
 from recap.commands.errors import CommandValidationError
-from recap.commands.models import CopyResource
+from recap.commands.models import CopyResource, CreateNamespace, UpdateNamespace
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
@@ -950,9 +950,10 @@ class RecapClient:
         """Create a namespace and make it active for subsequent writes."""
         if self.backend is None:
             raise RuntimeError("Backend not initialized")
-        self._namespace_context = self.backend.create_namespace(
-            path, metadata, self._command_context()
+        result = self.backend._execute(
+            CreateNamespace(path=path, metadata=metadata), self._command_context()
         )
+        self._namespace_context = self._as_namespace_context(result)
         return self._namespace_context
 
     def update_namespace(
@@ -976,15 +977,24 @@ class RecapClient:
                 raise ValueError("Expected namespace revision is required")
             expected_revision = context.revision
 
-        self._namespace_context = self.backend.update_namespace(
-            namespace_id,
-            expected_revision,
-            None if metadata is None else dict(metadata),
-            status,
+        result = self.backend._execute(
+            UpdateNamespace(
+                namespace_id=namespace_id,
+                expected_revision=expected_revision,
+                metadata=None if metadata is None else dict(metadata),
+                status=status,
+            ),
             self._command_context(),
-            etag=context.etag if context is not None else None,
+            etag_override=None if context is None else context.etag,
         )
+        self._namespace_context = self._as_namespace_context(result)
         return self._namespace_context
+
+    @staticmethod
+    def _as_namespace_context(result) -> NamespaceContext:
+        if isinstance(result, NamespaceContext):
+            return result
+        return NamespaceContext.model_validate(result)
 
     @property
     def namespace_context(self) -> NamespaceContext | None:

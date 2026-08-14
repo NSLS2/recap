@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Annotated
 from uuid import UUID
 
@@ -15,6 +14,7 @@ from recap.authorization.policy import (
 )
 from recap.commands.context import DiscardAuditSink
 from recap.commands.models import CommandContext
+from recap.commands.registry import COMMAND_REGISTRY, CommandRegistration
 from recap.commands.service import CommandService
 from recap.dsl.drafts import (
     ProcessRunDraft,
@@ -24,7 +24,6 @@ from recap.dsl.drafts import (
 from recap.schemas.namespace import NamespaceSchema
 from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
 from recap.schemas.resource import (
-    ResourceCopyOptions,
     ResourceSchema,
     ResourceTemplateSchema,
 )
@@ -42,7 +41,17 @@ from recap.server.security import authenticate_request
 from recap.utils.namespace import canonicalize_namespace_path
 
 router = APIRouter(prefix="/api/v1")
-_ETAG = re.compile(r'(?:W/)?"?([1-9][0-9]*)"?')
+
+
+def command_registration(name: str):
+    def resolve() -> CommandRegistration:
+        return COMMAND_REGISTRY.by_name(name)
+
+    return resolve
+
+
+def command_service(request: Request) -> CommandService:
+    return CommandService(request.app.state.session_factory)
 
 
 def _context(request: Request, actor: RequestActor, idempotency_key: str):
@@ -69,15 +78,6 @@ def _set_etag(response: Response, entity):
     return serialize_model(entity) if isinstance(entity, ResourceSchema) else entity
 
 
-def _parse_if_match(value: str) -> int:
-    match = _ETAG.fullmatch(value.strip())
-    if match is None:
-        from recap.commands.errors import CommandValidationError
-
-        raise CommandValidationError("Invalid If-Match header")
-    return int(match.group(1))
-
-
 @router.put(
     "/namespaces/{namespace_path:path}",
     response_model=NamespaceSchema,
@@ -90,11 +90,15 @@ def create_namespace(
     response: Response,
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("create_namespace"))
+    ],
 ) -> NamespaceSchema:
-    result = CommandService(request.app.state.session_factory).create_namespace(
-        _context(request, actor, idempotency_key),
-        path=namespace_path,
-        metadata=body.metadata,
+    command = registration.decode_command(
+        {"namespace_path": namespace_path}, {}, body
+    )
+    result = CommandService(request.app.state.session_factory).execute(
+        command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
 
@@ -108,13 +112,15 @@ def update_namespace(
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
     if_match: Annotated[str, Header(alias="If-Match")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("update_namespace"))
+    ],
 ) -> NamespaceSchema:
-    result = CommandService(request.app.state.session_factory).update_namespace(
-        _context(request, actor, idempotency_key),
-        namespace_id=namespace_id,
-        expected_revision=_parse_if_match(if_match),
-        metadata=body.metadata,
-        status=body.status,
+    command = registration.decode_command(
+        {"namespace_id": namespace_id}, {"If-Match": if_match}, body
+    )
+    result = CommandService(request.app.state.session_factory).execute(
+        command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
 
@@ -158,11 +164,15 @@ def create_process_template(
     response: Response,
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("create_process_template"))
+    ],
 ) -> ProcessTemplateSchema:
-    result = CommandService(request.app.state.session_factory).create_process_template(
-        _context(request, actor, idempotency_key),
-        namespace_path=namespace_path,
-        draft=body,
+    command = registration.decode_command(
+        {"namespace_path": namespace_path}, {}, body
+    )
+    result = CommandService(request.app.state.session_factory).execute(
+        command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
 
@@ -176,12 +186,15 @@ def update_process_template(
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
     if_match: Annotated[str, Header(alias="If-Match")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("update_process_template"))
+    ],
 ) -> ProcessTemplateSchema:
-    result = CommandService(request.app.state.session_factory).update_process_template(
-        _context(request, actor, idempotency_key),
-        template_id=template_id,
-        expected_revision=_parse_if_match(if_match),
-        draft=body,
+    command = registration.decode_command(
+        {"template_id": template_id}, {"If-Match": if_match}, body
+    )
+    result = CommandService(request.app.state.session_factory).execute(
+        command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
 
@@ -198,11 +211,15 @@ def create_resource_template(
     response: Response,
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("create_resource_template"))
+    ],
 ) -> ResourceTemplateSchema:
-    result = CommandService(request.app.state.session_factory).create_resource_template(
-        _context(request, actor, idempotency_key),
-        namespace_path=namespace_path,
-        draft=body,
+    command = registration.decode_command(
+        {"namespace_path": namespace_path}, {}, body
+    )
+    result = CommandService(request.app.state.session_factory).execute(
+        command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
 
@@ -218,12 +235,15 @@ def update_resource_template(
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
     if_match: Annotated[str, Header(alias="If-Match")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("update_resource_template"))
+    ],
 ) -> ResourceTemplateSchema:
-    result = CommandService(request.app.state.session_factory).update_resource_template(
-        _context(request, actor, idempotency_key),
-        template_id=template_id,
-        expected_revision=_parse_if_match(if_match),
-        draft=body,
+    command = registration.decode_command(
+        {"template_id": template_id}, {"If-Match": if_match}, body
+    )
+    result = CommandService(request.app.state.session_factory).execute(
+        command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
 
@@ -240,17 +260,15 @@ def copy_resource(
     response: Response,
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("copy_resource"))
+    ],
 ) -> ResourceSchema:
-    from recap.commands.models import CopyResource
-
+    command = registration.decode_command(
+        {"source_resource_id": source_resource_id}, {}, body
+    )
     result = CommandService(request.app.state.session_factory).execute(
-        CopyResource(
-            source_resource_id=source_resource_id,
-            destination_namespace_path=body.destination_namespace,
-            options=ResourceCopyOptions.model_validate(
-                body.model_dump(exclude={"destination_namespace"})
-            ),
-        ),
+        command,
         _context(request, actor, idempotency_key),
     )
     return _set_etag(response, result)
@@ -264,17 +282,15 @@ def create_resource(
     response: Response,
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("create_resource"))
+    ],
 ) -> ResourceSchema:
-    from recap.commands.models import CreateResource
-
+    command = registration.decode_command(
+        {"namespace_path": namespace_path}, {}, body
+    )
     result = CommandService(request.app.state.session_factory).execute(
-        CreateResource(
-            namespace_path=namespace_path,
-            name=body.name,
-            template_id=UUID(body.template_id),
-            parent_id=UUID(body.parent_id) if body.parent_id else None,
-            properties=body.properties,
-        ),
+        command,
         _context(request, actor, idempotency_key),
     )
     return _set_etag(response, result)
@@ -289,16 +305,17 @@ def update_resource(
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
     if_match: Annotated[str, Header(alias="If-Match")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("update_resource"))
+    ],
 ) -> ResourceSchema:
-    from recap.commands.models import UpdateResource
-
+    command = registration.decode_command(
+        path_params={"resource_id": resource_id},
+        headers={"If-Match": if_match},
+        body=body,
+    )
     result = CommandService(request.app.state.session_factory).execute(
-        UpdateResource(
-            resource_id=resource_id,
-            expected_revision=_parse_if_match(if_match),
-            name=body.name,
-            properties=body.properties,
-        ),
+        command,
         _context(request, actor, idempotency_key),
     )
     return _set_etag(response, result)
@@ -314,12 +331,15 @@ def create_process_run(
     response: Response,
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("create_process_run"))
+    ],
 ) -> ProcessRunSchema:
-    from recap.commands.models import CreateProcessRun
-
+    command = registration.decode_command(
+        {"namespace_path": namespace_path}, {}, body
+    )
     result = CommandService(request.app.state.session_factory).execute(
-        CreateProcessRun(namespace_path=namespace_path, draft=body),
-        _context(request, actor, idempotency_key),
+        command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
 
@@ -333,16 +353,15 @@ def update_process_run(
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
     if_match: Annotated[str, Header(alias="If-Match")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("update_process_run"))
+    ],
 ) -> ProcessRunSchema:
-    from recap.commands.models import UpdateProcessRun
-
+    command = registration.decode_command(
+        {"process_run_id": process_run_id}, {"If-Match": if_match}, body
+    )
     result = CommandService(request.app.state.session_factory).execute(
-        UpdateProcessRun(
-            process_run_id=process_run_id,
-            expected_revision=_parse_if_match(if_match),
-            **body.model_dump(),
-        ),
-        _context(request, actor, idempotency_key),
+        command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
 
@@ -357,16 +376,17 @@ def set_lifecycle_status(
     actor: Annotated[RequestActor, Depends(authenticate_request)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
     if_match: Annotated[str, Header(alias="If-Match")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("set_lifecycle_status"))
+    ],
 ):
-    from recap.commands.models import SetLifecycleStatus
-
+    command = registration.decode_command(
+        {"object_type": object_type, "object_id": object_id},
+        {"If-Match": if_match},
+        body,
+    )
     result = CommandService(request.app.state.session_factory).execute(
-        SetLifecycleStatus(
-            object_type=object_type,
-            object_id=object_id,
-            expected_revision=_parse_if_match(if_match),
-            status=body.status.value,
-        ),
+        command,
         _context(request, actor, idempotency_key),
     )
     return _set_etag(response, result)

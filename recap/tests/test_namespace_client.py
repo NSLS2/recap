@@ -55,22 +55,22 @@ def test_remote_namespace_context_preserves_response_etag(monkeypatch):
 
     captured_context = None
 
-    def create_namespace(path, metadata, context):
+    def execute(command, context):
         nonlocal captured_context
         captured_context = context
         return NamespaceContext(
             id=namespace_id,
-            path=path,
-            metadata=metadata or {},
+            path=command.path,
+            metadata=command.metadata or {},
             status=LifecycleStatus.ACTIVE,
             revision=7,
             etag='W/"remote-7"',
         )
 
     monkeypatch.setattr(
-        client.backend.namespace_writer,
-        "create_namespace",
-        create_namespace,
+        client.backend.writer,
+        "execute",
+        execute,
     )
 
     context = client.create_namespace("beamline", {"owner": "amx"})
@@ -80,4 +80,34 @@ def test_remote_namespace_context_preserves_response_etag(monkeypatch):
     assert context.revision == 7
     assert context.etag == 'W/"remote-7"'
     assert captured_context is not None
+    client.close()
+
+
+def test_remote_namespace_update_forwards_active_server_etag(monkeypatch):
+    client = RecapClient.from_url("http://recap.test", api_key="secret")
+    namespace_id = uuid4()
+    client._namespace_context = NamespaceContext(
+        id=namespace_id,
+        path="beamline/amx",
+        revision=7,
+        etag='W/"server-7"',
+    )
+    captured = {}
+
+    def execute(command, context, *, etag_override=None):
+        captured["command"] = command
+        captured["etag_override"] = etag_override
+        return NamespaceContext(
+            id=namespace_id,
+            path="beamline/amx",
+            revision=8,
+            etag='W/"server-8"',
+        )
+
+    monkeypatch.setattr(client.backend.writer, "execute", execute)
+
+    client.update_namespace(metadata={"owner": "fmx"})
+
+    assert captured["command"].expected_revision == 7
+    assert captured["etag_override"] == 'W/"server-7"'
     client.close()

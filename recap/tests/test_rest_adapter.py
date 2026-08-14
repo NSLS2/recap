@@ -160,6 +160,30 @@ def test_update_namespace_preserves_explicit_empty_etag():
     assert client_type.return_value.request.call_args.kwargs["headers"]["If-Match"] == ""
 
 
+def test_namespace_adapter_methods_dispatch_through_registry_execute(monkeypatch):
+    from recap.adapter.rest import RESTAdapter
+    from recap.commands.models import CreateNamespace, UpdateNamespace
+
+    adapter = RESTAdapter("https://recap.test", api_key="secret")
+    returned = object()
+    commands = []
+
+    def execute(command, context):
+        commands.append(command)
+        return returned
+
+    monkeypatch.setattr(adapter, "execute", execute)
+    context = SimpleNamespace(idempotency_key="idem-1")
+
+    assert adapter.create_namespace("beamline", {"owner": "amx"}, context) is returned
+    assert adapter.update_namespace(uuid4(), 2, {"owner": "fmx"}, None, context) is returned
+    assert isinstance(commands[0], CreateNamespace)
+    assert isinstance(commands[1], UpdateNamespace)
+    assert commands[0].path == "beamline"
+    assert commands[1].expected_revision == 2
+    adapter.close()
+
+
 def test_execute_copy_returns_resource_schema():
     from recap.adapter.rest import RESTAdapter
     from recap.commands.models import CopyResource

@@ -4,12 +4,13 @@ from uuid import UUID
 
 import pytest
 
-from recap.client.base_client import RecapClient
 from recap.client.backend import ClientBackend
+from recap.client.base_client import RecapClient
+from recap.commands.models import CreateNamespace, UpdateNamespace
 from recap.dsl.query import QuerySpec
+from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceRef, ResourceSchema
-from recap.lifecycle import LifecycleStatus
 
 
 class _Reader:
@@ -28,7 +29,7 @@ class _Writer:
         self.commands = []
         self.result = result
 
-    def execute(self, command, context):
+    def execute(self, command, context, *, etag_override=None):
         self.commands.append((command, context))
         return self.result
 
@@ -212,7 +213,7 @@ def test_copy_resource_routes_through_write_capability():
     client.close()
 
 
-def test_namespace_operations_route_through_namespace_writer():
+def test_namespace_operations_route_through_command_writer():
     context = NamespaceContext(
         id=UUID(int=3),
         path="scope",
@@ -222,26 +223,25 @@ def test_namespace_operations_route_through_namespace_writer():
     )
 
     class NamespaceWriter(_Writer):
-        def create_namespace(self, path, metadata, context):
-            return self.context
-
-        def update_namespace(
-            self, namespace_id, expected_revision, metadata, status, context, *, etag=None
-        ):
+        def execute(self, command, context, *, etag_override=None):
+            self.commands.append((command, context))
             return self.context
 
     writer = NamespaceWriter()
     writer.context = context
+    namespace_writer = _NamespaceWriter()
     backend = ClientBackend(
         reader=_Reader(),
         writer=writer,
         namespaces=_Namespaces(),
-        namespace_writer=writer,
+        namespace_writer=namespace_writer,
     )
     client = RecapClient._from_backends(backend)
 
     assert client.create_namespace("scope") == context
     assert client.update_namespace() == context
+    assert isinstance(writer.commands[0][0], CreateNamespace)
+    assert isinstance(writer.commands[1][0], UpdateNamespace)
     client.close()
 
 
