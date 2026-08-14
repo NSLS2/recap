@@ -11,6 +11,7 @@ from strawberry.schema.config import StrawberryConfig
 from recap.adapter import AuthorizedReadBackend, ReadBackend
 from recap.server.context import StrawberryGraphQLContext, graphql_context
 from recap.server.dependencies import get_local_backend
+from recap.server.errors import ErrorCode, request_id_from
 from recap.server.resolvers import (
     resolve_execute_count,
     resolve_execute_query,
@@ -78,6 +79,39 @@ def build_schema(backend: ReadBackend) -> strawberry.Schema:
     )
 
 
+class SafeGraphQLRouter(GraphQLRouter):
+    async def process_result(self, request: Request, result):
+        response = await super().process_result(request, result)
+        request_id = request_id_from(request)
+        errors = response.get("errors")
+        if not errors:
+            return response
+
+        for error in errors:
+            extensions = error.get("extensions") or {}
+            code = extensions.get("code")
+            if code == ErrorCode.VALIDATION_ERROR.value:
+                message = error["message"]
+            elif code == ErrorCode.INTERNAL_ERROR.value:
+                code = ErrorCode.INTERNAL_ERROR.value
+                message = "Internal server error"
+            else:
+                code = (
+                    ErrorCode.VALIDATION_ERROR.value
+                    if "path" not in error
+                    else ErrorCode.INTERNAL_ERROR.value
+                )
+                message = (
+                    "GraphQL request validation failed"
+                    if code == ErrorCode.VALIDATION_ERROR.value
+                    else "Internal server error"
+                )
+            error["message"] = message
+            error["extensions"] = {"code": code, "request_id": request_id}
+
+        return response
+
+
 def build_router() -> GraphQLRouter:
     """Build a GraphQLRouter with request-scoped backend injection."""
 
@@ -91,4 +125,4 @@ def build_router() -> GraphQLRouter:
     schema = strawberry.Schema(
         query=Query, config=StrawberryConfig(auto_camel_case=False)
     )
-    return GraphQLRouter(schema, context_getter=get_context)
+    return SafeGraphQLRouter(schema, context_getter=get_context)

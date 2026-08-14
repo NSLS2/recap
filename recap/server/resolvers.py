@@ -29,6 +29,7 @@ from recap.schemas.resource import (
     ResourceTemplateSchema,
 )
 from recap.server.context import StrawberryGraphQLContext
+from recap.server.errors import ErrorCode
 from recap.server.strawberry_types import (
     NamespaceType,
     PermissionIdentityType,
@@ -102,12 +103,16 @@ def _count(
     )
 
 
-def _resolve_schema(schema_name: str) -> type[BaseModel]:
+def _resolve_schema(schema_name: str, request_id: str) -> type[BaseModel]:
     try:
         return _SCHEMA_REGISTRY[schema_name]
     except KeyError as exc:
         raise strawberry.exceptions.StrawberryGraphQLError(
-            "Unknown query schema"
+            "Unknown query schema",
+            extensions={
+                "code": ErrorCode.VALIDATION_ERROR.value,
+                "request_id": request_id,
+            },
         ) from exc
 
 
@@ -153,20 +158,34 @@ def _normalize_uuid_filters(schema: type[BaseModel], spec: QuerySpec) -> QuerySp
     return spec.model_copy(update={"filters": filters})
 
 
-def _validate_query_spec(spec: JSON, schema: type[BaseModel]) -> QuerySpec:
+def _validate_query_spec(
+    spec: JSON, schema: type[BaseModel], request_id: str
+) -> QuerySpec:
     try:
         return _normalize_uuid_filters(schema, QuerySpec.model_validate(spec))
     except ValidationError as exc:
         raise strawberry.exceptions.StrawberryGraphQLError(
-            "Invalid query specification"
+            "Invalid query specification",
+            extensions={
+                "code": ErrorCode.VALIDATION_ERROR.value,
+                "request_id": request_id,
+            },
         ) from exc
+
+
+def _request_id(info: strawberry.types.Info) -> str:
+    context = info.context
+    if isinstance(context, StrawberryGraphQLContext):
+        return context.request_id
+    return str(context.get("request_id", ""))
 
 
 def resolve_execute_query(
     info: strawberry.types.Info, schema_name: str, namespace_path: str, spec: JSON
 ) -> JSON:
-    schema = _resolve_schema(schema_name)
-    query_spec = _validate_query_spec(spec, schema)
+    request_id = _request_id(info)
+    schema = _resolve_schema(schema_name, request_id)
+    query_spec = _validate_query_spec(spec, schema, request_id)
     items = [
         serialize_model(item)
         for item in _query(info, schema, query_spec, namespace_path)
@@ -177,8 +196,11 @@ def resolve_execute_query(
 def resolve_execute_count(
     info: strawberry.types.Info, schema_name: str, namespace_path: str, spec: JSON
 ) -> int:
-    schema = _resolve_schema(schema_name)
-    return _count(info, schema, _validate_query_spec(spec, schema), namespace_path)
+    request_id = _request_id(info)
+    schema = _resolve_schema(schema_name, request_id)
+    return _count(
+        info, schema, _validate_query_spec(spec, schema, request_id), namespace_path
+    )
 
 
 def _resource_schema_to_type(r: ResourceSchema) -> ResourceType:

@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pytest
 from fastapi.testclient import TestClient
 
+
 def make_test_app(tmp_path):
     from recap.server.app import create_app
 
@@ -233,6 +234,10 @@ def test_execute_query_rejects_unknown_schema(
     body = response.json()
     assert body["data"] is None
     assert body["errors"][0]["message"] == "Unknown query schema"
+    assert body["errors"][0]["extensions"] == {
+        "code": "validation_error",
+        "request_id": response.headers["X-Request-ID"],
+    }
     assert "attacker-controlled" not in str(body)
 
 
@@ -262,7 +267,48 @@ def test_execute_rejects_malformed_query_spec(
     body = response.json()
     assert body["data"] is None
     assert body["errors"][0]["message"] == "Invalid query specification"
+    assert body["errors"][0]["extensions"] == {
+        "code": "validation_error",
+        "request_id": response.headers["X-Request-ID"],
+    }
     assert "attacker-controlled" not in str(body)
+
+
+def test_graphql_syntax_failure_has_safe_extensions(tmp_path):
+    client = TestClient(make_test_app(tmp_path))
+
+    response = client.post("/graphql", json={"query": "{ resources( }"})
+
+    assert response.status_code == 200
+    error = response.json()["errors"][0]
+    assert error["message"] == "GraphQL request validation failed"
+    assert error["extensions"] == {
+        "code": "validation_error",
+        "request_id": response.headers["X-Request-ID"],
+    }
+
+
+def test_graphql_backend_failure_has_safe_extensions(tmp_path, monkeypatch):
+    from recap.server import resolvers
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("backend secret=do-not-publish")
+
+    monkeypatch.setattr(resolvers, "_query", fail)
+    client = TestClient(make_test_app(tmp_path))
+
+    response = client.post(
+        "/graphql", json={"query": '{ resources(namespace_path: "beamline") { id } }'}
+    )
+
+    assert response.status_code == 200
+    error = response.json()["errors"][0]
+    assert error["message"] == "Internal server error"
+    assert error["extensions"] == {
+        "code": "internal_error",
+        "request_id": response.headers["X-Request-ID"],
+    }
+    assert "backend secret=do-not-publish" not in response.text
 
 
 def test_execute_query_preserves_unlimited_spec():
