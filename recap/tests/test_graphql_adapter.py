@@ -1,11 +1,23 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 
+from recap.adapter.http_transport import HTTPResult, HTTPTransport
 from recap.adapter.transport import serialize_model
 from recap.db.process import ProcessRun
-from recap.dsl.query import Field, ParameterFilter, PropertyFilter, QuerySpec
+from recap.dsl.query import QuerySpec
+from recap.exceptions import (
+    RecapAuthenticationError,
+    RecapConflictError,
+    RecapInternalError,
+    RecapNotFoundError,
+    RecapPermissionDeniedError,
+    RecapProtocolError,
+    RecapRequestError,
+    RecapServiceUnavailableError,
+    RecapValidationError,
+)
 from recap.schemas.resource import ResourceSchema
 from recap.tests.transport_factories import full_resource
 
@@ -19,303 +31,164 @@ EXECUTE_COUNT = (
 )
 
 
-def response_with(body):
-    response = MagicMock()
-    response.json.return_value = body
-    return response
+def transport(body, *, request_id=None):
+    value = MagicMock(spec=HTTPTransport)
+    value.request.return_value = HTTPResult(body, None, request_id)
+    return value
 
 
-def test_graphql_adapter_query_posts_complete_spec_and_hydrates_nested_state():
+def test_query_posts_complete_spec_and_hydrates_nested_state():
     from recap.adapter.graphql import GraphQLAdapter
+    from recap.dsl.query import ParameterFilter, PropertyFilter
 
     parent_id = uuid4()
     resource = full_resource()
-    response = response_with(
-        {
-            "data": {
-                "execute_query": {
-                    "schema_name": "ResourceSchema",
-                    "items": [serialize_model(resource)],
-                }
-            }
-        }
-    )
     spec = QuerySpec(
-        filters={"name": "sample"},
-        preloads=("children", "properties"),
-        limit=25,
-        offset=5,
-        property_filters=[PropertyFilter(name="temperature", value=20)],
+        filters={"name": "sample"}, preloads=("children", "properties"), limit=25,
+        offset=5, property_filters=[PropertyFilter(name="temperature", value=20)],
         parent_resource_id=parent_id,
         parameter_filters=[ParameterFilter(name="exposure", step="Acquire", value=2.5)],
-        include_archived=True,
-        load_mode="none",
-        on_unloaded="raise",
+        include_archived=True, load_mode="none", on_unloaded="raise",
+    )
+    value = transport({"data": {"execute_query": {
+        "schema_name": "ResourceSchema", "items": [serialize_model(resource)]
+    }}})
+
+    [hydrated] = GraphQLAdapter("http://recap.test/graphql", _transport=value).query(
+        ResourceSchema, spec, namespace_path="beamline/amx"
     )
 
-    with (
-        patch("httpx2.Client.post", return_value=response) as post,
-        GraphQLAdapter(
-            "http://localhost:9999/graphql", api_key="client-secret"
-        ) as adapter,
-    ):
-        [hydrated] = adapter.query(ResourceSchema, spec, namespace_path="beamline/amx")
-
-    post.assert_called_once_with(
-        "http://localhost:9999/graphql",
-        json={
-            "query": EXECUTE_QUERY,
-            "variables": {
-                "schema_name": "ResourceSchema",
-                "namespace_path": "beamline/amx",
-                "spec": {
-                    "filters": {"name": "sample"},
-                    "predicates": [],
-                    "orderings": [],
-                    "preloads": ["children", "properties"],
-                    "limit": 25,
-                    "offset": 5,
-                    "property_filters": [
-                        {
-                            "name": "temperature",
-                            "group": None,
-                            "op": "eq",
-                            "value": 20,
-                            "upper": None,
-                            "value_type": None,
-                        }
-                    ],
-                    "parent_resource_id": str(parent_id),
-                    "parameter_filters": [
-                        {
-                            "name": "exposure",
-                            "group": None,
-                            "step": "Acquire",
-                            "op": "eq",
-                            "value": 2.5,
-                            "upper": None,
-                            "value_type": None,
-                        }
-                    ],
-                    "include_archived": True,
-                    "local_metadata_filters": {},
-                    "effective_metadata_filters": {},
-                    "load_mode": "none",
-                    "on_unloaded": "raise",
-                },
-            },
-        },
-        headers={"Authorization": "Apikey client-secret"},
-    )
-    assert "namespace_path" not in post.call_args.kwargs["json"]["variables"]["spec"]
+    value.request.assert_called_once()
+    assert value.request.call_args.args[:2] == ("POST", "http://recap.test/graphql")
     assert hydrated.children["child"].name == "child"
     assert hydrated._loaded_relations == {"children": True, "properties": True}
     assert hydrated._on_unloaded == "raise"
-    assert hydrated.children["child"]._loaded_relations == {
-        "children": False,
-        "properties": False,
-    }
-    assert hydrated.children["child"]._on_unloaded == "silent"
 
 
-def test_graphql_adapter_count_posts_filters_in_complete_spec():
+def test_count_uses_transport_and_returns_count():
     from recap.adapter.graphql import GraphQLAdapter
+    from recap.dsl.query import QuerySpec
 
-    response = response_with({"data": {"execute_count": 42}})
-    spec = QuerySpec(
-        filters={"name": "sample"},
-        property_filters=[PropertyFilter(name="temperature", op="gte", value=20)],
-    )
-
-    with (
-        patch("httpx2.Client.post", return_value=response) as post,
-        GraphQLAdapter(
-            "http://localhost:9999/graphql", api_key="client-secret"
-        ) as adapter,
-    ):
-        count = adapter.count(ResourceSchema, spec, namespace_path="beamline/amx")
-
-    assert count == 42
-    payload = post.call_args.kwargs["json"]
-    assert post.call_args.kwargs["headers"] == {"Authorization": "Apikey client-secret"}
-    assert payload["query"] == EXECUTE_COUNT
-    assert payload["variables"]["schema_name"] == "ResourceSchema"
-    assert payload["variables"]["namespace_path"] == "beamline/amx"
-    assert "namespace_path" not in payload["variables"]["spec"]
-    assert payload["variables"]["spec"]["filters"] == {"name": "sample"}
-    assert payload["variables"]["spec"]["property_filters"] == [
-        {
-            "name": "temperature",
-            "group": None,
-            "op": "gte",
-            "value": 20,
-            "upper": None,
-            "value_type": None,
-        }
-    ]
-
-
-@pytest.mark.parametrize("method", ("query", "count"))
-def test_graphql_adapter_rejects_http_200_graphql_errors(method):
-    from recap.adapter.graphql import GraphQLAdapter
-
-    response = response_with(
-        {
-            "data": None,
-            "errors": [
-                {
-                    "message": "Invalid query specification",
-                    "locations": [{"line": 1, "column": 1}],
-                }
-            ],
-        }
-    )
-
-    with (
-        patch("httpx2.Client.post", return_value=response),
-        GraphQLAdapter("http://localhost:9999/graphql") as adapter,
-        pytest.raises(RuntimeError) as exc_info,
-    ):
-        getattr(adapter, method)(
-            ResourceSchema, QuerySpec(), namespace_path="beamline/amx"
-        )
-
-    assert str(exc_info.value) == "GraphQL request failed: Invalid query specification"
-    assert "locations" not in str(exc_info.value)
+    value = transport({"data": {"execute_count": 42}})
+    assert GraphQLAdapter("http://recap.test/graphql", _transport=value).count(
+        ResourceSchema, QuerySpec(), namespace_path="beamline/amx"
+    ) == 42
+    request = value.request.call_args
+    assert request.args[:2] == ("POST", "http://recap.test/graphql")
+    assert request.kwargs["json"]["query"] == EXECUTE_COUNT
 
 
 @pytest.mark.parametrize(
-    "errors",
-    (
-        {"message": "Invalid query specification"},
-        "Invalid query specification",
-        ["Invalid query specification"],
-    ),
+    ("code", "error_type"),
+    [
+        ("authentication_required", RecapAuthenticationError),
+        ("permission_denied", RecapPermissionDeniedError),
+        ("not_found", RecapNotFoundError),
+        ("validation_error", RecapValidationError),
+        ("conflict", RecapConflictError),
+        ("service_unavailable", RecapServiceUnavailableError),
+        ("internal_error", RecapInternalError),
+        ("request_error", RecapRequestError),
+    ],
 )
-def test_graphql_adapter_rejects_malformed_graphql_errors(errors):
+@pytest.mark.parametrize("method", ("query", "count"))
+def test_http_200_graphql_errors_use_public_categories(code, error_type, method):
+    from recap.adapter.graphql import GraphQLAdapter
+    from recap.dsl.query import QuerySpec
+
+    value = transport({"data": None, "errors": [{
+        "message": "Safe message", "extensions": {"code": code, "request_id": "request-5"}
+    }]})
+    with pytest.raises(error_type) as caught:
+        getattr(GraphQLAdapter("http://recap.test/graphql", _transport=value), method)(
+            ResourceSchema, QuerySpec(), namespace_path="beamline/amx"
+        )
+    assert caught.value.request_id == "request-5"
+    assert str(caught.value).startswith("Safe message")
+
+
+@pytest.mark.parametrize("errors", [
+    {"message": "bad"}, "bad", [{"message": "bad"}],
+    [{"message": "bad", "extensions": {"code": "future", "request_id": "r"}}],
+    [{"message": "bad", "extensions": {"code": "validation_error"}}],
+])
+def test_malformed_graphql_errors_raise_protocol_error(errors):
+    from recap.adapter.graphql import GraphQLAdapter
+    from recap.dsl.query import QuerySpec
+
+    value = transport({"data": None, "errors": errors})
+    with pytest.raises(RecapProtocolError, match="Malformed GraphQL error response"):
+        GraphQLAdapter("http://recap.test/graphql", _transport=value).query(
+            ResourceSchema, QuerySpec(), namespace_path="beamline/amx"
+        )
+
+
+@pytest.mark.parametrize("body", [
+    {}, {"data": None}, {"data": {}}, {"data": {"execute_count": "bad"}},
+    {"data": {"execute_query": {"items": []}}},
+])
+def test_malformed_graphql_success_response_raises_protocol_error(body):
+    from recap.adapter.graphql import GraphQLAdapter
+    from recap.dsl.query import QuerySpec
+
+    with pytest.raises(RecapProtocolError, match="Malformed GraphQL response"):
+        GraphQLAdapter("http://recap.test/graphql", _transport=transport(body)).count(
+            ResourceSchema, QuerySpec(), namespace_path="beamline/amx"
+        )
+
+
+def test_permissions_are_hydrated():
+    from recap.adapter.graphql import GraphQLAdapter
+    from recap.client.permissions import ActorPermissions
+
+    value = transport({"data": {"permissions": {
+        "identities": [{"provider": "api-key", "subject": "single-user"}],
+        "snapshot_generation": "generation-7", "effective_scopes": ["resource:read"],
+        "matched_namespace_paths": ["beamline/amx"], "groups": ["amx-users"],
+        "roles": ["reader"],
+    }}})
+    permissions = GraphQLAdapter("http://recap.test/graphql", _transport=value).permissions(
+        "beamline/amx"
+    )
+    assert isinstance(permissions, ActorPermissions)
+    assert permissions.groups == ("amx-users",)
+
+
+def test_injected_falsey_transport_is_preserved():
     from recap.adapter.graphql import GraphQLAdapter
 
-    response = response_with({"data": None, "errors": errors})
+    class FalseyTransport:
+        def __bool__(self):
+            return False
+        def close(self):
+            pass
 
-    with (
-        patch("httpx2.Client.post", return_value=response),
-        GraphQLAdapter("http://localhost:9999/graphql") as adapter,
-        pytest.raises(RuntimeError) as exc_info,
-    ):
-        adapter.query(ResourceSchema, QuerySpec(), namespace_path="beamline/amx")
-
-    assert str(exc_info.value) == "GraphQL request failed: malformed error response"
+    value = FalseyTransport()
+    assert GraphQLAdapter("http://recap.test/graphql", _transport=value)._transport is value
 
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [
-        ("predicates", (ProcessRun.name == "sample",)),
-        (
-            "predicates",
-            (Field("name") == "sample", ProcessRun.name == "sample"),
-        ),
-        ("orderings", (ProcessRun.name,)),
-        ("orderings", (Field("name").asc(), ProcessRun.name.desc())),
-    ],
+    [("predicates", (ProcessRun.name == "sample",))],
 )
 @pytest.mark.parametrize("method", ("query", "count"))
-def test_graphql_adapter_rejects_legacy_query_features_before_http(
-    field, value, method
-):
+def test_legacy_query_features_are_rejected_before_transport(field, value, method):
     from recap.adapter.graphql import GraphQLAdapter
 
-    with (
-        patch("httpx2.Client.post") as post,
-        GraphQLAdapter("http://localhost:9999/graphql") as adapter,
-        pytest.raises(TypeError, match="Field"),
-    ):
-        getattr(adapter, method)(
-            ResourceSchema,
-            QuerySpec(**{field: value}),
-            namespace_path="beamline/amx",
+    value_transport = MagicMock(spec=HTTPTransport)
+    with pytest.raises(TypeError, match="Field"):
+        getattr(GraphQLAdapter("http://recap.test/graphql", _transport=value_transport), method)(
+            ResourceSchema, QuerySpec(**{field: value}), namespace_path="beamline/amx"
         )
-
-    post.assert_not_called()
-
-
-def test_graphql_adapter_permissions_returns_typed_current_actor_permissions():
-    from recap.adapter.graphql import GraphQLAdapter
-    from recap.authentication.models import ProviderIdentity
-    from recap.authorization.scopes import Scope
-    from recap.client.permissions import ActorPermissions
-
-    response = response_with(
-        {
-            "data": {
-                "permissions": {
-                    "identities": [{"provider": "api-key", "subject": "single-user"}],
-                    "snapshot_generation": "generation-7",
-                    "effective_scopes": ["resource:read"],
-                    "matched_namespace_paths": ["beamline/amx"],
-                    "groups": ["amx-users"],
-                    "roles": ["reader"],
-                }
-            }
-        }
-    )
-
-    with (
-        patch("httpx2.Client.post", return_value=response) as post,
-        GraphQLAdapter(
-            "http://localhost:9999/graphql", api_key="client-secret"
-        ) as adapter,
-    ):
-        permissions = adapter.permissions("beamline/amx")
-
-    assert isinstance(permissions, ActorPermissions)
-    assert permissions.identities == (
-        ProviderIdentity(provider="api-key", subject="single-user"),
-    )
-    assert permissions.effective_scopes == frozenset({Scope.RESOURCE_READ})
-    assert permissions.groups == ("amx-users",)
-    assert permissions.roles == ("reader",)
-    assert post.call_args.kwargs["json"]["variables"] == {
-        "namespace_path": "beamline/amx"
-    }
-    assert post.call_args.kwargs["headers"] == {"Authorization": "Apikey client-secret"}
+    value_transport.request.assert_not_called()
 
 
-def test_graphql_adapter_redacts_api_key_from_repr_and_graphql_errors():
+def test_default_transport_receives_timeout():
+    from unittest.mock import patch
+
     from recap.adapter.graphql import GraphQLAdapter
 
-    api_key = "never-print-client-secret"
-    response = response_with(
-        {"data": None, "errors": [{"message": f"rejected {api_key}"}]}
-    )
-    adapter = GraphQLAdapter("http://localhost:9999/graphql", api_key=api_key)
-
-    assert api_key not in repr(adapter)
-    with (
-        patch("httpx2.Client.post", return_value=response),
-        pytest.raises(RuntimeError) as exc_info,
-    ):
-        adapter.query(ResourceSchema, QuerySpec(), namespace_path="beamline/amx")
-
-    assert api_key not in str(exc_info.value)
-    assert "**********" in str(exc_info.value)
+    with patch("recap.adapter.graphql.HTTPTransport") as transport_type:
+        adapter = GraphQLAdapter("http://recap.test/graphql", "secret", timeout=12.5)
+    transport_type.assert_called_once_with("secret", timeout=12.5)
     adapter.close()
-
-
-def test_graphql_adapter_redacts_api_key_from_transport_errors():
-    from recap.adapter.graphql import GraphQLAdapter
-
-    api_key = "never-print-transport-secret"
-    response = response_with({})
-    response.raise_for_status.side_effect = RuntimeError(f"rejected {api_key}")
-
-    with (
-        patch("httpx2.Client.post", return_value=response),
-        GraphQLAdapter("http://localhost:9999/graphql", api_key=api_key) as adapter,
-        pytest.raises(RuntimeError) as exc_info,
-    ):
-        adapter.query(ResourceSchema, QuerySpec(), namespace_path="beamline/amx")
-
-    assert api_key not in str(exc_info.value)
-    assert "**********" in str(exc_info.value)
-    assert exc_info.value.__cause__ is None

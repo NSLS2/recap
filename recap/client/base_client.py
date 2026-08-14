@@ -151,16 +151,15 @@ class RecapClient:
         RecapConnectionError
             If the server is unreachable or returns an HTTP error response.
         """
-        from recap.adapter.graphql import GraphQLAdapter, _RedactedAuthHeaders
+        from recap.adapter.graphql import GraphQLAdapter
         from recap.adapter.rest import RESTAdapter
 
         if unscoped:
             raise ValueError("Remote clients do not support unscoped=True")
 
         base = url.rstrip("/")
-        header_provider = _RedactedAuthHeaders(api_key)
         graphql = GraphQLAdapter(
-            graphql_url=f"{base}/graphql", _header_provider=header_provider
+            graphql_url=f"{base}/graphql", api_key=api_key, timeout=timeout
         )
         rest = RESTAdapter(base_url=base, api_key=api_key, timeout=timeout)
         client = cls._from_backends(

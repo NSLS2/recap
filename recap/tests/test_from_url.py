@@ -51,9 +51,9 @@ def test_from_url_wires_graphql_reads_and_rest_writes_without_db_discovery():
     assert client.backend.namespace_writer is client.backend.writer
     assert client.backend.permissions is client.backend.reader
     assert client.backend.context_resolver is None
-    assert client.backend.reader._headers.as_dict() == {"Authorization": "Apikey secret"}
-    assert client.backend.writer._auth.headers() == {"Authorization": "Apikey secret"}
-    assert client.backend.writer._client.timeout.connect == 12.5
+    assert client.backend.reader._transport._headers() == {"Authorization": "Apikey secret"}
+    assert client.backend.writer._transport._headers() == {"Authorization": "Apikey secret"}
+    assert client.backend.writer._transport._client.timeout.connect == 12.5
     get.assert_not_called()
     client.close()
 
