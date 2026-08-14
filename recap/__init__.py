@@ -3,6 +3,20 @@
 import enum
 
 from ._version import __version__
+from .exceptions import (
+    RecapAuthenticationError,
+    RecapConflictError,
+    RecapConnectionError,
+    RecapError,
+    RecapInternalError,
+    RecapNotFoundError,
+    RecapPermissionDeniedError,
+    RecapProtocolError,
+    RecapRequestError,
+    RecapServiceUnavailableError,
+    RecapValidationError,
+    error_from_code,
+)
 
 
 class Direction(str, enum.Enum):
@@ -73,6 +87,18 @@ from .schemas.step import (
 __all__ = [
     "__version__",
     "Direction",
+    "RecapAuthenticationError",
+    "RecapConflictError",
+    "RecapConnectionError",
+    "RecapError",
+    "RecapInternalError",
+    "RecapNotFoundError",
+    "RecapPermissionDeniedError",
+    "RecapProtocolError",
+    "RecapRequestError",
+    "RecapServiceUnavailableError",
+    "RecapValidationError",
+    "error_from_code",
     "Field",
     "LifecycleStatus",
     "QueryDSL",

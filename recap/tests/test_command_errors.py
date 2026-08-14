@@ -9,20 +9,26 @@ from recap.commands.errors import (
     CommandValidationError,
 )
 from recap.commands.models import CommandContext
+from recap.exceptions import (
+    RecapConflictError,
+    RecapNotFoundError,
+    RecapValidationError,
+)
 
 
 @pytest.mark.parametrize(
-    ("error_type", "code"),
+    ("error_type", "code", "public_type"),
     [
-        (CommandNotFoundError, "not_found"),
-        (CommandConflictError, "conflict"),
-        (CommandValidationError, "validation_error"),
+        (CommandNotFoundError, "not_found", RecapNotFoundError),
+        (CommandConflictError, "conflict", RecapConflictError),
+        (CommandValidationError, "validation_error", RecapValidationError),
     ],
 )
-def test_command_errors_have_stable_semantics(error_type, code):
+def test_command_errors_have_stable_semantics(error_type, code, public_type):
     error = error_type("safe message")
 
     assert isinstance(error, CommandError)
+    assert isinstance(error, public_type)
     assert error.code == code
     assert str(error) == "safe message"
 

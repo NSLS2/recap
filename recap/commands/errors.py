@@ -2,22 +2,29 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from recap.exceptions import (
+    RecapConflictError,
+    RecapNotFoundError,
+    RecapRequestError,
+    RecapValidationError,
+)
 
-class CommandError(RuntimeError):
+
+class CommandError(RecapRequestError):
     """Base class for safe, transport-independent command failures."""
 
     code: ClassVar[str]
 
 
-class CommandNotFoundError(CommandError):
+class CommandNotFoundError(RecapNotFoundError, CommandError):
     code = "not_found"
 
 
-class CommandConflictError(CommandError):
+class CommandConflictError(RecapConflictError, CommandError):
     code = "conflict"
 
 
-class CommandValidationError(CommandError):
+class CommandValidationError(RecapValidationError, CommandError):
     code = "validation_error"
 
     def __init__(self, message: str, *, public_message: str | None = None) -> None:
