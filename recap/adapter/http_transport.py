@@ -47,7 +47,11 @@ class HTTPTransport:
         json: Any = None,
         headers: dict[str, str] | None = None,
     ) -> HTTPResult:
-        request_headers = dict(headers or {})
+        request_headers = {
+            key: value
+            for key, value in (headers or {}).items()
+            if key.lower() != "authorization"
+        }
         request_headers.update(self._headers())
         try:
             response = self._client.request(
@@ -107,7 +111,15 @@ class HTTPTransport:
                 self.redact(message),
                 url=self.redact(url),
                 status_code=response.status_code,
-                request_id=request_id or self.redact(envelope_request_id),
+                request_id=(
+                    request_id
+                    if request_id is not None
+                    else (
+                        self.redact(envelope_request_id)
+                        if envelope_request_id is not None
+                        else None
+                    )
+                ),
             )
 
         return HTTPResult(

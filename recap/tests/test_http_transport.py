@@ -81,7 +81,10 @@ def test_request_error_becomes_connection_error_without_secret(error):
     assert caught.value.url == "https://recap.example"
 
 
-def test_caller_authorization_cannot_override_transport_auth():
+@pytest.mark.parametrize(
+    "authorization", ["Authorization", "authorization", "AUTHORIZATION", "aUtHoRiZaTiOn"]
+)
+def test_caller_authorization_cannot_override_transport_auth(authorization):
     transport = HTTPTransport("owned-secret")
     response = make_response(200, {"ok": True})
 
@@ -89,7 +92,7 @@ def test_caller_authorization_cannot_override_transport_auth():
         transport.request(
             "GET",
             "https://recap.example",
-            headers={"Authorization": "Apikey caller-secret", "X-Test": "value"},
+            headers={authorization: "Apikey caller-secret", "X-Test": "value"},
         )
 
     assert request.call_args.kwargs["headers"] == {
@@ -164,6 +167,22 @@ def test_header_request_id_wins_over_envelope():
         transport.request("GET", "https://recap.example")
 
     assert caught.value.request_id == "header-id"
+
+
+def test_empty_header_request_id_wins_over_envelope():
+    response = make_response(
+        409,
+        {"error": {"code": "conflict", "message": "Conflict", "request_id": "body-id"}},
+        headers={"X-Request-ID": ""},
+    )
+    transport = HTTPTransport(None)
+
+    with patch.object(transport._client, "request", return_value=response), pytest.raises(
+        RecapConflictError
+    ) as caught:
+        transport.request("GET", "https://recap.example")
+
+    assert caught.value.request_id == ""
 
 
 def test_unknown_error_code_falls_back_to_request_error():
