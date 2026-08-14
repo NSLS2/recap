@@ -62,7 +62,14 @@ def test_transport_uses_custom_timeout():
     assert transport._client.timeout.connect == 12.5
 
 
-@pytest.mark.parametrize("error", [httpx2.ConnectError("secret"), httpx2.TimeoutException("secret")])
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx2.RequestError("secret"),
+        httpx2.ConnectError("secret"),
+        httpx2.TimeoutException("secret"),
+    ],
+)
 def test_request_error_becomes_connection_error_without_secret(error):
     transport = HTTPTransport("secret")
     with patch.object(transport._client, "request", side_effect=error), pytest.raises(
@@ -72,6 +79,23 @@ def test_request_error_becomes_connection_error_without_secret(error):
 
     assert "secret" not in str(caught.value)
     assert caught.value.url == "https://recap.example"
+
+
+def test_caller_authorization_cannot_override_transport_auth():
+    transport = HTTPTransport("owned-secret")
+    response = make_response(200, {"ok": True})
+
+    with patch.object(transport._client, "request", return_value=response) as request:
+        transport.request(
+            "GET",
+            "https://recap.example",
+            headers={"Authorization": "Apikey caller-secret", "X-Test": "value"},
+        )
+
+    assert request.call_args.kwargs["headers"] == {
+        "Authorization": "Apikey owned-secret",
+        "X-Test": "value",
+    }
 
 
 def test_secret_is_absent_from_repr_and_protocol_errors():
@@ -140,6 +164,53 @@ def test_header_request_id_wins_over_envelope():
         transport.request("GET", "https://recap.example")
 
     assert caught.value.request_id == "header-id"
+
+
+def test_unknown_error_code_falls_back_to_request_error():
+    response = make_response(
+        418,
+        {
+            "error": {
+                "code": "future_code",
+                "message": "Unknown failure",
+                "request_id": "body-id",
+            }
+        },
+    )
+    transport = HTTPTransport("secret")
+
+    with patch.object(transport._client, "request", return_value=response), pytest.raises(
+        RecapRequestError
+    ) as caught:
+        transport.request("GET", "https://recap.example")
+
+    assert type(caught.value) is RecapRequestError
+
+
+def test_external_error_fields_are_redacted_before_construction():
+    secret = "secret"
+    url = "https://secret.example/secret"
+    response = make_response(
+        409,
+        {
+            "error": {
+                "code": "conflict",
+                "message": "message contains secret",
+                "request_id": "request-secret",
+            }
+        },
+        headers={"X-Request-ID": "header-secret"},
+    )
+    transport = HTTPTransport(secret)
+
+    with patch.object(transport._client, "request", return_value=response), pytest.raises(
+        RecapConflictError
+    ) as caught:
+        transport.request("GET", url)
+
+    assert caught.value.url == "https://**********.example/**********"
+    assert caught.value.message == "message contains **********"
+    assert caught.value.request_id == "header-**********"
 
 
 @pytest.mark.parametrize("body", [None, {}, {"error": {}}, {"error": "bad"}, {"error": {"code": "conflict"}}])

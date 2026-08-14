@@ -47,17 +47,20 @@ class HTTPTransport:
         json: Any = None,
         headers: dict[str, str] | None = None,
     ) -> HTTPResult:
-        request_headers = self._headers()
-        if headers:
-            request_headers.update(headers)
+        request_headers = dict(headers or {})
+        request_headers.update(self._headers())
         try:
             response = self._client.request(
                 method, url, json=json, headers=request_headers
             )
         except httpx.RequestError as exc:
-            raise RecapConnectionError(url=url, message=self.redact(str(exc))) from None
+            raise RecapConnectionError(
+                url=self.redact(url), message=self.redact(str(exc))
+            ) from None
 
         request_id = response.headers.get("X-Request-ID")
+        if request_id is not None:
+            request_id = self.redact(request_id)
         payload: Any = None
         if response.content:
             try:
@@ -66,7 +69,7 @@ class HTTPTransport:
                 if 200 <= response.status_code < 300:
                     raise RecapProtocolError(
                         "Malformed JSON response",
-                        url=url,
+                        url=self.redact(url),
                         status_code=response.status_code,
                         request_id=request_id,
                     ) from None
@@ -78,7 +81,7 @@ class HTTPTransport:
                 raise error_from_code(
                     "request_error",
                     "Malformed error response",
-                    url=url,
+                    url=self.redact(url),
                     status_code=response.status_code,
                     request_id=request_id,
                 )
@@ -95,16 +98,16 @@ class HTTPTransport:
                 raise error_from_code(
                     "request_error",
                     "Malformed error response",
-                    url=url,
+                    url=self.redact(url),
                     status_code=response.status_code,
                     request_id=request_id,
                 )
             raise error_from_code(
                 code,
                 self.redact(message),
-                url=url,
+                url=self.redact(url),
                 status_code=response.status_code,
-                request_id=request_id or envelope_request_id,
+                request_id=request_id or self.redact(envelope_request_id),
             )
 
         return HTTPResult(
