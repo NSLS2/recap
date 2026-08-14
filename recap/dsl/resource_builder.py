@@ -25,6 +25,7 @@ from recap.exceptions import (
     ExistingResourceTemplateError,
     ExistingResourceTemplateWarning,
     ExistingResourceWarning,
+    RecapNotFoundError,
 )
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.resource import (
@@ -122,7 +123,7 @@ class ResourceBuilder:
             namespace_path=self.namespace_path,
         )
         if not templates:
-            raise ValueError(
+            raise RecapNotFoundError(
                 f"Resource template {self.template_name!r} version "
                 f"{self.template_version!r} not found"
             )
@@ -343,7 +344,7 @@ class ResourceBuilder:
             namespace_path=self.namespace_path,
         )
         if not resources:
-            raise ValueError(f"Resource with id {resource_id} not found")
+            raise RecapNotFoundError(f"Resource with id {resource_id} not found")
         return resources[0]
 
     @property
@@ -654,7 +655,7 @@ class ResourceTemplateBuilder:
             namespace_path=self.namespace_path,
         )
         if not templates:
-            raise ValueError("Resource template not found")
+            raise RecapNotFoundError("Resource template not found")
         self._template = templates[0]
 
     def get_model(self, *, update: bool = False) -> ResourceTemplateSchema:
@@ -706,7 +707,9 @@ class ResourceTemplateBuilder:
             namespace_path=self.namespace_path,
         )
         if not templates:
-            raise ValueError(f"ResourceTemplate with id {resource_template_id} not found")
+            raise RecapNotFoundError(
+                f"ResourceTemplate with id {resource_template_id} not found"
+            )
         template = templates[0]
         self._template = template
         self.name = template.name

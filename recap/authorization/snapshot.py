@@ -9,9 +9,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from recap.authentication.models import ProviderIdentity
 from recap.authorization.scopes import Scope
+from recap.exceptions import RecapServiceUnavailableError
 
 
-class SnapshotUnavailable(RuntimeError):
+class SnapshotUnavailable(RecapServiceUnavailableError):
     pass
 
 

@@ -45,6 +45,7 @@ from recap.dsl.drafts import (
     ProcessTemplateDraft,
     ResourceTemplateDraft,
 )
+from recap.exceptions import AuthorizationDenied
 from recap.lifecycle import LifecycleStatus, validate_transition
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.namespace import NamespaceSchema
@@ -55,7 +56,7 @@ from recap.schemas.resource import (
 )
 from recap.schemas.step import ParameterSchema, StepSchema
 from recap.server.audit import AuditOutcome, AuditRecord
-from recap.server.errors import AuthorizationDenied, ErrorCode
+from recap.server.errors import ErrorCode
 from recap.utils.namespace import (
     canonicalize_namespace_path,
     is_namespace_ancestor,

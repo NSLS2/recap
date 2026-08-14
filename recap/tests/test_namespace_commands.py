@@ -18,6 +18,7 @@ from recap.commands.service import CommandService
 from recap.db.audit import MutationAudit
 from recap.db.base import Base
 from recap.db.namespace import Namespace
+from recap.exceptions import RecapPermissionDeniedError
 from recap.lifecycle import LifecycleStatus
 from recap.server.audit import AuditOutcome
 
@@ -268,7 +269,7 @@ def test_invalid_status_transition_rolls_back(command_setup):
 def test_denied_create_does_not_open_mutation(command_setup):
     service, factory, context, _, audit = command_setup
 
-    with pytest.raises(Exception, match="Authorization denied"):
+    with pytest.raises(RecapPermissionDeniedError, match="Permission denied"):
         service.create_namespace(
             replace(context, policy=DenyingPolicy()), path="beamline/amx", metadata={}
         )

@@ -10,6 +10,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import JSONResponse
 
+from recap.exceptions import AuthorizationDenied  # noqa: F401
+
 
 class ErrorCode(str, Enum):
     AUTHENTICATION_REQUIRED = "authentication_required"
@@ -34,14 +36,6 @@ class ErrorEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     error: ErrorDetail
-
-
-class AuthorizationDenied(RuntimeError):
-    """Signal an authorization denial without carrying sensitive context."""
-
-    def __init__(self, *, conceal: bool = False) -> None:
-        super().__init__("Authorization denied")
-        self.conceal = conceal
 
 
 def safe_error_response(

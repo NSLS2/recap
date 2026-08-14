@@ -1,7 +1,7 @@
+from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from shutil import copy2
-from typing import Callable
 from uuid import uuid4
 
 import httpx2
@@ -233,11 +233,11 @@ def read_client_pair(integration_seed_path, copy_database, tmp_path, monkeypatch
         api_key = "parity-secret"
         app_client = stack.enter_context(TestClient(create_app(db_path, api_key=api_key)))
 
-        def post(_client, url, *, json, **kwargs):
+        def request(_client, method, url, **kwargs):
             assert url.endswith("/graphql")
-            return app_client.post("/graphql", json=json, **kwargs)
+            return app_client.request(method, "/graphql", **kwargs)
 
-        monkeypatch.setattr(httpx2.Client, "post", post)
+        monkeypatch.setattr(httpx2.Client, "request", request)
         remote = stack.enter_context(
             RecapClient.from_url("http://recap.test", api_key=api_key)
         )

@@ -103,6 +103,14 @@ class RecapPermissionDeniedError(RecapRequestError):
     code = "permission_denied"
 
 
+class AuthorizationDenied(RecapPermissionDeniedError):
+    """Signal an authorization denial without carrying sensitive context."""
+
+    def __init__(self, *, conceal: bool = False) -> None:
+        super().__init__("Permission denied")
+        self.conceal = conceal
+
+
 class RecapNotFoundError(RecapRequestError):
     code = "not_found"
 

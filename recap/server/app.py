@@ -15,11 +15,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 
 from recap.authentication.api_key import ApiKeyRequestAuthenticator
-from recap.authorization.snapshot import SnapshotUnavailable
 from recap.db.engine import create_engine_and_session_factory
 from recap.server.error_handlers import register_command_error_handlers
 from recap.server.errors import (
-    AuthorizationDenied,
     ErrorCode,
     request_id_from,
     safe_error_response,
@@ -129,30 +127,6 @@ def create_app(
             status_code=422,
             code=ErrorCode.VALIDATION_ERROR,
             message="Request validation failed",
-            request_id=request_id_from(request),
-        )
-
-    @app.exception_handler(AuthorizationDenied)
-    async def handle_authorization_denied(
-        request: Request, error: AuthorizationDenied
-    ) -> Response:
-        status_code = 404 if error.conceal else 403
-        code, message = safe_http_error(status_code)
-        return safe_error_response(
-            status_code=status_code,
-            code=code,
-            message=message,
-            request_id=request_id_from(request),
-        )
-
-    @app.exception_handler(SnapshotUnavailable)
-    async def handle_snapshot_unavailable(
-        request: Request, error: SnapshotUnavailable
-    ) -> Response:
-        return safe_error_response(
-            status_code=503,
-            code=ErrorCode.SERVICE_UNAVAILABLE,
-            message="Service unavailable",
             request_id=request_id_from(request),
         )
 

@@ -157,7 +157,12 @@ def test_http_200_graphql_errors_use_public_categories(code, error_type, method)
             ResourceSchema, QuerySpec(), namespace_path="beamline/amx"
         )
     assert caught.value.request_id == "request-5"
+    assert caught.value.code == code
+    assert caught.value.url == "http://recap.test/graphql"
+    assert caught.value.status_code is None
     assert str(caught.value).startswith("Safe message")
+    assert "secret" not in str(caught.value)
+    assert "raw internal" not in str(caught.value)
 
 
 def test_graphql_error_messages_are_redacted_by_transport():

@@ -30,6 +30,7 @@ from recap.exceptions import (
     ExistingProcessRunWarning,
     ExistingProcessTemplateError,
     ExistingProcessTemplateWarning,
+    RecapNotFoundError,
 )
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.attribute import AttributeTemplateValidator
@@ -274,7 +275,9 @@ class ProcessTemplateBuilder:
             namespace_path=self.namespace_path,
         )
         if not templates:
-            raise ValueError(f"ProcessTemplate with id {process_template_id} not found")
+            raise RecapNotFoundError(
+                f"ProcessTemplate with id {process_template_id} not found"
+            )
         template = templates[0]
         self._template = template
         self.name = template.name
@@ -749,5 +752,5 @@ class ProcessRunBuilder:
             namespace_path=self.namespace_path,
         )
         if not runs:
-            raise ValueError(f"ProcessRun with id {process_run_id} not found")
+            raise RecapNotFoundError(f"ProcessRun with id {process_run_id} not found")
         return runs[0]

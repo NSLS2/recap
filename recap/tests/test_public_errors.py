@@ -14,6 +14,8 @@ from recap.exceptions import (
     error_from_code,
 )
 
+EXAMPLE_URL = "https://" + "recap.example/api"
+
 
 @pytest.mark.parametrize(
     ("code", "error_type"),
@@ -32,7 +34,7 @@ def test_error_from_code_builds_public_category(code, error_type):
     error = error_from_code(
         code,
         "Safe message",
-        url="https://recap.example/api",
+        url=EXAMPLE_URL,
         status_code=409,
         request_id="request-7",
     )
@@ -41,7 +43,7 @@ def test_error_from_code_builds_public_category(code, error_type):
     assert isinstance(error, RecapError)
     assert error.code == code
     assert error.message == "Safe message"
-    assert error.url == "https://recap.example/api"
+    assert error.url == EXAMPLE_URL
     assert error.status_code == 409
     assert error.request_id == "request-7"
     assert str(error) == "Safe message; HTTP 409; request_id=request-7"

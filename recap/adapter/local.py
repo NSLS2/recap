@@ -57,6 +57,11 @@ from recap.db.resource import (
 )
 from recap.db.step import Parameter, Step
 from recap.dsl.query import FieldOrdering, FieldPredicate, QuerySpec, SchemaT
+from recap.exceptions import (
+    AuthorizationDenied,
+    RecapNotFoundError,
+    RecapPermissionDeniedError,
+)
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext, NamespaceSchema
 from recap.schemas.process import (
@@ -188,7 +193,12 @@ class LocalBackend(
         *,
         etag_override: str | None = None,
     ) -> object:
-        return CommandService(self._session_factory).execute(command, context)
+        try:
+            return CommandService(self._session_factory).execute(command, context)
+        except AuthorizationDenied as error:
+            if error.conceal:
+                raise RecapNotFoundError("Not found") from None
+            raise RecapPermissionDeniedError("Permission denied") from None
 
     @contextmanager
     def _session_scope(self):
@@ -407,7 +417,7 @@ class LocalBackend(
         with self._session_scope() as session:
             step: Step | None = session.scalars(statement).one_or_none()
             if step is None:
-                raise LookupError(f"Step not found: {step_schema.name}")
+                raise RecapNotFoundError(f"Step not found: {step_schema.name}")
             params: dict[str, tuple] = {
                 "step_name": (
                     Literal[f"{step_schema.name}"],
@@ -719,14 +729,16 @@ class LocalBackend(
         try:
             context_id = by_path[namespace_path]
         except KeyError as exc:
-            raise LookupError(f"Namespace does not exist: {namespace_path}") from exc
+            raise RecapNotFoundError(
+                f"Namespace does not exist: {namespace_path}"
+            ) from exc
         return context_id, [by_path[path] for path in paths if path in by_path]
 
     def get_namespace_path(self, namespace_id: UUID) -> str:
         with self._session_scope() as session:
             namespace = session.get(Namespace, namespace_id)
             if namespace is None:
-                raise LookupError(f"Namespace does not exist: {namespace_id}")
+                raise RecapNotFoundError(f"Namespace does not exist: {namespace_id}")
             return namespace.path
 
     def get_namespace_context(self, path: str) -> NamespaceContext:
@@ -735,7 +747,7 @@ class LocalBackend(
                 select(Namespace).where(Namespace.path == path)
             ).one_or_none()
             if namespace is None:
-                raise LookupError(f"Namespace does not exist: {path}")
+                raise RecapNotFoundError(f"Namespace does not exist: {path}")
             return NamespaceContext.model_validate(namespace)
 
     def list_child_namespace_paths(self, parent_path: str) -> list[str]:
@@ -800,7 +812,7 @@ class LocalBackend(
             stmt = stmt.where(Namespace.id.in_(matching_ids))
         return stmt
 
-    def _build_select(
+    def _build_select(  # noqa: C901
         self,
         schema: type[SchemaT],
         spec: QuerySpec,

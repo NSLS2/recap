@@ -8,8 +8,11 @@ from fastapi.testclient import TestClient
 
 from recap.adapter.graphql import GraphQLAdapter
 from recap.client import RecapClient
-from recap.commands.errors import CommandConflictError
-from recap.exceptions import RecapHTTPError
+from recap.exceptions import (
+    RecapAuthenticationError,
+    RecapConflictError,
+    RecapNotFoundError,
+)
 from recap.schemas.resource import ResourceCopyOptions
 from recap.server.app import create_app
 
@@ -206,10 +209,8 @@ def test_stale_resource_write_preserves_first_mutation(command_client):
     second_model = second.get_model()
     second_model.name = "second"
     second.set_model(second_model)
-    with pytest.raises((CommandConflictError, RecapHTTPError)) as error:
+    with pytest.raises(RecapConflictError):
         second.save()
-    if isinstance(error.value, RecapHTTPError):
-        assert error.value.status_code == 409
 
     with scoped.build_resource(resource_id=resource.id) as persisted:
         assert persisted.resource.name == "first"
@@ -384,9 +385,10 @@ def test_scoped_remote_create_resource_uses_namespace_route(tmp_path):
             query_paths.append(namespace_path)
             return [resource]
 
-        with patch.object(GraphQLAdapter, "query", query):
-            with namespace.build_resource(resource_id=resource.id) as builder:
-                assert builder.resource.id == resource.id
+        with patch.object(GraphQLAdapter, "query", query), namespace.build_resource(
+            resource_id=resource.id
+        ) as builder:
+            assert builder.resource.id == resource.id
         assert query_paths == ["beamline/amx"]
 
         assert resource.name == "S-001"
@@ -471,7 +473,7 @@ def test_remote_resource_builder_reports_missing_template_without_lookup(tmp_pat
         namespace.create_namespace(namespace.namespace_path)
 
         with pytest.raises(
-            ValueError,
+            RecapNotFoundError,
             match="Resource template 'Missing' version '1.0' not found",
         ):
             namespace.build_resource("S-001", "Missing")
@@ -504,9 +506,10 @@ def test_remote_namespace_write_rejects_invalid_api_key(tmp_path, monkeypatch):
             "post",
             lambda _client, url, **kwargs: app_client.post("/graphql", **kwargs),
         )
-        with RecapClient.from_url("http://recap.test", api_key="wrong-key") as client:
-            with pytest.raises(RecapHTTPError) as caught:
-                client.create_namespace("beamline")
+        with RecapClient.from_url(
+            "http://recap.test", api_key="wrong-key"
+        ) as client, pytest.raises(RecapAuthenticationError) as caught:
+            client.create_namespace("beamline")
 
     assert caught.value.status_code == 401
     assert "wrong-key" not in str(caught.value)

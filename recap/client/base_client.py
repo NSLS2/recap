@@ -16,6 +16,7 @@ from recap.commands.models import CopyResource, CreateNamespace, UpdateNamespace
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
+from recap.exceptions import RecapNotFoundError
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceCopyOptions, ResourceRef, ResourceSchema
@@ -755,7 +756,7 @@ class RecapClient:
                 namespace_path=(namespace_context or self._namespace_context).path,
             )
             if not results:
-                raise ValueError(f"Parent resource with id {parent!r} not found")
+                raise RecapNotFoundError(f"Parent resource with id {parent!r} not found")
             return results[0]
         return parent
 
@@ -942,7 +943,7 @@ class RecapClient:
             namespace_path=namespace_context.path,
         )
         if not results:
-            raise ValueError(f"Resource {name!r} not found")
+            raise RecapNotFoundError(f"Resource {name!r} not found")
         if len(results) > 1:
             raise ValueError(
                 f"Multiple resources named {name!r} matched the requested template"

@@ -3,10 +3,23 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+import httpx2
 import pytest
 
 from recap.adapter.http_transport import HTTPResult, HTTPTransport
 from recap.adapter.transport import serialize_model
+from recap.exceptions import (
+    RecapAuthenticationError,
+    RecapConflictError,
+    RecapConnectionError,
+    RecapInternalError,
+    RecapNotFoundError,
+    RecapPermissionDeniedError,
+    RecapRequestError,
+    RecapServiceUnavailableError,
+    RecapValidationError,
+    error_from_code,
+)
 
 
 def _transport(body=None, *, etag=None, request_id=None):
@@ -320,3 +333,108 @@ def test_close_delegates_to_transport():
     RESTAdapter("https://recap.test", _transport=transport).close()
 
     transport.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    ("code", "error_type"),
+    [
+        ("authentication_required", RecapAuthenticationError),
+        ("permission_denied", RecapPermissionDeniedError),
+        ("not_found", RecapNotFoundError),
+        ("validation_error", RecapValidationError),
+        ("conflict", RecapConflictError),
+        ("service_unavailable", RecapServiceUnavailableError),
+        ("internal_error", RecapInternalError),
+        ("request_error", RecapRequestError),
+    ],
+)
+def test_rest_propagates_normalized_error_metadata(code, error_type):
+    from recap.adapter.rest import RESTAdapter
+
+    transport = _transport()
+    transport.request.side_effect = error_from_code(
+        code,
+        "Safe message",
+        url="https://recap.test/api/v1/resources",
+        status_code=409,
+        request_id="request-7",
+    )
+
+    with pytest.raises(error_type) as caught:
+        RESTAdapter("https://recap.test", _transport=transport).list_child_namespaces("beamline")
+
+    error = caught.value
+    assert error.code == code
+    assert error.message == "Safe message"
+    assert error.url == "https://recap.test/api/v1/resources"
+    assert error.status_code == 409
+    assert error.request_id == "request-7"
+    assert "secret" not in str(error)
+    assert "raw internal" not in str(error)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "response_code", "expected_code", "error_type"),
+    [
+        (401, "authentication_required", "authentication_required", RecapAuthenticationError),
+        (403, "permission_denied", "permission_denied", RecapPermissionDeniedError),
+        (404, "not_found", "not_found", RecapNotFoundError),
+        (422, "validation_error", "validation_error", RecapValidationError),
+        (409, "conflict", "conflict", RecapConflictError),
+        (503, "service_unavailable", "service_unavailable", RecapServiceUnavailableError),
+        (500, "internal_error", "internal_error", RecapInternalError),
+        (418, "future_error", "request_error", RecapRequestError),
+    ],
+)
+def test_rest_classifies_real_http_error_responses(
+    status_code, response_code, expected_code, error_type
+):
+    from recap.adapter.rest import RESTAdapter
+
+    transport = HTTPTransport("secret")
+    response = httpx2.Response(
+        status_code,
+        json={
+            "error": {
+                "code": response_code,
+                "message": "Safe message",
+                "request_id": "request-8",
+            }
+        },
+        headers={"X-Request-ID": "request-8"},
+        request=httpx2.Request(
+            "GET", "https://recap.test/api/v1/namespaces/children/beamline"
+        ),
+    )
+    with patch.object(transport._client, "request", return_value=response), pytest.raises(
+        error_type
+    ) as caught:
+        RESTAdapter("https://recap.test", _transport=transport).list_child_namespaces(
+            "beamline"
+        )
+
+    assert caught.value.code == expected_code
+    assert caught.value.message == "Safe message"
+    assert caught.value.status_code == status_code
+    assert caught.value.request_id == "request-8"
+    assert caught.value.url.endswith("/api/v1/namespaces/children/beamline")
+    assert "secret" not in str(caught.value)
+    assert "raw internal" not in str(caught.value)
+
+
+def test_rest_classifies_real_transport_failure():
+    from recap.adapter.rest import RESTAdapter
+
+    transport = HTTPTransport("secret")
+    with patch.object(
+        transport._client,
+        "request",
+        side_effect=httpx2.ConnectError("secret connection failure"),
+    ), pytest.raises(RecapConnectionError) as caught:
+        RESTAdapter("https://recap.test", _transport=transport).list_child_namespaces(
+            "beamline"
+        )
+
+    assert caught.value.code == "connection_error"
+    assert caught.value.url.endswith("/api/v1/namespaces/children/beamline")
+    assert "secret" not in str(caught.value)

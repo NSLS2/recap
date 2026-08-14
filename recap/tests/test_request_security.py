@@ -5,6 +5,14 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from recap.authorization.snapshot import SnapshotUnavailable
+from recap.commands.errors import CommandValidationError
+from recap.exceptions import (
+    RecapConflictError,
+    RecapInternalError,
+    RecapPermissionDeniedError,
+    RecapServiceUnavailableError,
+    RecapValidationError,
+)
 from recap.server.errors import AuthorizationDenied
 
 
@@ -68,6 +76,68 @@ def test_security_failures_map_to_safe_envelopes(tmp_path, error, status_code, c
     assert "top-secret" not in response.text
     assert "grant" not in response.text.lower()
     _assert_request_id(response)
+
+
+def test_security_failures_use_public_error_categories():
+    assert isinstance(AuthorizationDenied(), RecapPermissionDeniedError)
+    assert isinstance(SnapshotUnavailable("unavailable"), RecapServiceUnavailableError)
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code", "code", "message"),
+    [
+        (
+            RecapValidationError("private validation details"),
+            422,
+            "validation_error",
+            "Request validation failed",
+        ),
+        (RecapConflictError("private conflict details"), 409, "conflict", "Conflict"),
+        (
+            RecapInternalError("credential=server-secret"),
+            500,
+            "internal_error",
+            "Internal server error",
+        ),
+    ],
+)
+def test_public_request_errors_use_safe_status_code_and_message(
+    tmp_path, error, status_code, code, message
+):
+    from recap.server.app import create_app
+
+    app = create_app(tmp_path / "test.db")
+
+    @app.get("/failure")
+    def failure():
+        raise error
+
+    response = TestClient(app).get("/failure")
+
+    assert response.status_code == status_code
+    assert response.json()["error"]["code"] == code
+    assert response.json()["error"]["message"] == message
+    assert str(error) not in response.text
+    _assert_request_id(response)
+
+
+def test_command_validation_error_keeps_safe_public_message(tmp_path):
+    from recap.server.app import create_app
+
+    app = create_app(tmp_path / "test.db")
+
+    @app.get("/failure")
+    def failure():
+        raise CommandValidationError(
+            "private validation details", public_message="Invalid command"
+        )
+
+    response = TestClient(app).get("/failure")
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+    assert response.json()["error"]["message"] == "Invalid command"
+    assert "private validation details" not in response.text
 
 
 def test_validation_failure_is_sanitized_422(tmp_path):
