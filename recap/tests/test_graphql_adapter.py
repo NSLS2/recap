@@ -34,6 +34,7 @@ EXECUTE_COUNT = (
 def transport(body, *, request_id=None):
     value = MagicMock(spec=HTTPTransport)
     value.request.return_value = HTTPResult(body, None, request_id)
+    value.redact.side_effect = lambda message: message
     return value
 
 
@@ -60,22 +61,74 @@ def test_query_posts_complete_spec_and_hydrates_nested_state():
 
     value.request.assert_called_once()
     assert value.request.call_args.args[:2] == ("POST", "http://recap.test/graphql")
+    assert value.request.call_args.kwargs["json"] == {
+        "query": EXECUTE_QUERY,
+        "variables": {
+            "schema_name": "ResourceSchema",
+            "namespace_path": "beamline/amx",
+            "spec": {
+                "filters": {"name": "sample"},
+                "predicates": [],
+                "orderings": [],
+                "preloads": ["children", "properties"],
+                "limit": 25,
+                "offset": 5,
+                "property_filters": [{
+                    "name": "temperature", "group": None, "op": "eq",
+                    "value": 20, "upper": None, "value_type": None,
+                }],
+                "parent_resource_id": str(parent_id),
+                "parameter_filters": [{
+                    "name": "exposure", "group": None, "step": "Acquire",
+                    "op": "eq", "value": 2.5, "upper": None, "value_type": None,
+                }],
+                "include_archived": True,
+                "local_metadata_filters": {},
+                "effective_metadata_filters": {},
+                "load_mode": "none",
+                "on_unloaded": "raise",
+            },
+        },
+    }
     assert hydrated.children["child"].name == "child"
     assert hydrated._loaded_relations == {"children": True, "properties": True}
     assert hydrated._on_unloaded == "raise"
+    assert hydrated.children["child"]._loaded_relations == {
+        "children": False, "properties": False,
+    }
+    assert hydrated.children["child"]._on_unloaded == "silent"
 
 
 def test_count_uses_transport_and_returns_count():
     from recap.adapter.graphql import GraphQLAdapter
-    from recap.dsl.query import QuerySpec
+    from recap.dsl.query import PropertyFilter, QuerySpec
 
+    spec = QuerySpec(
+        filters={"name": "sample"},
+        property_filters=[PropertyFilter(name="temperature", op="gte", value=20)],
+    )
     value = transport({"data": {"execute_count": 42}})
     assert GraphQLAdapter("http://recap.test/graphql", _transport=value).count(
-        ResourceSchema, QuerySpec(), namespace_path="beamline/amx"
+        ResourceSchema, spec, namespace_path="beamline/amx"
     ) == 42
     request = value.request.call_args
     assert request.args[:2] == ("POST", "http://recap.test/graphql")
     assert request.kwargs["json"]["query"] == EXECUTE_COUNT
+    assert request.kwargs["json"]["variables"] == {
+        "schema_name": "ResourceSchema", "namespace_path": "beamline/amx",
+        "spec": {
+            "filters": {"name": "sample"}, "predicates": [], "orderings": [],
+            "preloads": [], "limit": None, "offset": None,
+            "property_filters": [{
+                "name": "temperature", "group": None, "op": "gte",
+                "value": 20, "upper": None, "value_type": None,
+            }],
+            "parent_resource_id": None, "parameter_filters": [],
+            "include_archived": False, "local_metadata_filters": {},
+            "effective_metadata_filters": {}, "load_mode": None,
+            "on_unloaded": None,
+        },
+    }
 
 
 @pytest.mark.parametrize(
@@ -107,8 +160,27 @@ def test_http_200_graphql_errors_use_public_categories(code, error_type, method)
     assert str(caught.value).startswith("Safe message")
 
 
+def test_graphql_error_messages_are_redacted_by_transport():
+    from recap.adapter.graphql import GraphQLAdapter
+
+    value = transport({"data": None, "errors": [{
+        "message": "wire-secret", "extensions": {
+            "code": "internal_error", "request_id": "request-5",
+        },
+    }]})
+    value.redact.side_effect = lambda message: message.replace("wire-secret", "**********")
+
+    with pytest.raises(RecapInternalError, match=r"\*{10}") as caught:
+        GraphQLAdapter("http://recap.test/graphql", _transport=value).query(
+            ResourceSchema, QuerySpec(), namespace_path="beamline/amx"
+        )
+
+    assert "wire-secret" not in str(caught.value)
+    value.redact.assert_called_once_with("wire-secret")
+
+
 @pytest.mark.parametrize("errors", [
-    {"message": "bad"}, "bad", [{"message": "bad"}],
+    None, {"message": "bad"}, "bad", [{"message": "bad"}],
     [{"message": "bad", "extensions": {"code": "future", "request_id": "r"}}],
     [{"message": "bad", "extensions": {"code": "validation_error"}}],
 ])
@@ -127,12 +199,13 @@ def test_malformed_graphql_errors_raise_protocol_error(errors):
     {}, {"data": None}, {"data": {}}, {"data": {"execute_count": "bad"}},
     {"data": {"execute_query": {"items": []}}},
 ])
-def test_malformed_graphql_success_response_raises_protocol_error(body):
+@pytest.mark.parametrize("method", ("query", "count"))
+def test_malformed_graphql_success_response_raises_protocol_error(body, method):
     from recap.adapter.graphql import GraphQLAdapter
     from recap.dsl.query import QuerySpec
 
     with pytest.raises(RecapProtocolError, match="Malformed GraphQL response"):
-        GraphQLAdapter("http://recap.test/graphql", _transport=transport(body)).count(
+        getattr(GraphQLAdapter("http://recap.test/graphql", _transport=transport(body)), method)(
             ResourceSchema, QuerySpec(), namespace_path="beamline/amx"
         )
 
@@ -151,7 +224,35 @@ def test_permissions_are_hydrated():
         "beamline/amx"
     )
     assert isinstance(permissions, ActorPermissions)
+    assert permissions.identities[0].provider == "api-key"
+    assert permissions.identities[0].subject == "single-user"
+    assert permissions.snapshot_generation == "generation-7"
+    assert permissions.effective_scopes == frozenset({"resource:read"})
+    assert permissions.matched_namespace_paths == ("beamline/amx",)
     assert permissions.groups == ("amx-users",)
+    assert permissions.roles == ("reader",)
+    assert value.request.call_args.kwargs["json"] == {
+        "query": (
+            "query Permissions($namespace_path: String!) "
+            "{ permissions(namespace_path: $namespace_path) "
+            "{ identities { provider subject } snapshot_generation effective_scopes "
+            "matched_namespace_paths groups roles } }"
+        ),
+        "variables": {"namespace_path": "beamline/amx"},
+    }
+
+
+@pytest.mark.parametrize("method", ("query", "permissions"))
+def test_malformed_graphql_method_response_raises_protocol_error(method):
+    from recap.adapter.graphql import GraphQLAdapter
+
+    value = transport({"data": {}})
+    adapter = GraphQLAdapter("http://recap.test/graphql", _transport=value)
+    with pytest.raises(RecapProtocolError, match="Malformed GraphQL response"):
+        if method == "query":
+            adapter.query(ResourceSchema, QuerySpec(), namespace_path="beamline/amx")
+        else:
+            adapter.permissions("beamline/amx")
 
 
 def test_injected_falsey_transport_is_preserved():

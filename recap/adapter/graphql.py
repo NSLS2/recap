@@ -34,11 +34,12 @@ _PERMISSIONS = (
 
 
 def _check_graphql_errors(
-    body: Mapping[str, Any], *, url: str, fallback_request_id: str | None
+    body: Mapping[str, Any], *, url: str, fallback_request_id: str | None,
+    redact: Any,
 ) -> None:
-    errors = body.get("errors")
-    if errors is None:
+    if "errors" not in body:
         return
+    errors = body["errors"]
     if (
         not isinstance(errors, Sequence)
         or isinstance(errors, str | bytes)
@@ -74,7 +75,7 @@ def _check_graphql_errors(
             )
         first_code = first_code or code
         request_id = request_id or error_request_id
-        messages.append(message)
+        messages.append(redact(message))
 
     raise error_from_code(
         first_code,
@@ -133,7 +134,8 @@ class GraphQLAdapter:
                 "Malformed GraphQL response", url=self._url, request_id=response.request_id
             )
         _check_graphql_errors(
-            response.body, url=self._url, fallback_request_id=response.request_id
+            response.body, url=self._url, fallback_request_id=response.request_id,
+            redact=self._transport.redact,
         )
         return response.body
 
