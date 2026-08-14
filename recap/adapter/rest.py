@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
 from dataclasses import dataclass
 from secrets import token_urlsafe
 from typing import Any
 from uuid import UUID
 
-import httpx2 as httpx
 from pydantic import SecretStr
 
+from recap.adapter.http_transport import HTTPResult, HTTPTransport
 from recap.commands.models import (
     CommandContext,
     CommandModel,
@@ -18,7 +17,6 @@ from recap.commands.models import (
     UpdateNamespace,
 )
 from recap.commands.registry import COMMAND_REGISTRY
-from recap.exceptions import RecapConnectionError, RecapHTTPError
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
 
@@ -30,37 +28,27 @@ class RESTResult:
     request_id: str | None
 
 
-class _RedactedAuth:
-    def __init__(self, api_key: str | SecretStr):
-        self._value = (
-            api_key.get_secret_value() if isinstance(api_key, SecretStr) else api_key
-        )
-
-    def headers(self) -> dict[str, str]:
-        return {"Authorization": f"Apikey {self._value}"}
-
-    def redact(self, value: str) -> str:
-        return value.replace(self._value, "**********")
-
-    def __repr__(self) -> str:
-        return "_RedactedAuth(api_key=SecretStr('**********'))"
-
-
 class RESTAdapter:
     """Authenticated HTTP adapter for Recap command endpoints."""
 
     def __init__(
-        self, base_url: str, api_key: str | SecretStr, *, timeout: float = 30.0
-    ):
+        self,
+        base_url: str,
+        api_key: str | SecretStr | None = None,
+        *,
+        timeout: float = 30.0,
+        _transport: HTTPTransport | None = None,
+    ) -> None:
+        if _transport is None and api_key is None:
+            raise TypeError("api_key is required when transport is not provided")
         self._base_url = base_url.rstrip("/")
-        self._auth = _RedactedAuth(api_key)
-        self._client = httpx.Client(timeout=timeout)
+        self._transport = _transport or HTTPTransport(api_key, timeout=timeout)
 
     def __repr__(self) -> str:
-        return f"RESTAdapter(base_url={self._base_url!r}, auth={self._auth!r})"
+        return f"RESTAdapter(base_url={self._base_url!r}, transport={self._transport!r})"
 
     def close(self) -> None:
-        self._client.close()
+        self._transport.close()
 
     def __enter__(self) -> RESTAdapter:
         return self
@@ -77,41 +65,19 @@ class RESTAdapter:
         etag: str | None = None,
         idempotency_key: str | None = None,
     ) -> RESTResult:
-        headers = self._auth.headers()
+        headers: dict[str, str] = {}
         if etag is not None:
             headers["If-Match"] = etag
         if idempotency_key is not None or method in {"PUT", "POST", "PATCH"}:
             headers["Idempotency-Key"] = idempotency_key or token_urlsafe(18)
         url = f"{self._base_url}{path}"
-        try:
-            response = self._client.request(method, url, headers=headers, json=body)
-            response.raise_for_status()
-        except (httpx.ConnectError, httpx.TimeoutException) as exc:
-            raise RecapConnectionError(
-                url, message=self._auth.redact(str(exc))
-            ) from None
-        except httpx.HTTPStatusError as exc:
-            response = exc.response
-            message = None
-            payload: Any = None
-            if response.content:
-                with suppress(TypeError, ValueError):
-                    payload = response.json()
-            if isinstance(payload, dict):
-                error = payload.get("error")
-                candidate = error.get("message") if isinstance(error, dict) else None
-                if isinstance(candidate, str) and candidate:
-                    message = self._auth.redact(candidate)
-            raise RecapHTTPError(
-                url,
-                response.status_code,
-                response.headers.get("X-Request-ID"),
-                message=message,
-            ) from None
+        response: HTTPResult = self._transport.request(
+            method, url, json=body, headers=headers
+        )
         return RESTResult(
-            response.json() if response.content else None,
-            response.headers.get("ETag"),
-            response.headers.get("X-Request-ID"),
+            response.body,
+            response.etag,
+            response.request_id,
         )
 
     def create_namespace(
