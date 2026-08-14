@@ -42,7 +42,9 @@ class RESTAdapter:
         if _transport is None and api_key is None:
             raise TypeError("api_key is required when transport is not provided")
         self._base_url = base_url.rstrip("/")
-        self._transport = _transport or HTTPTransport(api_key, timeout=timeout)
+        self._transport = (
+            _transport if _transport is not None else HTTPTransport(api_key, timeout=timeout)
+        )
 
     def __repr__(self) -> str:
         return f"RESTAdapter(base_url={self._base_url!r}, transport={self._transport!r})"

@@ -1,7 +1,9 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
+
+import pytest
 
 from recap.adapter.http_transport import HTTPResult, HTTPTransport
 from recap.adapter.transport import serialize_model
@@ -52,6 +54,54 @@ def test_create_namespace_uses_registered_route_and_hydrates_response():
     assert result.id == resource.id
     assert result.etag == '"7"'
     assert result.revision == resource.revision
+
+
+def test_api_key_constructs_default_transport():
+    from recap.adapter.rest import RESTAdapter
+
+    with patch("recap.adapter.rest.HTTPTransport") as transport_type:
+        adapter = RESTAdapter("https://recap.test", api_key="secret", timeout=12.5)
+
+    transport_type.assert_called_once_with("secret", timeout=12.5)
+    assert adapter._transport is transport_type.return_value
+
+
+def test_missing_api_key_is_rejected_without_transport():
+    from recap.adapter.rest import RESTAdapter
+
+    with pytest.raises(TypeError, match="api_key is required"):
+        RESTAdapter("https://recap.test")
+
+
+def test_injected_falsey_transport_is_preserved():
+    from recap.adapter.rest import RESTAdapter
+
+    class FalseyTransport:
+        def __bool__(self):
+            return False
+
+        def close(self):
+            pass
+
+    transport = FalseyTransport()
+
+    with patch("recap.adapter.rest.HTTPTransport") as transport_type:
+        adapter = RESTAdapter("https://recap.test", _transport=transport)
+
+    transport_type.assert_not_called()
+    assert adapter._transport is transport
+
+
+def test_request_preserves_transport_request_id():
+    from recap.adapter.rest import RESTAdapter
+
+    adapter = RESTAdapter(
+        "https://recap.test", _transport=_transport({"ok": True}, request_id="request-4")
+    )
+
+    result = adapter._request("GET", "/api/v1/status")
+
+    assert result.request_id == "request-4"
 
 
 def test_update_and_copy_preserve_if_match_routes_and_generated_idempotency_keys():
@@ -212,6 +262,40 @@ def test_execute_update_resource_keeps_revision_out_of_request_body():
     )
     assert request.kwargs["json"] == {"name": "renamed", "properties": None}
     assert "expected_revision" not in request.kwargs["json"]
+
+
+def test_execute_update_process_run_uses_route_body_and_if_match():
+    from recap.adapter.rest import RESTAdapter
+    from recap.commands.models import UpdateProcessRun
+    from recap.schemas.process import ProcessRunSchema
+
+    command = UpdateProcessRun(
+        process_run_id=uuid4(),
+        expected_revision=1,
+        description="finished",
+        status="ACTIVE",
+    )
+    transport = _transport({"id": str(command.process_run_id), "revision": 2})
+    original = ProcessRunSchema.model_validate
+    ProcessRunSchema.model_validate = classmethod(lambda cls, value: object())
+    try:
+        RESTAdapter("https://recap.test", _transport=transport).execute(
+            command, SimpleNamespace(idempotency_key="process-run-update")
+        )
+    finally:
+        ProcessRunSchema.model_validate = original
+
+    transport.request.assert_called_once_with(
+        "PATCH",
+        f"https://recap.test/api/v1/process-runs/{command.process_run_id}",
+        json={
+            "description": "finished",
+            "status": "ACTIVE",
+            "assignments": None,
+            "steps": None,
+        },
+        headers={"If-Match": '"1"', "Idempotency-Key": "process-run-update"},
+    )
 
 
 def test_list_child_namespaces_uses_get_without_write_headers():
