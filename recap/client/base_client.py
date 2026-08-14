@@ -149,19 +149,25 @@ class RecapClient:
         Raises
         ------
         RecapConnectionError
-            If the server is unreachable or returns an HTTP error response.
+            If the server is unreachable.
+        RecapProtocolError
+            If the server returns a malformed response.
+        RecapRequestError
+            If the server returns an API error response.
         """
         from recap.adapter.graphql import GraphQLAdapter
+        from recap.adapter.http_transport import HTTPTransport
         from recap.adapter.rest import RESTAdapter
 
         if unscoped:
             raise ValueError("Remote clients do not support unscoped=True")
 
         base = url.rstrip("/")
+        transport = HTTPTransport(api_key, timeout=timeout)
         graphql = GraphQLAdapter(
-            graphql_url=f"{base}/graphql", api_key=api_key, timeout=timeout
+            graphql_url=f"{base}/graphql", _transport=transport
         )
-        rest = RESTAdapter(base_url=base, api_key=api_key, timeout=timeout)
+        rest = RESTAdapter(base_url=base, _transport=transport)
         client = cls._from_backends(
             backend=ClientBackend(
                 reader=graphql,

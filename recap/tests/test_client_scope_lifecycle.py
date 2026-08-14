@@ -1,4 +1,5 @@
 import inspect
+from unittest.mock import patch
 
 import pytest
 
@@ -117,6 +118,20 @@ def test_scoped_close_does_not_close_shared_backend_until_last_view(tmp_path):
     root.close()
 
     assert state.closed is True
+
+
+def test_remote_transport_closes_once_after_last_view_releases():
+    root = RecapClient.from_url("http://recap.test", api_key="secret")
+    scoped = root.namespace("beamline/amx")
+    transport = root.backend.reader._transport
+
+    with patch.object(transport._client, "close") as close:
+        scoped.close()
+        close.assert_not_called()
+
+        root.close()
+
+    close.assert_called_once_with()
 
 
 def test_namespace_normalizes_root_and_slashes(tmp_path):
