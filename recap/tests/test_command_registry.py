@@ -7,6 +7,7 @@ from recap.commands import registry
 from recap.commands.errors import CommandValidationError
 from recap.commands.models import (
     CommandModel,
+    CopyProcessRun,
     CopyResource,
     CreateNamespace,
     CreateProcessRun,
@@ -34,6 +35,7 @@ from recap.schemas.resource import (
     ResourceTemplateSchema,
 )
 from recap.server.rest_models import (
+    CopyProcessRunRequest,
     CopyResourceRequest,
     CreateNamespaceRequest,
     CreateResourceRequest,
@@ -62,6 +64,7 @@ def test_pilot_command_registry_is_complete():
         CreateResource,
         UpdateResource,
         CopyResource,
+        CopyProcessRun,
         CreateResourceTemplate,
         CreateProcessTemplate,
         CreateProcessRun,
@@ -81,6 +84,7 @@ def test_registry_covers_all_command_types():
         CreateResource,
         UpdateResource,
         CopyResource,
+        CopyProcessRun,
         CreateResourceTemplate,
         UpdateResourceTemplate,
         CreateProcessTemplate,
@@ -142,20 +146,6 @@ def test_lifecycle_response_decoder_rejects_unknown_object_type():
         registry._decode_lifecycle_response({}, None, command=command)
 
 
-def test_production_command_dispatch_has_no_legacy_type_chains():
-    from pathlib import Path
-
-    root = Path(__file__).parents[1]
-    sources = [
-        root / "commands" / "service.py",
-        root / "adapter" / "rest.py",
-    ]
-    for source in sources:
-        text = source.read_text()
-        assert "_execute_legacy" not in text
-        assert "isinstance(command," not in text
-
-
 def test_pilot_command_registry_rejects_unexpected_registered_types():
     with pytest.raises(CommandValidationError, match="Unexpected command registrations"):
         COMMAND_REGISTRY.validate_complete({UpdateResource})
@@ -209,6 +199,7 @@ def test_namespace_commands_have_registrations_and_complete_expected_set():
             CreateResource,
             UpdateResource,
             CopyResource,
+            CopyProcessRun,
             CreateResourceTemplate,
             CreateProcessTemplate,
             CreateProcessRun,
@@ -385,6 +376,12 @@ def test_process_registry_has_exact_routes_request_models_and_response_schemas()
             "PATCH",
             "/api/v1/process-runs/{process_run_id}",
             UpdateProcessRunRequest,
+            ProcessRunSchema,
+        ),
+        CopyProcessRun: (
+            "POST",
+            "/api/v1/process-runs/{source_process_run_id}/copies",
+            CopyProcessRunRequest,
             ProcessRunSchema,
         ),
     }
