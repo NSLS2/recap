@@ -12,8 +12,6 @@ that grows with tree depth.
 
 import pytest
 
-from recap.dsl.resource_builder import ResourceTemplateBuilder
-
 from .conftest import count_statements
 
 

@@ -2,7 +2,6 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy.exc import IntegrityError
-
 from sqlalchemy.orm import sessionmaker
 
 from recap.adapter.local import LocalBackend

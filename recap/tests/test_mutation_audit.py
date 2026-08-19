@@ -90,7 +90,7 @@ def test_local_context_external_audit_does_not_duplicate_durable_record():
         assert len(session.scalars(select(MutationAudit)).all()) == 1
 
 
-def test_durable_sink_reuses_plan_2_record_and_persists_only_sanitized_fields():
+def test_durable_sink_persists_only_sanitized_fields():
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(engine)

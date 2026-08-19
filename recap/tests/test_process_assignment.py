@@ -1,7 +1,8 @@
-import pytest
 from types import SimpleNamespace
-from sqlalchemy.orm import sessionmaker
 from uuid import uuid4
+
+import pytest
+from sqlalchemy.orm import sessionmaker
 
 from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
@@ -62,6 +63,7 @@ def test_assign_resource_prevents_duplicate_slot_usage(client):
         builder.assign_resource("slot-z", res1)
         run_id = builder.process_run.id
 
-    with pytest.raises(ValueError, match="already occupied"):
-        with client.build_process_run(process_run_id=run_id) as builder:
+    with pytest.raises(ValueError, match="already occupied"), client.build_process_run(
+        process_run_id=run_id
+    ) as builder:
             builder.assign_resource("slot-z", res2)

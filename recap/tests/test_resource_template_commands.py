@@ -11,17 +11,17 @@ from sqlalchemy.orm import sessionmaker
 from recap.authentication.models import ActorKind, ProviderIdentity, RequestActor
 from recap.authorization.policy import UnrestrictedNamespacePolicy
 from recap.authorization.scopes import Scope
+from recap.client.backend import ClientBackend
 from recap.commands.errors import CommandConflictError, CommandNotFoundError
 from recap.commands.models import (
     CommandContext,
     CreateResourceTemplate,
 )
 from recap.commands.service import CommandService
-from recap.client.backend import ClientBackend
 from recap.db.audit import MutationAudit
 from recap.db.base import Base
-from recap.db.resource import ResourceTemplate
 from recap.db.namespace import Namespace
+from recap.db.resource import ResourceTemplate
 from recap.dsl.drafts import AttributeDraft, AttributeGroupDraft, ResourceTemplateDraft
 
 
