@@ -1,6 +1,9 @@
 import recap
 from recap import (
     Direction,
+    ExportContext,
+    Exporter,
+    ExporterRegistry,
     Field,
     LifecycleStatus,
     QueryDSL,
@@ -16,6 +19,9 @@ def test_core_public_exports_are_importable():
     assert Direction.input.value == "input"
     assert LifecycleStatus.MUTABLE.value == "MUTABLE"
     assert callable(validate_transition)
+    assert ExportContext is not None
+    assert Exporter is not None
+    assert ExporterRegistry is not None
 
 
 def test_namespace_client_facade_is_not_public():
