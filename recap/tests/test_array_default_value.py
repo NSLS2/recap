@@ -131,3 +131,18 @@ class TestArrayDefaultRoundTrip:
             res = builder.get_model(update=True)
         assert res is not None
         assert res.properties.data.values.measurements.value == [1, 2, 3]
+
+    def test_repeated_array_values_are_not_collapsed_to_default(self, client):
+        """Values repeating an array default remain distinct values."""
+        with client.build_resource_template(
+            name="ArrayRepeatedDefault-T", type_names=["sample"]
+        ) as rtb:
+            rtb.prop_group("data").add_attribute(
+                "measurements", "array", "", [1]
+            ).close_group()
+
+        with client.build_resource("ArrayRepeatedDefault-R", "ArrayRepeatedDefault-T") as builder:
+            model = builder.get_model()
+            model.properties.data.values.measurements.value = [1, 1]
+            builder.set_model(model)
+            assert builder.get_model().properties.data.values.measurements.value == [1, 1]
