@@ -56,8 +56,9 @@ process_templates = (
 )
 ```
 
-## Use references for identity-only results
+## Use canonical models for identity-only results
 
-Every template query accepts `shape="ref"` for lightweight identity results.
-Use `shape="full"` when schema fields or included relationships are required.
-See [Choose query shape and loading](choose-query-shape-and-loading.qmd).
+Template queries return canonical full models. Use `load="none"` for identity
+and scalar fields, then add targeted includes when relationships are needed.
+`shape="ref"` is deprecated compatibility syntax and normalizes to
+`shape="full", load="none"`. See [Choose query shape and loading](choose-query-shape-and-loading.qmd).

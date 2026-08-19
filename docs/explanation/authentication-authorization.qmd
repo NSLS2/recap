@@ -17,8 +17,10 @@ Authentication produces an immutable `RequestActor` containing:
 - Optional namespace restrictions.
 - A credential fingerprint for safe audit correlation.
 
-The actor is created once per request and passed through GraphQL or REST
-request context.
+The actor is created once per request and passed through REST request context.
+Query and command requests use ordinary JSON over authenticated REST. The same
+actor and namespace policy govern local and remote query execution; transport
+does not change visibility semantics.
 
 ## Scopes
 
@@ -59,9 +61,12 @@ Namespace creation checks write permission on the parent namespace. Resource
 copy requires both source read permission and destination write permission. A
 valid source permission alone cannot authorize a destination write.
 
-## GraphQL filtering
+## REST query filtering
 
 Authorization visibility is applied before user filters, ordering, pagination,
 and counts. This prevents unauthorized records from influencing result pages or
-counts. GraphQL applies this visibility before filtering, ordering, pagination,
-and counts.
+counts returned by REST query/read endpoints.
+
+Remote query requests are JSON envelopes sent to `POST /api/v1/query` or
+`POST /api/v1/query/count`. Responses contain only authorized models or counts;
+authorization never relies on client-side filtering.

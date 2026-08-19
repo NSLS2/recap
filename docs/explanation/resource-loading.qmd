@@ -4,36 +4,30 @@ title: Resource Models and Loading
 
 # Resource Models and Loading
 
-RECAP exposes lightweight references and hydrated schemas so callers can choose
-between identity-oriented queries and complete resource trees.
+RECAP exposes canonical, load-aware resource models. Callers choose relationship
+hydration without choosing a separate wire or model shape.
 
-## Reference and full models
+## Model identity and loading
 
-Reference models contain identity and scalar fields without loading children,
-properties, or other relationships. Full models contain the schema needed for
-relationship access.
+Full models contain stable identity and schema fields. `load="none"` leaves
+relationships unloaded; targeted includes and `load="eager"` hydrate them.
+The old `shape="ref"` spelling is deprecated and means
+`shape="full", load="none"` during migration.
 
 ```python
-references = (
-    namespace.query_maker()
-    .resources(shape="ref")
-    .filter(name="Sample Plate 001")
-    .all()
-)
-
 plates = (
     namespace.query_maker()
-    .resources(shape="full", load="none")
+    .resources(load="none")
+    .filter(name="Sample Plate 001")
     .include(["template", "properties"])
     .all()
 )
 ```
 
-Use `load="eager"` when the complete relationship tree is required. For a
-resource query, eager loading materializes the entire child subtree with a
-bounded number of database statements. It can still materialize more data than
-needed, so targeted descendant queries are preferable when only one level or
-template is relevant.
+Use `load="eager"` when the complete relationship tree is required. Resource
+and process-run eager loading uses a bounded, depth-independent number of SQL
+statements, but can materialize more data than needed. Targeted descendant
+queries are preferable when only one level or template is relevant.
 
 ## Property model access
 
@@ -61,4 +55,5 @@ for name, child in plate.children.items():
 
 Child hierarchies can be defined in a template or extended at runtime through a
 resource builder. Child identity remains scoped by its parent while the root
-resource retains its own UUID.
+resource retains its own UUID. Repeated references to the same root or child are
+canonicalized within client lifetime.

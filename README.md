@@ -106,9 +106,19 @@ client = RecapClient.from_url(
     "https://recap.example.org",
     api_key="your-api-key",
 )
-Remote clients use GraphQL for reads and authenticated REST commands for
-creates, updates, and resource copies. Applications do not need direct access
+Remote clients use authenticated REST for queries, reads, creates, updates, and
+resource copies. Applications do not need direct access
 to the server's database filesystem.
+
+Remote queries use ordinary JSON request and result envelopes. Local and remote
+clients share the same QueryDSL, canonical entity identity, and load-aware model
+behavior. Query results default to full models with relationships unloaded;
+explicit `include(...)` or `load="eager"` controls hydration. Builders collect
+drafts and submit one aggregate command at `save()`, locally or through REST.
+
+Query results can be passed to `query.export(format, destination)` through the
+registered exporter extension point. RECAP does not prescribe a built-in export
+format.
 What RECAP does not do
 RECAP records experimental data and provenance. It is not:
 - An electronic lab notebook.

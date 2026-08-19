@@ -33,5 +33,6 @@ documentation:
 
 - [Quick start: create and store data locally](../how-to/quick-start-create-and-store-data-locally.qmd)
   with SQLite.
-- [Use a remote RECAP server](02-remote-workflow.qmd) with GraphQL reads and
-  REST writes.
+- [Use a remote RECAP server](../how-to/setup-recap-server.qmd) with REST query/read and
+  command transports. Requests use ordinary JSON; local and remote QueryDSL,
+  canonical identity, and load-aware models remain aligned.

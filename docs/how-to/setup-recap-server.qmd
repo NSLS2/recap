@@ -5,8 +5,9 @@ title: Set Up a RECAP Server
 # Set Up a RECAP Server
 
 RECAP can run behind a local or remote server. In both cases, the server owns
-the database and clients connect with `RecapClient.from_url()`. GraphQL serves
-reads, while authenticated REST endpoints handle creates, updates, and copies.
+the database and clients connect with `RecapClient.from_url()`. Authenticated
+REST query endpoints serve reads and counts; REST command endpoints handle
+creates, updates, and copies.
 
 This guide documents the currently runnable single-user API-key deployment.
 Multi-user authorization configuration is described separately as an
@@ -20,8 +21,8 @@ Install the server extra on the host that owns the RECAP database:
 pip install "pyrecap[server]"
 ```
 
-The server extra includes Uvicorn, GraphQL/FastAPI integration, PostgreSQL
-support, and server configuration dependencies.
+The server extra includes Uvicorn, FastAPI integration, PostgreSQL support, and
+server configuration dependencies.
 
 ## Configure a single-user server
 
@@ -98,14 +99,17 @@ Once connected, follow [Quick Start: Create and Store Data Locally](quick-start-
 Use `RecapClient.from_url()` in place of `RecapClient.from_sqlite()`; the
 namespace, builders, queries, and provenance workflow are the same.
 
-Remote clients use GraphQL for reads and counts. Creates, updates, and resource
-copies use authenticated REST commands. Applications do not need direct access
-to the server's database filesystem.
+Remote clients use authenticated `POST /api/v1/query` for reads and
+`POST /api/v1/query/count` for counts. Creates, updates, and resource copies use
+REST command endpoints. Applications do not need direct access to the server's
+database filesystem.
+Query payloads and results are ordinary JSON envelopes; local and remote
+QueryDSL behavior remains aligned.
 
 ## Authentication and authorization
 
 The current runnable server authentication mode uses one configured API key.
-The client sends this exact header on GraphQL and REST requests:
+The client sends this exact header on REST requests:
 
 ```text
 Authorization: Apikey your-api-key
@@ -124,7 +128,7 @@ namespace restriction. Authorization still applies to namespace operations:
 - Sibling namespaces remain isolated.
 - Resource copy requires source read permission and destination write permission.
 - Process-run access requires exact namespace context.
-- GraphQL authorization visibility is applied before filtering, ordering,
+- REST query authorization visibility is applied before filtering, ordering,
   pagination, and counts.
 
 Inspect effective permissions from a client:
@@ -137,7 +141,7 @@ print(permissions.matched_namespace_paths)
 
 See [Authentication and Authorization](../explanation/authentication-authorization.qmd)
 for policy evaluation details and
-[REST and GraphQL Architecture](../explanation/rest-graphql-architecture.qmd)
+[REST Query and Command Architecture](../explanation/rest-query-architecture.qmd)
 for transport behavior.
 
 ### Multi-user authorization status
@@ -187,18 +191,18 @@ has an unsupported format, or fails its integrity check.
 
 ## Verify and troubleshoot
 
-Send an authenticated GraphQL request after starting the server:
+Send an authenticated REST query after starting the server:
 
 ```bash
-curl https://recap.example.org/graphql \
+curl https://recap.example.org/api/v1/query \
   -H 'Authorization: Apikey your-api-key' \
   -H 'Content-Type: application/json' \
-  --data '{"query":"{ __typename }"}'
+  --data '{"entity":"namespace","projection":"full","namespace_path":"beamline/amx","spec":{}}'
 ```
 
 Use responses as follows:
 
-- `200`: request authenticated and reached GraphQL.
+- `200`: request authenticated and query completed.
 - `401`: credential is missing, malformed, or invalid.
 - `403`: authenticated actor lacks required permission.
 - `404`: resource or namespace may be concealed by authorization policy.

@@ -19,26 +19,33 @@ model into a namespace-scoped service with authenticated reads and writes.
 
 The resulting split is:
 
-- **GraphQL** handles remote reads.
-- **REST** handles remote create, update, and copy commands.
+- **REST query endpoints** handle remote reads and counts.
+- **REST command endpoints** handle remote create, update, and copy commands.
 - **CommandService** owns authorization, transaction boundaries, revisions,
   idempotency, and mutation outcomes.
 - **Namespace policy** determines what an authenticated actor may see or change.
 - **Builders** retain the existing fluent API but accumulate drafts and submit
   one aggregate command at save time.
+- **Query models** are canonical full models; relationship loading is controlled
+  independently with `load="none"`, targeted includes, or `load="eager"`.
 
 The main request flows are:
 
 ```text
 Read:
-  API key -> RequestActor -> GraphQLContext -> NamespacePolicy
-          -> AuthorizedQuery -> LocalBackend query/count
+  API key -> RequestActor -> QueryRequest -> NamespacePolicy
+           -> authorized REST query -> LocalBackend query/count
 
 Write:
   API key -> REST route -> CommandContext -> CommandService
           -> authorization -> idempotency -> one transaction
-          -> revision/audit -> REST response with ETag
+  -> revision/audit -> REST response with ETag
 ```
+
+Query RPC uses ordinary JSON envelopes. `POST /api/v1/query` accepts an entity,
+projection, namespace path, and serialized `QuerySpec`; it returns matching
+serialized models. `POST /api/v1/query/count` returns a count envelope. Local
+and remote clients use the same QueryDSL semantics and authorization ordering.
 
 ## 1. Namespace Domain
 
@@ -86,8 +93,8 @@ at each backend boundary.
 - `recap/adapter/transport.py` carries `namespace_path` beside `QuerySpec`.
 - `recap/adapter/local.py` applies namespace visibility before user filters,
   ordering, pagination, and counts.
-- `recap/adapter/graphql.py` serializes the namespace context for remote reads.
-- `recap/server/resolvers.py` receives explicit namespace paths for GraphQL
+- `recap/adapter/rest.py` serializes the namespace context for remote reads.
+- `recap/server/rest.py` receives explicit namespace paths for REST query
   operations.
 
 Process runs require exact namespace context. Templates and resources can be
@@ -181,20 +188,14 @@ the same interface.
 
 Request state is immutable and assembled once per request.
 
-- `recap/server/context.py:20-25` defines `GraphQLContext` with backend, actor,
-  policy, and request ID.
-- `recap/server/context.py:62-85` authenticates the request, acquires one
-  authorization snapshot generation, and constructs the GraphQL context.
-- `recap/server/strawberry_schema.py` connects this context factory to the
-  Strawberry router.
-- `recap/server/resolvers.py:56-90` injects policy-aware querying into
-  resolvers.
+- `recap/server/rest.py` authenticates each query request, acquires one
+  authorization snapshot generation, and injects policy-aware querying.
 
 The server also adds stable request IDs and sanitized error handling:
 
 - `recap/server/errors.py` defines request error mapping and request-ID access.
 - `recap/server/error_handlers.py` maps command and authorization failures to
-  safe HTTP/GraphQL errors.
+  safe HTTP errors.
 - `recap/server/audit.py:15-57` defines immutable `AuditRecord` and `AuditSink`.
 - `recap/db/audit.py:14-56` persists mutation audit records.
 - `recap/commands/audit.py:9-22` emits durable failure records after rollback.
@@ -288,23 +289,26 @@ Copy requests send destination namespace in the body rather than the URL:
 
 ## 7. REST Client and Remote Cutover
 
-`RESTAdapter` is the authenticated write transport:
+`RESTAdapter` is the authenticated query and command transport:
 
 - `recap/adapter/rest.py:53-106` owns HTTP, authentication headers, idempotency
   headers, ETags, request IDs, typed HTTP errors, and connection errors.
-- `recap/adapter/rest.py:108-184` maps namespace, create, update, and copy
-  operations to canonical routes.
+- `recap/adapter/rest.py:108-184` maps query, namespace, create, update, and
+  copy operations to canonical routes.
 - `recap/adapter/rest.py:186-279` maps command DTOs to REST calls and validates
   response schemas.
 
 `RecapClient.namespace()` returns a client view bound to one canonical namespace path:
 
-- `recap/client/base_client.py` composes GraphQL reads with REST writes.
+- `recap/client/base_client.py` composes REST queries with REST commands.
 - `recap/client/permissions.py` exposes typed effective permissions.
 
-Remote clients no longer need access to the server's SQLite path. The final
-cutover is documented in `README.md` and `docs/querying_data.md`: GraphQL is
-read-only for remote clients, while all remote mutations use authenticated REST.
+Remote clients no longer need access to the server's SQLite path. Remote reads,
+counts, and mutations use authenticated REST endpoints.
+
+The client identity map canonicalizes models by stable entity family and UUID.
+Later fuller loads upgrade existing canonical objects rather than creating a
+second instance for the same entity.
 
 ## 8. Builder and Aggregate Submission Model
 
@@ -322,6 +326,10 @@ The important invariant is one builder save equals one aggregate command. A
 builder body that raises produces no persistence side effect. The same command
 shape works locally and remotely, which is tested by
 `recap/tests/test_remote_builder_parity.py`.
+
+Resource and process-run loading use bounded, depth-independent SQL statement
+budgets to avoid N+1 growth. `query.export(format, destination)` delegates to a
+registered exporter; no export serialization format is part of core behavior.
 
 ## 9. Commit History by Milestone
 
@@ -346,8 +354,8 @@ The branch was implemented in these architectural phases:
 - `6c7bb3d` `feat: load authorization snapshot generations`
 - `0457c00` `feat: authorize namespace operations`
 - `f86ab70` `feat: add secure request context and audit`
-- `da892a5` `feat: enforce namespace policy in GraphQL`
-- `ae75422` `feat: authenticate namespace GraphQL client`
+- `da892a5` `feat: enforce namespace query policy`
+- `ae75422` `feat: authenticate namespace REST client`
 
 ### Command and mutation infrastructure
 
@@ -380,7 +388,7 @@ Branch-added or branch-modified tests cover the architecture at each boundary:
 - Authentication and authorization: `test_authentication_models.py`,
   `test_request_authentication.py`, `test_request_security.py`,
   `test_authorization_compiler.py`, `test_authorization_snapshot.py`,
-  `test_namespace_policy.py`, `test_graphql_authorization.py`.
+  `test_namespace_policy.py`, `test_rest_query.py`.
 - Commands and consistency: `test_command_models.py`, `test_command_errors.py`,
   `test_idempotency.py`, `test_revisions.py`, `test_mutation_audit.py`,
   `test_request_backend_scope.py`.

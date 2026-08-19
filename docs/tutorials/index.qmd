@@ -20,4 +20,4 @@ for focused procedures, concepts, and exact API details.
 
 ## Remote Integration
 
-- [Remote Client](remote-client.qmd): same sample workflow through `RecapClient.from_url()`, REST mutations, and GraphQL-backed queries. See [remote authentication](../how-to/use-remote-authentication.qmd), [client API](/reference/RecapClient.html), and [query API](/reference/QueryDSL.html).
+- [Remote Client](../how-to/setup-recap-server.qmd): connect through `RecapClient.from_url()` using authenticated REST JSON query/read and command transports. See [remote authentication](../how-to/use-remote-authentication.qmd), [client API](/reference/RecapClient.html), and [query API](/reference/QueryDSL.html).

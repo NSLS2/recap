@@ -1,0 +1,95 @@
+---
+title: REST Query and Command Architecture
+---
+
+# REST Query and Command Architecture
+
+Remote RECAP clients use REST query and command endpoints. Query transport is
+ordinary JSON RPC over HTTP, not a schema-specific query language.
+
+```{mermaid}
+%%| fig-cap: "Remote RECAP client read and write transports"
+%%| fig-cap-location: bottom
+flowchart LR
+    Client[RecapClient.from_url]
+    Client -->|queries and counts| RESTQuery[REST query endpoints]
+    Client -->|create, update, copy| REST[REST command endpoints]
+    RESTQuery --> Routes[FastAPI routes]
+    REST --> Routes[FastAPI routes]
+    Routes --> Commands[CommandService]
+    Commands --> Auth[Authorization]
+    Commands --> Tx[One database transaction]
+    Commands --> Revision[Revision and idempotency checks]
+    Commands --> Audit[Mutation audit]
+```
+
+REST query endpoints carry namespace-scoped query specifications and reconstruct
+the corresponding local query behavior. REST command routes carry aggregate
+command payloads to `CommandService`, which owns authorization, transactions,
+revisions, idempotency, and audit outcomes.
+
+Query requests use JSON envelopes such as `entity`, `projection`,
+`namespace_path`, and serialized `spec`; results return the entity, projection,
+and serialized items (or a count for the count endpoint). Local and remote
+clients therefore share QueryDSL semantics without sharing database access.
+
+For readers who cannot view the diagram, reads use `POST /api/v1/query` and
+counts use `POST /api/v1/query/count`. Writes enter FastAPI routes, then pass
+through command authorization, one transaction, revision and idempotency checks,
+and audit recording.
+
+This split means remote clients do not require access to the server's database
+filesystem. The client API remains the same for local and remote builders, but
+remote writes cross an authenticated HTTP boundary.
+
+## REST route families
+
+Create routes place the entity collection before the namespace path:
+
+```text
+POST /api/v1/process-templates/{namespace_path}
+POST /api/v1/resource-templates/{namespace_path}
+POST /api/v1/resources/{namespace_path}
+POST /api/v1/process-runs/{namespace_path}
+```
+
+Update routes identify immutable owning aggregates by UUID:
+
+```text
+PATCH /api/v1/process-templates/{template_id}
+PATCH /api/v1/resource-templates/{template_id}
+PATCH /api/v1/resources/{resource_id}
+PATCH /api/v1/process-runs/{process_run_id}
+```
+
+Namespace commands use a path for creation and UUID for updates:
+
+```text
+PUT   /api/v1/namespaces/{namespace_path}
+PATCH /api/v1/namespaces/{namespace_id}
+```
+
+Resource copy is a derived-resource command:
+
+```text
+POST /api/v1/resources/{source_resource_id}/copies
+```
+
+The destination namespace is required in the JSON body.
+
+Builders do not issue incremental remote writes. They accumulate immutable draft
+payloads and submit one aggregate command at `save()`. This keeps local and REST
+builder behavior aligned and makes validation failures side-effect free.
+
+Query models are canonicalized by stable entity identity at the client boundary.
+The same entity received through separate queries or relationship paths resolves
+to one in-memory model; later fuller loads upgrade that canonical model. Use
+`load="none"`, targeted `include(...)`, or `load="eager"` to control hydration.
+
+Resource-tree and process-run loading use bounded, depth-independent SQL
+statement budgets rather than one query per child. Targeted loading remains
+preferable when a complete tree is unnecessary.
+
+`query.export(format, destination)` delegates to a registered exporter. The
+registry is an extension point, not a built-in claim about any serialization
+format.

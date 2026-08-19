@@ -6,16 +6,23 @@ title: Query Model and Loading
 
 RECAP queries are immutable descriptions of filters, predicates, ordering,
 pagination, and relationship loading. The same query model is interpreted by
-the local backend and transported to the GraphQL read backend.
+the local backend and transported through REST query/read endpoints for remote
+clients.
 
-## Payload shape and loading
+## Canonical models and loading
 
-- `shape="ref"` returns lightweight identity-oriented models.
-- `shape="full"` returns complete schema models.
+- `shape="full"` is the supported model shape and returns canonical schema
+  models.
+- `shape="ref"` is deprecated compatibility syntax. It normalizes to
+  `shape="full", load="none"`; do not use it in new code.
 - `load="none"` avoids relationship hydration.
 - `load="eager"` loads configured relationships eagerly.
 - `include(...)` selects explicit relationship paths for full, non-eager
   queries.
+
+The client identity map merges models by stable entity family and UUID. A
+lightweight result and a later hydrated result therefore refer to the same
+canonical object, while fuller relationship data upgrades existing state.
 
 Namespace context travels beside the serialized `QuerySpec`. It is not embedded
 inside query predicates, which keeps predicates portable across backends.
@@ -28,3 +35,10 @@ records that the actor cannot see.
 
 Structured `Field` predicates work across local and remote backends. Raw
 SQLAlchemy predicates remain local-only and are deprecated.
+
+Hydration uses bounded SQL plans. Resource and process-run trees do not issue
+N+1 statements as depth or breadth grows; use targeted includes when complete
+subtrees are not needed.
+
+`query.export(format, destination)` sends materialized models to a registered
+exporter. No export format is built into the query model.
