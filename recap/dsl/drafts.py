@@ -13,6 +13,11 @@ class DraftModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+def detached_model(model: BaseModel) -> BaseModel:
+    """Copy caller-owned models before using them as builder draft state."""
+    return model.model_copy(deep=True)
+
+
 class AttributeDraft(DraftModel):
     name: str = Field(min_length=1)
     type: TypeName

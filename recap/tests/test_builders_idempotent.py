@@ -3,8 +3,6 @@ import warnings
 import pytest
 
 from recap.commands.models import UpdateResource, UpdateResourceTemplate
-from recap.dsl.process_builder import ProcessTemplateBuilder
-from recap.dsl.resource_builder import ResourceTemplateBuilder
 from recap.exceptions import (
     ExistingProcessRunError,
     ExistingProcessRunWarning,
@@ -42,7 +40,7 @@ def test_reused_resource_clean_exit_skips_update_and_mutation_updates(client, mo
         template.prop_group("properties").add_attribute(
             "serial", "str", "", ""
         ).close_group()
-    resource = client.create_resource("RB-Command-1", "RB-Command-Template")
+    client.create_resource("RB-Command-1", "RB-Command-Template")
     commands = []
     execute = client.backend.writer.execute
 

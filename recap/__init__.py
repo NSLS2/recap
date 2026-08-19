@@ -52,6 +52,7 @@ from .dsl.query import (
     ResourceTemplateQuery,
 )
 from .dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
+from .exporters import ExportContext, Exporter, ExporterRegistry
 from .lifecycle import LifecycleStatus, validate_transition
 from .schemas.attribute import (
     AttributeGroupRef,
@@ -146,6 +147,9 @@ __all__ = [
     "StepSchema",
     "StepTemplateRef",
     "StepTemplateSchema",
+    "ExportContext",
+    "Exporter",
+    "ExporterRegistry",
 ]
 
 _LAZY_EXPORTS = {

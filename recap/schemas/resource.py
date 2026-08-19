@@ -22,7 +22,7 @@ except ImportError:  # Python <3.11
 
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from recap.db.resource import Property
 from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
@@ -34,6 +34,7 @@ from recap.schemas.attribute import (
 from recap.schemas.common import (
     SIMPLE_FIELD,
     CommonFields,
+    LoadAwareMixin,
     NamespaceOwnedFields,
     NormalizedLabels,
 )
@@ -186,7 +187,7 @@ class PropertySchema(CommonFields):
                 default=raw_value,
             )
             coerced[name] = {
-                "value": validator.default,
+                "value": raw_value if attr_tmpl.value_type == "array" else validator.default,
                 "unit": attr_tmpl.unit if raw_unit is None else raw_unit,
                 "metadata_json": raw_metadata,
             }
@@ -334,7 +335,7 @@ class ResourceTemplateRef(NamespaceOwnedFields):
     types: list[ResourceTypeSchema] = Field(default_factory=list)
 
 
-class ResourceTemplateSchema(NamespaceOwnedFields):
+class ResourceTemplateSchema(LoadAwareMixin, NamespaceOwnedFields):
     """Full blueprint for a category of resources.
 
     Defines the complete structure of a resource: its type tags, optional
@@ -355,13 +356,37 @@ class ResourceTemplateSchema(NamespaceOwnedFields):
     """
 
     name: Annotated[str, SIMPLE_FIELD]
-    slug: Annotated[str | None, SIMPLE_FIELD]
+    slug: Annotated[str | None, SIMPLE_FIELD] = None
     version: Annotated[str, SIMPLE_FIELD]
-    labels: NormalizedLabels
+    labels: NormalizedLabels = Field(default_factory=list)
     types: list[ResourceTypeSchema] = Field(default_factory=list)
     parent: ResourceTemplateRef | None = Field(default=None, exclude=True)
     children: dict[str, Self] = Field(default_factory=dict)
-    attribute_group_templates: list[AttributeGroupTemplateSchema]
+    attribute_group_templates: list[AttributeGroupTemplateSchema] = Field(default_factory=list)
+    _relation_fields = frozenset({"parent", "children", "types", "attribute_group_templates"})
+
+    def set_loaded_relations(self, loaded_relations, *, on_unloaded="warn"):
+        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
+        return self
+
+    @field_validator("parent", mode="before")
+    @classmethod
+    def _coerce_parent_reference(cls, value):
+        if value is None or isinstance(value, dict):
+            return value
+        return {
+            "id": value.id,
+            "create_date": value.create_date,
+            "modified_date": value.modified_date,
+            "namespace_id": value.namespace_id,
+            "status": value.status,
+            "revision": value.revision,
+            "name": value.name,
+            "slug": value.slug,
+            "version": value.version,
+            "labels": value.labels,
+            "types": list(value.types),
+        }
 
 
 ResourceTypeSchema.model_rebuild()
@@ -388,7 +413,7 @@ class ResourceSlotSchema(CommonFields):
     required: Annotated[bool, SIMPLE_FIELD] = True
 
 
-class ResourceSchema(NamespaceOwnedFields):
+class ResourceSchema(LoadAwareMixin, NamespaceOwnedFields):
     """A concrete resource instance created from a :class:`ResourceTemplateSchema`.
 
     Resources are the primary trackable entities in RECAP.  They can represent
@@ -422,14 +447,48 @@ class ResourceSchema(NamespaceOwnedFields):
 
     name: Annotated[str, SIMPLE_FIELD]
     copied_from_id: Annotated[UUID | None, SIMPLE_FIELD] = None
-    template: ResourceTemplateSchema
-    parent: "ResourceRef | None" = Field(default=None, exclude=True)
-    children: dict[str, Self]
-    properties: BaseModel | dict[str, PropertySchema]
+    template: ResourceTemplateSchema | None = None
+    parent: "ResourceSchema | None" = Field(default=None, exclude=True)
+    children: dict[str, Self] = Field(default_factory=dict)
+    properties: BaseModel | dict[str, PropertySchema] = Field(default_factory=dict)
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
-    _loaded_relations: dict[str, bool] = PrivateAttr(default_factory=dict)
-    _on_unloaded: Literal["silent", "warn", "raise"] = PrivateAttr(default="warn")
-    _warned_unloaded: set[str] = PrivateAttr(default_factory=set)
+    _relation_fields = frozenset({"template", "parent", "children", "properties"})
+
+    @field_validator("parent", mode="before")
+    @classmethod
+    def _coerce_parent_reference(cls, value):
+        if value is None or isinstance(value, (dict, ResourceSchema)):
+            return value
+        return {
+            "id": value.id,
+            "create_date": value.create_date,
+            "modified_date": value.modified_date,
+            "namespace_id": value.namespace_id,
+            "status": value.status,
+            "revision": value.revision,
+            "name": value.name,
+            "copied_from_id": value.copied_from_id,
+            "template": value.template,
+        }
+
+    @field_validator("template", mode="before")
+    @classmethod
+    def _coerce_template_reference(cls, value):
+        if value is None or isinstance(value, (dict, ResourceTemplateSchema)):
+            return value
+        return {
+            "id": value.id,
+            "create_date": value.create_date,
+            "modified_date": value.modified_date,
+            "namespace_id": value.namespace_id,
+            "status": value.status,
+            "revision": value.revision,
+            "name": value.name,
+            "slug": value.slug,
+            "version": value.version,
+            "labels": value.labels,
+            "types": list(value.types),
+        }
 
     def set_loaded_relations(
         self,
@@ -437,29 +496,36 @@ class ResourceSchema(NamespaceOwnedFields):
         *,
         on_unloaded: Literal["silent", "warn", "raise"] = "warn",
     ) -> "ResourceSchema":
-        self._loaded_relations = loaded_relations
-        self._on_unloaded = on_unloaded
-        self._warned_unloaded = set()
+        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
         return self
 
+    def is_loaded(self, relation: str) -> bool:
+        private = getattr(self, "__pydantic_private__", None) or {}
+        return private.get("_loaded_relations", {}).get(relation, False)
+
+    def require_loaded(self, relation: str) -> None:
+        self._handle_unloaded(relation, f"include('{relation}')")
+
     def _handle_unloaded(self, field_name: str, include_hint: str) -> None:
-        if self._loaded_relations.get(field_name, True):
+        private = getattr(self, "__pydantic_private__", None) or {}
+        loaded_relations = private.get("_loaded_relations", {})
+        if loaded_relations.get(field_name, True):
             return
         message = (
             f"'{field_name}' was not loaded for ResourceSchema; "
             f"use {include_hint} or load='eager'."
         )
-        if self._on_unloaded == "raise":
+        on_unloaded = private.get("_on_unloaded", "warn")
+        warned = private.setdefault("_warned_unloaded", set())
+        if on_unloaded == "raise":
             raise UnloadedFieldError(message)
-        if self._on_unloaded == "warn" and field_name not in self._warned_unloaded:
+        if on_unloaded == "warn" and field_name not in warned:
             warnings.warn(message, UnloadedFieldWarning, stacklevel=3)
-            self._warned_unloaded.add(field_name)
+            warned.add(field_name)
 
     def __getattribute__(self, name: str):
-        if name == "properties":
-            self._handle_unloaded("properties", "include('properties')")
-        elif name == "children":
-            self._handle_unloaded("children", "include('children')")
+        if name in object.__getattribute__(self, "_relation_fields"):
+            self._handle_unloaded(name, f"include('{name}')")
         return super().__getattribute__(name)
 
     @model_validator(mode="after")
@@ -477,6 +543,7 @@ class ResourceSchema(NamespaceOwnedFields):
         if isinstance(self.properties, BaseModel):
             return self
 
+
         prop_fields: list[tuple[str, str]] = []
         prop_values: dict[str, PropertySchema] = {}
         for prop in self.properties.values():
@@ -490,7 +557,11 @@ class ResourceSchema(NamespaceOwnedFields):
                 self.template.slug or self.template.name,
                 tuple(prop_fields),
             )
-            self.properties = model.model_validate(prop_values)
+            # PropertySchema instances were already validated while being
+            # hydrated. Revalidating them here can coerce mutable array values
+            # repeatedly instead of preserving them.
+            self.properties = model.model_construct(**prop_values)
+
 
         return self
 
@@ -530,3 +601,11 @@ class ResourceAssignmentSchema(BaseModel):
     slot: ResourceSlotSchema
     resource: ResourceSchema
     step_id: Annotated[UUID | None, SIMPLE_FIELD] = None
+
+
+# References remain import-compatible names, but no second persisted model is
+# created. Partial payloads use canonical classes with unloaded relations.
+ResourceTemplateRef = ResourceTemplateSchema
+ResourceRef = ResourceSchema  # noqa: F811
+ResourceTemplateSchema.model_rebuild(force=True)
+ResourceSchema.model_rebuild(force=True)

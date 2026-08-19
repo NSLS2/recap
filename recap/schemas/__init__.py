@@ -1,5 +1,7 @@
 __all__ = [
     "AttributeGroupRef",
+    "AttributeGroupTemplate",
+    "AttributeGroupTemplateRef",
     "AttributeGroupTemplateSchema",
     "AttributeTemplateSchema",
     "AttributeTemplateValidator",
@@ -9,6 +11,8 @@ __all__ = [
     "NamespaceSchema",
     "ParameterSchema",
     "ProcessRunRef",
+    "ProcessRunCopyChanges",
+    "ProcessRunCopyOptions",
     "ProcessRunSchema",
     "ProcessTemplateRef",
     "ProcessTemplateSchema",
@@ -22,11 +26,14 @@ __all__ = [
     "ResourceTypeSchema",
     "StepSchema",
     "StepTemplateRef",
+    "StepTemplate",
     "StepTemplateSchema",
 ]
 
 _MODULES = {
     "AttributeGroupRef": ".attribute",
+    "AttributeGroupTemplate": ".attribute",
+    "AttributeGroupTemplateRef": ".attribute",
     "AttributeGroupTemplateSchema": ".attribute",
     "AttributeTemplateSchema": ".attribute",
     "AttributeTemplateValidator": ".attribute",
@@ -36,6 +43,8 @@ _MODULES = {
     "NamespaceSchema": ".namespace",
     "ParameterSchema": ".step",
     "ProcessRunRef": ".process",
+    "ProcessRunCopyChanges": ".process",
+    "ProcessRunCopyOptions": ".process",
     "ProcessRunSchema": ".process",
     "ProcessTemplateRef": ".process",
     "ProcessTemplateSchema": ".process",
@@ -49,6 +58,7 @@ _MODULES = {
     "ResourceTypeSchema": ".resource",
     "StepSchema": ".step",
     "StepTemplateRef": ".step",
+    "StepTemplate": ".step",
     "StepTemplateSchema": ".step",
 }
 

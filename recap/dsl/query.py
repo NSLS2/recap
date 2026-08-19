@@ -1,12 +1,15 @@
 import warnings
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
+from pathlib import Path
+from typing import IO, TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic import Field as PydanticField
 
+from recap.exporters.protocol import ExportContext
+from recap.exporters.registry import default_exporter_registry
 from recap.schemas.namespace import NamespaceContext, NamespaceSchema
 from recap.schemas.resource import (
     ResourceRef,
@@ -53,6 +56,13 @@ FieldOperator = Literal[
 
 
 def _normalize_shape(shape: ShapeInput) -> Shape:
+    if shape == "ref":
+        warnings.warn(
+            "shape='ref' is deprecated; use shape='full', load='none' instead",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return "full"
     if shape == "schema":
         warnings.warn(
             "shape='schema' is deprecated; use shape='full' instead",
@@ -63,6 +73,19 @@ def _normalize_shape(shape: ShapeInput) -> Shape:
     if shape not in ("full", "ref"):
         raise ValueError("shape must be one of 'full', 'ref', or deprecated 'schema'")
     return cast(Shape, shape)
+
+
+def _normalize_expand(expand: bool | None, load: LoadInput) -> LoadMode:
+    if expand:
+        warnings.warn(
+            "expand=True is deprecated; use load='eager' instead",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        if load not in ("none", "eager"):
+            raise ValueError("expand=True cannot be combined with deprecated load='full'")
+        return "eager"
+    return _normalize_load(load)
 
 
 def _normalize_load(load: LoadInput) -> LoadMode:
@@ -91,6 +114,8 @@ def _validate_field_path(path: str) -> str:
 class FieldPredicate(BaseModel):
     """Serializable field comparison used by :meth:`BaseQuery.where`."""
 
+    model_config = ConfigDict(extra="forbid")
+
     field: str
     op: FieldOperator
     value: Any
@@ -106,6 +131,8 @@ class FieldPredicate(BaseModel):
 
 class FieldOrdering(BaseModel):
     """Serializable ascending or descending field ordering."""
+
+    model_config = ConfigDict(extra="forbid")
 
     field: str
     direction: Literal["asc", "desc"] = "asc"
@@ -188,6 +215,7 @@ class Field:
 
 
 class PropertyFilter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str
     group: str | None = None
     op: Literal["eq", "gt", "gte", "lt", "lte", "between", "in"] = "eq"
@@ -202,6 +230,7 @@ class PropertyFilter(BaseModel):
 
 
 class ParameterFilter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str
     group: str | None = None
     step: str | None = None
@@ -216,6 +245,7 @@ class ParameterFilter(BaseModel):
 
 
 class QuerySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     filters: dict[str, Any] = {}
     predicates: Sequence[Any] = ()
     orderings: Sequence[Any] = ()
@@ -445,6 +475,14 @@ class BaseQuery(Generic[SchemaT]):
             self.model, self._spec, namespace_path=self._context.path
         )
 
+    def export(self, format: str, destination: Path | IO | None = None) -> object:
+        """Export one materialized query result through a registered exporter."""
+        exporter = default_exporter_registry.get(format)
+        items = self._execute()
+        if any(not isinstance(item, BaseModel) for item in items):
+            raise TypeError("Export requires BaseModel entity results, not scalar counts")
+        return exporter.export(ExportContext(query=self, items=items), destination)
+
 
 class NamespaceQuery(BaseQuery[NamespaceSchema]):
     """Query namespaces, including local and effective metadata filters."""
@@ -476,16 +514,17 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
         **kwargs,
     ):
         shape = _normalize_shape(shape)
-        load = _normalize_load(load)
+        load = _normalize_expand(expand, load)
         if shape == "ref" and load != "none":
             raise ValueError("load must be 'none' when shape='ref'")
         self._shape = shape
         self._load = load
-        model = ProcessRunSchema if shape == "full" else ProcessRunRef
+        model = ProcessRunSchema
         super().__init__(
             backend,
             model=model,
@@ -604,16 +643,17 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
         **kwargs,
     ):
         shape = _normalize_shape(shape)
-        load = _normalize_load(load)
+        load = _normalize_expand(expand, load)
         if shape == "ref" and load != "none":
             raise ValueError("load must be 'none' when shape='ref'")
         self._shape = shape
         self._load = load
-        model = ResourceSchema if shape == "full" else ResourceRef
+        model = ResourceSchema
         super().__init__(
             backend,
             model=model,
@@ -761,16 +801,17 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateR
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
         **kwargs,
     ):
         shape = _normalize_shape(shape)
-        load = _normalize_load(load)
+        load = _normalize_expand(expand, load)
         if shape == "ref" and load != "none":
             raise ValueError("load must be 'none' when shape='ref'")
         self._shape = shape
         self._load = load
-        model = ResourceTemplateSchema if shape == "full" else ResourceTemplateRef
+        model = ResourceTemplateSchema
         super().__init__(
             backend,
             model=model,
@@ -842,16 +883,17 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
         **kwargs,
     ):
         shape = _normalize_shape(shape)
-        load = _normalize_load(load)
+        load = _normalize_expand(expand, load)
         if shape == "ref" and load != "none":
             raise ValueError("load must be 'none' when shape='ref'")
         self._shape = shape
         self._load = load
-        model = ProcessTemplateSchema if shape == "full" else ProcessTemplateRef
+        model = ProcessTemplateSchema
         super().__init__(
             backend,
             model=model,
@@ -928,6 +970,7 @@ class QueryDSL:
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ProcessRunQuery:
         return ProcessRunQuery(
@@ -935,6 +978,7 @@ class QueryDSL:
             context=self.context,
             shape=_normalize_shape(shape),
             load=_normalize_load(load),
+            expand=expand,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )
 
@@ -943,6 +987,7 @@ class QueryDSL:
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ProcessTemplateQuery:
         return ProcessTemplateQuery(
@@ -950,6 +995,7 @@ class QueryDSL:
             context=self.context,
             shape=_normalize_shape(shape),
             load=_normalize_load(load),
+            expand=expand,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )
 
@@ -958,6 +1004,7 @@ class QueryDSL:
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ResourceQuery:
         return ResourceQuery(
@@ -965,6 +1012,7 @@ class QueryDSL:
             context=self.context,
             shape=_normalize_shape(shape),
             load=_normalize_load(load),
+            expand=expand,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )
 
@@ -973,6 +1021,7 @@ class QueryDSL:
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ResourceTemplateQuery:
         return ResourceTemplateQuery(
@@ -980,5 +1029,6 @@ class QueryDSL:
             context=self.context,
             shape=_normalize_shape(shape),
             load=_normalize_load(load),
+            expand=expand,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )

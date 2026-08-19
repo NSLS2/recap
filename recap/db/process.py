@@ -6,6 +6,7 @@ from sqlalchemy import (
     JSON,
     Enum,
     ForeignKey,
+    Index,
     UniqueConstraint,
     event,
     inspect,
@@ -123,6 +124,12 @@ class ProcessRun(RevisionedLifecycleMixin, TimestampMixin, Base):
     namespace: Mapped[Namespace] = relationship()
     name: Mapped[str] = mapped_column(nullable=False)
     description: Mapped[str] = mapped_column(unique=False, nullable=False)
+    copied_from_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("process_run.id"), nullable=True
+    )
+    copied_from: Mapped["ProcessRun | None"] = relationship(
+        "ProcessRun", foreign_keys=[copied_from_id], remote_side=[id]
+    )
 
     process_template_id: Mapped[UUID] = mapped_column(
         ForeignKey("process_template.id"), nullable=False
@@ -148,7 +155,13 @@ class ProcessRun(RevisionedLifecycleMixin, TimestampMixin, Base):
         collection_class=mapped_collection(lambda s: s.name),
     )
     __table_args__ = (
-        UniqueConstraint("namespace_id", "name", name="uq_process_run_namespace_name"),
+        Index(
+            "uq_process_run_namespace_name_root",
+            "namespace_id",
+            "name",
+            unique=True,
+            sqlite_where=(copied_from_id.is_(None)),
+        ),
     )
 
     def __init__(self, *args, **kwargs):

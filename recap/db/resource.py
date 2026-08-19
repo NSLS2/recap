@@ -74,8 +74,7 @@ class Property(TimestampMixin, Base):
         template: AttributeGroupTemplate = kwargs.get("template")
         super().__init__(*args, **kwargs)
         for vt in template.attribute_templates:
-            av = AttributeValue(template=vt, property=self)
-            av.set_value(vt.default_value)
+            AttributeValue(template=vt, property=self)
 
 
 resource_template_type_association = Table(

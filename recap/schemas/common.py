@@ -7,15 +7,96 @@ templates, and :class:`CommonFields` which provides the audit fields
 model inherits.
 """
 
+import warnings
 from datetime import datetime
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, ClassVar, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
+from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
 from recap.lifecycle import LifecycleStatus
 from recap.utils.general import make_slug
+
+
+@runtime_checkable
+class LoadAware(Protocol):
+    """Protocol for persisted models with selectively loaded relations."""
+
+    def is_loaded(self, relation: str) -> bool: ...
+
+    def require_loaded(self, relation: str) -> None: ...
+
+    def set_loaded_relations(
+        self,
+        loaded_relations: dict[str, bool],
+        *,
+        on_unloaded: Literal["silent", "warn", "raise"] = "warn",
+    ) -> "LoadAware": ...
+
+
+class LoadAwareMixin:
+    """Track selectively loaded relation fields and guard their access."""
+
+    _relation_fields: ClassVar[frozenset[str]] = frozenset()
+
+    @property
+    def _loaded_relations(self) -> dict[str, bool]:
+        return (getattr(self, "__pydantic_private__", None) or {}).get("_loaded_relations", {})
+
+    @property
+    def _on_unloaded(self) -> Literal["silent", "warn", "raise"]:
+        return (getattr(self, "__pydantic_private__", None) or {}).get("_on_unloaded", "warn")
+
+    @property
+    def _warned_unloaded(self) -> set[str]:
+        return (getattr(self, "__pydantic_private__", None) or {}).setdefault("_warned_unloaded", set())
+
+    def set_loaded_relations(
+        self,
+        loaded_relations: dict[str, bool],
+        *,
+        on_unloaded: Literal["silent", "warn", "raise"] = "warn",
+    ):
+        private = object.__getattribute__(self, "__pydantic_private__")
+        if private is None:
+            private = {}
+            object.__setattr__(self, "__pydantic_private__", private)
+        private["_loaded_relations"] = dict(loaded_relations)
+        private["_on_unloaded"] = on_unloaded
+        private["_warned_unloaded"] = set()
+        return self
+
+    def is_loaded(self, relation: str) -> bool:
+        private = getattr(self, "__pydantic_private__", None) or {}
+        return private.get("_loaded_relations", {}).get(relation, False)
+
+    def require_loaded(self, relation: str) -> None:
+        self._handle_unloaded(relation, f"include('{relation}')")
+
+    def _handle_unloaded(self, field_name: str, include_hint: str) -> None:
+        private = getattr(self, "__pydantic_private__", None) or {}
+        loaded_relations = private.get("_loaded_relations", {})
+        if loaded_relations.get(field_name, True):
+            return
+        message = (
+            f"'{field_name}' was not loaded for {type(self).__name__}; "
+            f"use {include_hint} or load='eager'."
+        )
+        on_unloaded = private.get("_on_unloaded", "warn")
+        warned = private.setdefault("_warned_unloaded", set())
+        if on_unloaded == "raise":
+            raise UnloadedFieldError(message)
+        if on_unloaded == "warn" and field_name not in warned:
+            warnings.warn(message, UnloadedFieldWarning, stacklevel=3)
+            warned.add(field_name)
+
+    def __getattribute__(self, name: str):
+        relation_fields = object.__getattribute__(self, "_relation_fields")
+        if name in relation_fields:
+            object.__getattribute__(self, "_handle_unloaded")(name, f"include('{name}')")
+        return super().__getattribute__(name)
 
 SIMPLE_FIELD = "simple_field"
 NormalizedLabels = Annotated[

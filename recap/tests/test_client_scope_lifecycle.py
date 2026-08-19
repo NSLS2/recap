@@ -1,4 +1,5 @@
 import inspect
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import pytest
@@ -25,7 +26,17 @@ class FakeEngine:
         self.dispose_calls += 1
 
 
-def test_shared_state_closes_backends_only_after_last_view_releases():
+class FlakyBackend:
+    def __init__(self):
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+        if self.close_calls == 1:
+            raise RuntimeError("backend close failed")
+
+
+def test_shared_state_closes_backend_only_after_last_view_releases():
     backend = FakeClosable()
     state = _ConnectionState(backend=backend)
 
@@ -37,7 +48,7 @@ def test_shared_state_closes_backends_only_after_last_view_releases():
 
     state.release()
 
-    assert backend.closed is False
+    assert backend.closed is True
 
 
 def test_shared_state_release_is_idempotent_after_close():
@@ -48,7 +59,7 @@ def test_shared_state_release_is_idempotent_after_close():
     state.release()
 
     assert state.closed is True
-    assert backend.close_calls == 0
+    assert backend.close_calls == 1
 
 
 def test_shared_state_rejects_acquisition_after_close():
@@ -72,13 +83,30 @@ def test_shared_state_disposes_optional_engine_when_last_view_releases():
     assert engine.dispose_calls == 1
 
 
-def test_shared_state_does_not_close_backend():
+def test_shared_state_closes_backend():
     backend = FakeClosable()
     state = _ConnectionState(backend=backend)
     state.acquire()
     state.release()
 
-    assert backend.close_calls == 0
+    assert backend.close_calls == 1
+
+
+def test_shared_state_retries_final_backend_cleanup_after_failure():
+    backend = FlakyBackend()
+    state = _ConnectionState(backend=backend)
+    state.acquire()
+
+    with pytest.raises(RuntimeError, match="backend close failed"):
+        state.release()
+
+    assert state.closed is False
+    assert state._active_views == 0
+
+    state.close()
+
+    assert state.closed is True
+    assert backend.close_calls == 2
 
 
 def test_connection_state_stores_single_backend():
@@ -198,6 +226,35 @@ def test_scoped_view_close_is_idempotent(tmp_path):
     root.close()
 
 
+def test_concurrent_repeated_close_of_one_view_releases_one_reference(tmp_path):
+    root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    scoped = root.namespace("beamline/amx")
+    state = root._connection_state
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(lambda _index: scoped.close(), range(32)))
+
+    assert state._active_views == 1
+    assert state.closed is False
+    root.close()
+
+
+def test_concurrent_close_of_shared_scoped_views_closes_once():
+    root = RecapClient.from_url("http://recap.test", api_key="secret")
+    views = [root.namespace(f"beamline/{index}") for index in range(4)]
+    state = root._connection_state
+    transport = root.backend.reader._transport
+
+    with (
+        patch.object(transport._client, "close") as close,
+        ThreadPoolExecutor(max_workers=8) as executor,
+    ):
+        list(executor.map(lambda view: view.close(), [root, *views]))
+
+    close.assert_called_once_with()
+    assert state.closed is True
+
+
 def test_scoped_local_builder_resolves_namespace_path_without_active_context(tmp_path):
     root = RecapClient.from_sqlite(tmp_path / "recap.db")
     root.create_namespace("beamline")
@@ -231,9 +288,19 @@ def test_scoped_local_get_resource_resolves_namespace_without_active_context(tmp
     root.close()
 
 
-def test_scoped_query_does_not_require_namespace_argument():
+def test_scoped_query_does_not_require_namespace_argument(monkeypatch):
+    from uuid import UUID
+
+    from recap.adapter.rest import RESTAdapter
+    from recap.schemas.namespace import NamespaceContext
+
     client = RecapClient.from_url(
         "http://recap.test", api_key="secret", namespace="beamline/amx"
+    )
+    monkeypatch.setattr(
+        RESTAdapter,
+        "get_namespace_context",
+        lambda _adapter, path: NamespaceContext(id=UUID(int=0), path=path, metadata={}),
     )
 
     query = client.query_maker()

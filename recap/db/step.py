@@ -55,8 +55,7 @@ class Parameter(TimestampMixin, Base):  # , AttributeValueMixin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         for value_template in self.template.attribute_templates:
-            av = AttributeValue(template=value_template, parameter=self)
-            av.set_value(value_template.default_value)
+            AttributeValue(template=value_template, parameter=self)
 
 
 class StepTemplate(TimestampMixin, Base):

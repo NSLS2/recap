@@ -17,17 +17,62 @@ def test_process_run_update_persists_param_changes(client):
         version="1.0",
     ) as prb:
         run_id = prb.process_run.id
+        canonical_run = prb._process_run
 
-        # Mutate typed param values on the pydantic model, then hand the
-        # mutated model back via set_model() so __exit__ persists it.
-        model = prb.get_model()
-        model.steps["Mix"].parameters.inputs.values.voltage.value = 42
-        prb.set_model(model)
-
+        params = prb.get_params("Mix")
+        params.inputs.values.voltage.value = 42
+        assert params.inputs.values.voltage.value == 42
+        prb.set_params(params)
     with client.build_process_run(process_run_id=run_id) as builder:
         refreshed_run = builder.process_run
     assert refreshed_run is not None
     assert refreshed_run.steps["Mix"].parameters.inputs.values.voltage.value == 42
+    assert canonical_run.steps["Mix"].parameters.inputs.values.voltage.value == 42
+
+
+def test_finalized_process_run_builder_uses_copy_on_write(client):
+    client.create_namespace("process-run-finalized-copy")
+    with client.build_process_template("PT-finalized-copy", "1.0"):
+        pass
+    with client.build_process_run(
+        name="run-finalized-copy",
+        description="desc",
+        template_name="PT-finalized-copy",
+        version="1.0",
+    ) as builder:
+        run_id = builder.process_run.id
+        builder.finalize()
+
+    with client.build_process_run(process_run_id=run_id) as builder:
+        model = builder.get_model()
+        model.description = "draft-only"
+        assert builder.process_run.description != "draft-only"
+
+
+def test_finalized_process_run_save_creates_lineage_copy(client):
+    client.create_namespace("process-run-copy-lineage")
+    with client.build_process_template("PT-copy-lineage", "1.0"):
+        pass
+    with client.build_process_run(
+        name="run-copy-lineage",
+        description="source",
+        template_name="PT-copy-lineage",
+        version="1.0",
+    ) as builder:
+        source_id = builder.process_run.id
+        builder.finalize()
+
+    with client.build_process_run(process_run_id=source_id) as builder:
+        draft = builder.get_model()
+        draft.description = "copy"
+        builder.set_model(draft)
+
+    copied = builder.process_run
+    assert copied.id != source_id
+    assert copied.copied_from_id == source_id
+    assert copied.description == "copy"
+    with client.build_process_run(process_run_id=source_id) as source:
+        assert source.process_run.description == "source"
 
 
 def test_resource_builder_persists_property_changes(client):

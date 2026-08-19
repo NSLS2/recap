@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 from uuid import uuid4
 
-from recap.commands.models import UpdateProcessTemplate
 from recap.client.backend import ClientBackend
+from recap.commands.models import UpdateProcessTemplate
 from recap.dsl.process_builder import ProcessTemplateBuilder
 
 

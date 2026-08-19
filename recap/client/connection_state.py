@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from threading import RLock
 from typing import Any
 
 from recap.client.backend import ClientBackend
@@ -11,23 +12,30 @@ class _ConnectionState:
     sessionmaker: Any = None
     _active_views: int = 0
     closed: bool = False
+    _engine_disposed: bool = field(default=False, init=False, repr=False)
+    _lifecycle_lock: RLock = field(default_factory=RLock, init=False, repr=False)
 
     def acquire(self) -> None:
-        if self.closed:
-            raise RuntimeError("Connection state is closed")
-        self._active_views += 1
+        with self._lifecycle_lock:
+            if self.closed:
+                raise RuntimeError("Connection state is closed")
+            self._active_views += 1
 
     def release(self) -> None:
-        if self.closed:
-            return
-        if self._active_views:
-            self._active_views -= 1
-        if self._active_views == 0:
-            self.close()
+        with self._lifecycle_lock:
+            if self.closed:
+                return
+            if self._active_views:
+                self._active_views -= 1
+            if self._active_views == 0:
+                self.close()
 
     def close(self) -> None:
-        if self.closed:
-            return
-        self.closed = True
-        if self.engine is not None:
-            self.engine.dispose()
+        with self._lifecycle_lock:
+            if self.closed:
+                return
+            self.backend.close()
+            if self.engine is not None and not self._engine_disposed:
+                self.engine.dispose()
+                self._engine_disposed = True
+            self.closed = True

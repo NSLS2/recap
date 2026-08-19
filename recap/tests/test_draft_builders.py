@@ -1,16 +1,16 @@
 from types import SimpleNamespace
 from uuid import uuid4
 
+from recap.client.backend import ClientBackend
 from recap.commands.models import (
     CreateProcessRun,
     CreateProcessTemplate,
     CreateResource,
 )
-from recap.client.backend import ClientBackend
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
-from recap.schemas.resource import ResourceTemplateSchema
-from recap.tests.transport_factories import resource_template
+from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
+from recap.tests.transport_factories import minimal_resource, resource_template
 from recap.utils.general import Direction
 
 
@@ -386,9 +386,42 @@ def test_process_run_command_save_tolerates_none_or_partial_result():
             template_id=uuid4(),
             command_context=object(),
         )
+        builder.assign_resource("input", type("Resource", (), {"id": uuid4()})())
         builder.save()
 
         assert len(backend.commands) == 1
+        assert builder._dirty
+        assert not builder._submitted
+
+
+def test_resource_reload_preloads_guarded_relations():
+    class ExistingResourceReader(RecordingReader):
+        def query(self, schema, spec, *, namespace_path):
+            self.queries.append((schema, spec, namespace_path))
+            if schema is ResourceSchema:
+                return [minimal_resource()]
+            return super().query(schema, spec, namespace_path=namespace_path)
+
+    reader = ExistingResourceReader()
+    writer = RecordingWriter()
+    backend = ClientBackend(
+        reader=reader,
+        writer=writer,
+        namespaces=RecordingNamespaces(),
+        namespace_writer=RecordingNamespaceWriter(),
+    )
+    ResourceBuilder(
+        name=None,
+        template_name=None,
+        backend=backend,
+        namespace_id=uuid4(),
+        resource_id=uuid4(),
+        namespace_path="beamline/amx",
+        command_context=object(),
+    )
+
+    resource_query = next(spec for schema, spec, _ in reader.queries if schema is ResourceSchema)
+    assert resource_query.preloads == ["template", "parent", "children", "properties"]
 
 
 def test_process_run_builder_loads_template_without_client_lookup():

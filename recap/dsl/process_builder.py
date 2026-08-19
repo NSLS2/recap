@@ -8,6 +8,7 @@ from sqlalchemy.exc import NoResultFound
 from recap.client.backend import ClientBackend
 from recap.commands.models import (
     CommandContext,
+    CopyProcessRun,
     CreateProcessRun,
     CreateProcessTemplate,
     SetLifecycleStatus,
@@ -23,6 +24,7 @@ from recap.dsl.drafts import (
     ProcessTemplateDraft,
     ResourceSlotDraft,
     StepTemplateDraft,
+    detached_model,
 )
 from recap.dsl.query import QuerySpec
 from recap.exceptions import (
@@ -85,6 +87,7 @@ class ProcessTemplateBuilder:
         self.name = name
         self.version = version
         self._template: ProcessTemplateRef | None = None
+        self._draft_model: ProcessTemplateSchema | None = None
         self._resource_slots = {}
         self._current_step_builder = None
         if process_template_id is not None:
@@ -138,9 +141,10 @@ class ProcessTemplateBuilder:
             )
         )
         result = self.backend._execute(command, self._command_context)
-        if result is not None:
-            self._template = result
-            self._expected_revision = result.revision
+        if result is None:
+            return self
+        self._template = result
+        self._expected_revision = result.revision
         self._last_draft = draft
         self._submitted = True
         return self
@@ -150,7 +154,7 @@ class ProcessTemplateBuilder:
         self._ensure_template()
         if self._template is None:
             self.save()
-        self._template = self.backend._execute(
+        result = self.backend._execute(
             SetLifecycleStatus(
                 object_type="process_template",
                 object_id=self.template.id,
@@ -159,6 +163,8 @@ class ProcessTemplateBuilder:
             ),
             self._command_context,
         )
+        if isinstance(result, ProcessTemplateSchema):
+            self._template = result
         return self
 
     def archive(self):
@@ -166,7 +172,7 @@ class ProcessTemplateBuilder:
         self._ensure_template()
         if self._template is None:
             self.save()
-        self._template = self.backend._execute(
+        result = self.backend._execute(
             SetLifecycleStatus(
                 object_type="process_template",
                 object_id=self.template.id,
@@ -175,6 +181,8 @@ class ProcessTemplateBuilder:
             ),
             self._command_context,
         )
+        if isinstance(result, ProcessTemplateSchema):
+            self._template = result
         return self
 
     @property
@@ -253,9 +261,53 @@ class ProcessTemplateBuilder:
             raise RuntimeError("Template not initialized")
         if model.id != self._template.id:
             raise ValueError("ID for this ProcessTemplate does not match the builder")
-        self._template = model
+        self._draft_model = detached_model(model)
+        if isinstance(model, ProcessTemplateSchema):
+            self.name = model.name
+            self.version = model.version
+            self._draft_labels = list(model.labels)
+        self._submitted = False
 
     def _build_draft(self) -> ProcessTemplateDraft:
+        if self._draft_model is not None:
+            model = self._draft_model
+            return ProcessTemplateDraft(
+                name=model.name,
+                version=model.version,
+                labels=model.labels,
+                resource_slots=[
+                    ResourceSlotDraft(
+                        name=slot.name,
+                        resource_type=slot.resource_type.name,
+                        direction=slot.direction,
+                        required=slot.required,
+                    )
+                    for slot in model.resource_slots
+                ],
+                steps=[
+                    StepTemplateDraft(
+                        name=step.name,
+                        role_bindings={role: slot.name for role, slot in step.resource_slots.items()},
+                        parameter_groups=[
+                            AttributeGroupDraft(
+                                name=group.name,
+                                attributes=[
+                                    AttributeDraft(
+                                        name=attribute.name,
+                                        type=attribute.value_type,
+                                        unit=attribute.unit or "",
+                                        default=attribute.default_value,
+                                        metadata=attribute.metadata or {},
+                                    )
+                                    for attribute in group.attribute_templates
+                                ],
+                            )
+                            for group in step.attribute_group_templates
+                        ],
+                    )
+                    for step in model.step_templates.values()
+                ],
+            )
         return ProcessTemplateDraft(
             name=self.name,
             version=self.version,
@@ -475,11 +527,16 @@ class ProcessRunBuilder:
         self._process_run = (
             self._reload_process_run(process_run_id) if process_run_id is not None else None
         )
+        self._draft_process_run = (
+            self._process_run.model_copy(deep=True)
+            if self._process_run is not None
+            else None
+        )
         self._dirty = False
         if self._process_run is not None:
             self.name = self._process_run.name
             self.description = self._process_run.description
-            self._template_id = self._process_run.template.id
+            self._template_id = self._process_run.__dict__["template"].id
         filters = (
             {"id": self._template_id}
             if self._template_id is not None
@@ -487,9 +544,9 @@ class ProcessRunBuilder:
         )
         templates = self.backend.query(
             ProcessTemplateSchema,
-            QuerySpec(
-                filters=filters,
-                preloads=["step_templates", "resource_slots"],
+                QuerySpec(
+                    filters=filters,
+                    preloads=["step_templates", "resource_slots"],
                 include_mutable=True,
             ),
             namespace_path=namespace_path,
@@ -506,7 +563,7 @@ class ProcessRunBuilder:
                 ProcessRunSchema,
                 QuerySpec(
                     filters={"name": name},
-                    preloads=["steps", "steps.parameters", "resources"],
+                    preloads=["template", "steps", "steps.parameters", "resources"],
                     include_mutable=True,
                 ),
                 namespace_path=namespace_path,
@@ -523,18 +580,23 @@ class ProcessRunBuilder:
                         stacklevel=2,
                     )
                 self._process_run = existing_runs[0]
+                if not isinstance(self._process_run, ProcessRunSchema):
+                    raise TypeError("Process-run builder requires ProcessRunSchema result")
                 self.name = self._process_run.name
                 self.description = self._process_run.description
         self._steps = (
             list(self._process_run.steps.values()) if self._process_run is not None else []
         )
+        if self._process_run is not None:
+            self._draft_process_run = self._process_run.model_copy(deep=True)
+            self._submitted = True
         self._resources = {}
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        if exc_type is None:
+        if exc_type is None and (not self._submitted or self._dirty):
             self.save()
 
     def save(self):
@@ -557,6 +619,18 @@ class ProcessRunBuilder:
                     },
                 ),
             )
+        elif self._process_run.status is not LifecycleStatus.MUTABLE:
+            command = CopyProcessRun(
+                source_process_run_id=self._process_run.id,
+                destination_namespace_path=self.namespace_path,
+                options={
+                    "changes": {
+                        "description": self.description,
+                        "assignments": self._draft_assignments or None,
+                        "steps": self._draft_steps or None,
+                    }
+                },
+            )
         else:
             command = UpdateProcessRun(
                 process_run_id=self._process_run.id,
@@ -566,9 +640,11 @@ class ProcessRunBuilder:
                 steps=self._draft_steps or None,
             )
         result = self.backend._execute(command, self._command_context)
+        if not isinstance(result, ProcessRunSchema):
+            return self
         self._process_run = result
-        if result is not None and hasattr(result, "steps"):
-            self._steps = list(result.steps.values())
+        self._draft_process_run = result.model_copy(deep=True)
+        self._steps = list(result.steps.values())
         self._dirty = False
         self._submitted = True
         return self
@@ -576,7 +652,7 @@ class ProcessRunBuilder:
     def finalize(self):
         """Transition process run to ACTIVE/finalized state."""
         self._ensure_command_saved()
-        self._process_run = self.backend._execute(
+        result = self.backend._execute(
             UpdateProcessRun(
                 process_run_id=self._process_run.id,
                 expected_revision=self._process_run.revision,
@@ -584,12 +660,17 @@ class ProcessRunBuilder:
             ),
             self._command_context,
         )
+        if isinstance(result, ProcessRunSchema):
+            self._process_run = result
+            self._draft_process_run = result.model_copy(deep=True)
+        elif result is not None:
+            return self
         return self
 
     def archive(self):
         """Transition process run to ARCHIVED."""
         self._ensure_command_saved()
-        self._process_run = self.backend._execute(
+        result = self.backend._execute(
             UpdateProcessRun(
                 process_run_id=self._process_run.id,
                 expected_revision=self._process_run.revision,
@@ -597,13 +678,18 @@ class ProcessRunBuilder:
             ),
             self._command_context,
         )
+        if isinstance(result, ProcessRunSchema):
+            self._process_run = result
+            self._draft_process_run = result.model_copy(deep=True)
+        elif result is not None:
+            return self
         return self
 
     @property
     def process_run(self) -> ProcessRunSchema:
         if self._process_run is None:
             self.save()
-        return self._process_run
+        return self._draft_process_run
 
     def set_model(self, model: ProcessRunSchema):
         """Replace working run model after verifying UUID identity."""
@@ -611,8 +697,12 @@ class ProcessRunBuilder:
             raise RuntimeError("ProcessRun not initialized")
         if model.id != self._process_run.id:
             raise ValueError("ID for this ProcessRun does not match the builder")
-        self._process_run = model
+        self._draft_process_run = detached_model(model)
         self.description = model.description
+        self._draft_assignments = {
+            slot_name: assignment.resource.id
+            for slot_name, assignment in model.assigned_resources.items()
+        }
         self._draft_steps = self._model_steps_payload(model)
         self._dirty = True
 
@@ -722,7 +812,7 @@ class ProcessRunBuilder:
                     for attr_name, attr_info in type(value_model).model_fields.items()
                     if hasattr(getattr(value_model, attr_name), "value")
                 }
-            result[step.name] = groups
+            result[step.name] = {"parameters": groups}
         return result
 
     def get_model(self, *, update: bool = False) -> ProcessRunSchema:
@@ -732,7 +822,8 @@ class ProcessRunBuilder:
         """
         if update:
             self._process_run = self._reload_process_run(self._process_run.id)
-        model = self._process_run.model_copy(deep=True)
+            self._draft_process_run = self._process_run.model_copy(deep=True)
+        model = (self._draft_process_run or self._process_run).model_copy(deep=True)
         return lock_instance_fields(
             model, {"id", "create_date", "modified_date", "template"}
         )
@@ -746,7 +837,7 @@ class ProcessRunBuilder:
             ProcessRunSchema,
             QuerySpec(
                 filters={"id": process_run_id},
-                preloads=["steps", "steps.parameters", "resources"],
+                preloads=["template", "steps", "steps.parameters", "resources"],
                 include_mutable=True,
             ),
             namespace_path=self.namespace_path,

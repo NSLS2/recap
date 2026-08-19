@@ -55,6 +55,24 @@ def test_resource_template_builder_set_model_handles_same_and_mismatch(client):
         set_mismatched_model()
 
 
+def test_resource_template_builder_set_model_persists_detached_edits(client):
+    with client.build_resource_template(name="RTM-edit", type_names=["container"]) as builder:
+        builder.prop_group("details").add_attribute("serial", "str", "", "old").close_group()
+        builder.save()
+        template_id = builder.template.id
+
+    with client.build_resource_template(resource_template_id=template_id) as builder:
+        model = builder.get_model(update=True)
+        model.name = "RTM-edited"
+        model.attribute_group_templates[0].attribute_templates[0].default_value = "new"
+        builder.set_model(model)
+
+    with client.build_resource_template(resource_template_id=template_id) as builder:
+        refreshed = builder.get_model(update=True)
+    assert refreshed.name == "RTM-edited"
+    assert refreshed.attribute_group_templates[0].attribute_templates[0].default_value == "new"
+
+
 def test_process_template_builder_set_model_handles_mismatch(client):
     with client.build_process_template("PTM-1", "1.0") as ptb1:
         ptb1.add_step("A")
@@ -72,6 +90,24 @@ def test_process_template_builder_set_model_handles_mismatch(client):
 
     with pytest.raises(ValueError):
         set_mismatched_model()
+
+
+def test_process_template_builder_set_model_persists_detached_edits(client):
+    with client.build_process_template("PTM-edit", "1.0") as builder:
+        builder.add_step("A").param_group("Inputs").add_attribute("Voltage", "int", "", 0).close_group()
+        builder.save()
+        template_id = builder.template.id
+
+    with client.build_process_template(process_template_id=template_id) as builder:
+        model = builder.get_model(update=True)
+        model.name = "PTM-edited"
+        model.step_templates["A"].attribute_group_templates[0].attribute_templates[0].default_value = 42
+        builder.set_model(model)
+
+    with client.build_process_template(process_template_id=template_id) as builder:
+        refreshed = builder.get_model(update=True)
+    assert refreshed.name == "PTM-edited"
+    assert refreshed.step_templates["A"].attribute_group_templates[0].attribute_templates[0].default_value == 42
 
 
 def test_process_run_builder_set_model_handles_mismatch(client):

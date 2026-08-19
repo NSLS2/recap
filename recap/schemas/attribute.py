@@ -25,7 +25,7 @@ from pydantic import (
     model_validator,
 )
 
-from recap.schemas.common import SIMPLE_FIELD, CommonFields
+from recap.schemas.common import SIMPLE_FIELD, CommonFields, LoadAwareMixin
 from recap.utils.general import CONVERTERS
 
 TypeName = Literal["int", "float", "bool", "str", "datetime", "array", "enum"]
@@ -81,7 +81,7 @@ class AttributeGroupRef(CommonFields):
     slug: Annotated[str, SIMPLE_FIELD]
 
 
-class AttributeGroupTemplateSchema(CommonFields):
+class AttributeGroupTemplateSchema(LoadAwareMixin, CommonFields):
     """A named group of :class:`AttributeTemplateSchema` instances.
 
     Property groups organise related attributes together.  For example, a
@@ -98,7 +98,12 @@ class AttributeGroupTemplateSchema(CommonFields):
 
     name: Annotated[str, SIMPLE_FIELD]
     slug: Annotated[str, SIMPLE_FIELD]
-    attribute_templates: list[AttributeTemplateSchema]
+    attribute_templates: list[AttributeTemplateSchema] = []
+    _relation_fields = frozenset({"attribute_templates"})
+
+    def set_loaded_relations(self, loaded_relations, *, on_unloaded="warn"):
+        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
+        return self
 
 
 class AttributeValueSchema(BaseModel):
@@ -144,6 +149,11 @@ class AttributeValueSchema(BaseModel):
         if isinstance(data, dict):
             return data
         return {"value": data}
+
+
+AttributeGroupRef = AttributeGroupTemplateSchema  # noqa: F811
+AttributeGroupTemplate = AttributeGroupTemplateSchema
+AttributeGroupTemplateRef = AttributeGroupTemplateSchema
 
 
 class AttributeTemplateValidator(BaseModel):

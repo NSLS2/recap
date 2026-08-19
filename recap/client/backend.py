@@ -1,6 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from threading import RLock
 from typing import Any
 from uuid import UUID
+
+from pydantic import BaseModel
 
 from recap.adapter import (
     NamespaceCatalog,
@@ -10,6 +13,7 @@ from recap.adapter import (
     ReadBackend,
     WriteBackend,
 )
+from recap.client.identity import IdentityMap
 from recap.commands.models import CommandContext, CommandModel
 from recap.dsl.query import QuerySpec, SchemaT
 from recap.lifecycle import LifecycleStatus
@@ -23,6 +27,13 @@ class ClientBackend:
     namespace_writer: NamespaceWriter
     context_resolver: NamespaceContextResolver | None = None
     permissions: PermissionsBackend | None = None
+    identity_map: IdentityMap = field(default_factory=IdentityMap)
+    _close_lock: RLock = field(default_factory=RLock, init=False, repr=False, compare=False)
+    _closed: bool = field(default=False, init=False, repr=False, compare=False)
+    _identity_cleared: bool = field(default=False, init=False, repr=False, compare=False)
+    _closed_capabilities: set[int] = field(
+        default_factory=set, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         require_capability(self.reader, ReadBackend, "reader")
@@ -37,7 +48,11 @@ class ClientBackend:
     def query(
         self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
     ) -> list[SchemaT]:
-        return self.reader.query(schema, spec, namespace_path=namespace_path)
+        models = self.reader.query(schema, spec, namespace_path=namespace_path)
+        result = []
+        for item in models:
+            result.append(self.identity_map.intern(item))
+        return result
 
     def count(self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str) -> int:
         return self.reader.count(schema, spec, namespace_path=namespace_path)
@@ -77,24 +92,68 @@ class ClientBackend:
         etag_override: str | None = None,
     ) -> object:
         if etag_override is None:
-            return self.writer.execute(command, context)
-        return self.writer.execute(command, context, etag_override=etag_override)
+            result = self.writer.execute(command, context)
+        else:
+            result = self.writer.execute(command, context, etag_override=etag_override)
+        return (
+            self.identity_map.intern(result, authoritative=True)
+            if isinstance(result, BaseModel)
+            else result
+        )
 
-    def close(self) -> None:
-        closed: set[int] = set()
+    def close(self, *, clear_identity: bool = True) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+            first_error = self._clear_identity(clear_identity)
+            capability_error = self._close_capabilities()
+            if first_error is None:
+                first_error = capability_error
+            if first_error is not None:
+                raise first_error
+            object.__setattr__(self, "_closed", True)
+
+    def _clear_identity(self, clear_identity: bool) -> Exception | None:
+        if not clear_identity or getattr(self, "_identity_cleared", False):
+            return None
+        try:
+            self.identity_map.clear()
+        except Exception as error:
+            return error
+        object.__setattr__(self, "_identity_cleared", True)
+        return None
+
+    def _close_capabilities(self) -> Exception | None:
+        closed_capabilities = getattr(self, "_closed_capabilities", None)
+        if closed_capabilities is None:
+            closed_capabilities = set()
+            object.__setattr__(self, "_closed_capabilities", closed_capabilities)
+        attempted: set[int] = set()
+        first_error: Exception | None = None
         for capability in (
             self.reader,
             self.writer,
             self.namespaces,
             self.namespace_writer,
+            getattr(self, "context_resolver", None),
+            getattr(self, "permissions", None),
         ):
-            identity = id(capability)
-            if identity in closed:
+            if capability is None:
                 continue
+            identity = id(capability)
+            if identity in closed_capabilities or identity in attempted:
+                continue
+            attempted.add(identity)
             close = getattr(capability, "close", None)
             if close is not None:
-                close()
-            closed.add(identity)
+                try:
+                    close()
+                except Exception as error:
+                    if first_error is None:
+                        first_error = error
+                    continue
+                closed_capabilities.add(identity)
+        return first_error
 
 
 def require_capability(value: Any, protocol: type, name: str) -> None:

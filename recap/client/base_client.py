@@ -1,6 +1,7 @@
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from tempfile import gettempdir
+from threading import RLock
 from typing import Any, Literal, overload
 from uuid import UUID, uuid4
 
@@ -12,13 +13,19 @@ from recap.client.connection_state import _ConnectionState
 from recap.client.permissions import ActorPermissions
 from recap.commands.context import build_local_command_context
 from recap.commands.errors import CommandValidationError
-from recap.commands.models import CopyResource, CreateNamespace, UpdateNamespace
+from recap.commands.models import (
+    CopyProcessRun,
+    CopyResource,
+    CreateNamespace,
+    UpdateNamespace,
+)
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
 from recap.exceptions import RecapNotFoundError
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
+from recap.schemas.process import ProcessRunCopyOptions, ProcessRunSchema
 from recap.schemas.resource import ResourceCopyOptions, ResourceRef, ResourceSchema
 from recap.utils.migrations import apply_migrations
 
@@ -52,6 +59,7 @@ class RecapClient:
         self.namespace_path = self._normalize_namespace(namespace)
         self._connection_state: _ConnectionState | None = None
         self._closed = False
+        self._close_lock = RLock()
         self.database_path: Path | None = None
         self.backend: ClientBackend | None = None
 
@@ -68,22 +76,22 @@ class RecapClient:
         Safe to call multiple times.  After calling this method the client
         should no longer be used.
         """
-        if getattr(self, "_closed", False):
-            return
-        self._closed = True
-        state = getattr(self, "_connection_state", None)
-        if state is not None:
-            state.release()
-            self._connection_state = None
-            if state.closed and self.backend is not None:
-                self.backend.close()
-            return
-        backend = getattr(self, "backend", None)
-        if backend is not None:
-            backend.close()
-        engine = getattr(self, "engine", None)
-        if engine:
-            engine.dispose()
+        with self._close_lock:
+            if getattr(self, "_closed", False):
+                return
+            state = getattr(self, "_connection_state", None)
+            if state is not None:
+                state.release()
+                self._connection_state = None
+                self._closed = True
+                return
+            backend = getattr(self, "backend", None)
+            if backend is not None:
+                backend.close()
+            engine = getattr(self, "engine", None)
+            if engine:
+                engine.dispose()
+            self._closed = True
 
     def __enter__(self):
         """Return the client itself when used as a context manager."""
@@ -127,8 +135,7 @@ class RecapClient:
     ) -> "RecapClient":
         """Connect to a recap webserver.
 
-        Uses :class:`~recap.adapter.graphql.GraphQLAdapter` for reads and
-        :class:`~recap.adapter.rest.RESTAdapter` for writes. The client does
+        Uses :class:`~recap.adapter.rest.RESTAdapter` for reads and writes. The client does
         not require access to the server's database filesystem.
 
         Parameters
@@ -145,7 +152,7 @@ class RecapClient:
         Returns
         -------
         RecapClient
-            Fully initialized client with GraphQL reads and REST writes.
+            Fully initialized client with REST reads and writes.
 
         Raises
         ------
@@ -156,7 +163,6 @@ class RecapClient:
         RecapRequestError
             If the server returns an API error response.
         """
-        from recap.adapter.graphql import GraphQLAdapter
         from recap.adapter.http_transport import HTTPTransport
         from recap.adapter.rest import RESTAdapter
 
@@ -165,17 +171,15 @@ class RecapClient:
 
         base = url.rstrip("/")
         transport = HTTPTransport(api_key, timeout=timeout)
-        graphql = GraphQLAdapter(
-            graphql_url=f"{base}/graphql", _transport=transport
-        )
         rest = RESTAdapter(base_url=base, _transport=transport)
         client = cls._from_backends(
             backend=ClientBackend(
-                reader=graphql,
+                reader=rest,
                 writer=rest,
                 namespaces=rest,
                 namespace_writer=rest,
-                permissions=graphql,
+                context_resolver=rest,
+                permissions=rest,
             ),
             namespace=namespace,
         )
@@ -864,6 +868,24 @@ class RecapClient:
             )
         except CommandValidationError as error:
             raise ValueError(str(error)) from error
+
+    def copy_process_run(
+        self,
+        source_process_run_id: UUID,
+        options: ProcessRunCopyOptions | None = None,
+    ) -> ProcessRunSchema:
+        """Copy process run into current namespace with fresh aggregate identity."""
+        if self.backend is None:
+            raise RuntimeError("Backend not initialized")
+        namespace_context = self._resolve_namespace_context()
+        return self.backend._execute(
+            CopyProcessRun(
+                source_process_run_id=source_process_run_id,
+                destination_namespace_path=namespace_context.path,
+                options=options or ProcessRunCopyOptions(),
+            ),
+            self._command_context(),
+        )
 
     @overload
     def get_resource(

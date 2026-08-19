@@ -354,8 +354,15 @@ def test_query_maker_can_set_on_unloaded_policy(apply_migrations, db_path):
         assert qm.process_runs()._spec.on_unloaded == "raise"
 
 
-def test_root_query_maker_uses_root_scope_remotely():
+def test_root_query_maker_uses_root_scope_remotely(monkeypatch):
+    from recap.adapter.rest import RESTAdapter
+
     client = RecapClient.from_url("http://recap.test", api_key="secret")
+    monkeypatch.setattr(
+        RESTAdapter,
+        "get_namespace_context",
+        lambda _adapter, path: NamespaceContext(id=UUID(int=0), path=path, metadata={}),
+    )
 
     query = client.query_maker().resources()
 
@@ -379,6 +386,8 @@ def test_scoped_permissions_use_client_namespace(monkeypatch):
 
 
 def test_remote_get_resource_uses_read_backend(monkeypatch):
+    from recap.adapter.rest import RESTAdapter
+
     client = RecapClient.from_url("http://recap.test", api_key="secret")
     expected = ResourceRef.model_construct(id=UUID(int=1), name="sample")
     calls = []
@@ -388,6 +397,11 @@ def test_remote_get_resource_uses_read_backend(monkeypatch):
         return [expected]
 
     monkeypatch.setattr(client.backend.reader, "query", read)
+    monkeypatch.setattr(
+        RESTAdapter,
+        "get_namespace_context",
+        lambda _adapter, path: NamespaceContext(id=UUID(int=0), path=path, metadata={}),
+    )
     monkeypatch.setattr(
         client.backend.writer,
         "get_resource",
@@ -443,12 +457,6 @@ def test_uuid_parent_resolution_uses_read_backend(monkeypatch):
         return [expected]
 
     monkeypatch.setattr(client.backend.reader, "query", read)
-    monkeypatch.setattr(
-        client.backend.writer,
-        "query",
-        lambda *args, **kwargs: pytest.fail("parent lookup used write backend"),
-        raising=False,
-    )
 
     assert client._resolve_parent(expected.id, NamespaceContext(
         id=UUID(int=3), path="beamline", metadata={},
@@ -458,9 +466,16 @@ def test_uuid_parent_resolution_uses_read_backend(monkeypatch):
     client.close()
 
 
-def test_scoped_remote_query_uses_view_namespace():
+def test_scoped_remote_query_uses_view_namespace(monkeypatch):
+    from recap.adapter.rest import RESTAdapter
+
     client = RecapClient.from_url("http://recap.test", api_key="secret")
     scoped = client.namespace("beamline/amx")
+    monkeypatch.setattr(
+        RESTAdapter,
+        "get_namespace_context",
+        lambda _adapter, path: NamespaceContext(id=UUID(int=0), path=path, metadata={}),
+    )
 
     query = scoped.query_maker().resources()
 

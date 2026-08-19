@@ -12,12 +12,14 @@ This module defines the top-level provenance objects:
 
 import warnings
 from typing import Annotated, Literal
+from uuid import UUID
 
-from pydantic import ConfigDict, PrivateAttr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
 from recap.schemas.common import (
     SIMPLE_FIELD,
+    LoadAwareMixin,
     NamespaceOwnedFields,
     NormalizedLabels,
 )
@@ -39,10 +41,10 @@ class ProcessTemplateRef(NamespaceOwnedFields):
 
     name: Annotated[str, SIMPLE_FIELD]
     version: Annotated[str, SIMPLE_FIELD]
-    labels: NormalizedLabels
+    labels: NormalizedLabels = []
 
 
-class ProcessTemplateSchema(NamespaceOwnedFields):
+class ProcessTemplateSchema(LoadAwareMixin, NamespaceOwnedFields):
     """Blueprint for a workflow, defining its ordered steps and resource slots.
 
     A :class:`ProcessTemplateSchema` is created once and reused across
@@ -68,9 +70,14 @@ class ProcessTemplateSchema(NamespaceOwnedFields):
 
     name: Annotated[str, SIMPLE_FIELD]
     version: Annotated[str, SIMPLE_FIELD]
-    labels: NormalizedLabels
-    step_templates: dict[str, StepTemplateSchema]
-    resource_slots: list["ResourceSlotSchema"]
+    labels: NormalizedLabels = []
+    step_templates: dict[str, StepTemplateSchema] = {}
+    resource_slots: list["ResourceSlotSchema"] = []
+    _relation_fields = frozenset({"step_templates", "resource_slots"})
+
+    def set_loaded_relations(self, loaded_relations, *, on_unloaded="warn"):
+        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
+        return self
 
 
 class ProcessRunRef(NamespaceOwnedFields):
@@ -89,11 +96,21 @@ class ProcessRunRef(NamespaceOwnedFields):
     """
 
     name: Annotated[str, SIMPLE_FIELD]
-    description: Annotated[str, SIMPLE_FIELD]
-    template: ProcessTemplateRef
+    description: Annotated[str, SIMPLE_FIELD] = ""
+    template: ProcessTemplateSchema | None = None
 
 
-class ProcessRunSchema(NamespaceOwnedFields):
+class ProcessRunCopyChanges(BaseModel):
+    description: str | None = None
+    assignments: dict[str, UUID] | None = None
+    steps: dict[str, dict[str, dict[str, object]]] | None = None
+
+
+class ProcessRunCopyOptions(BaseModel):
+    changes: ProcessRunCopyChanges = Field(default_factory=ProcessRunCopyChanges)
+
+
+class ProcessRunSchema(LoadAwareMixin, NamespaceOwnedFields):
     """A concrete execution of a :class:`ProcessTemplateSchema`.
 
     A :class:`ProcessRunSchema` is the primary provenance record.  It links
@@ -123,14 +140,13 @@ class ProcessRunSchema(NamespaceOwnedFields):
     """
 
     name: Annotated[str, SIMPLE_FIELD]
-    description: Annotated[str, SIMPLE_FIELD]
-    template: ProcessTemplateSchema
-    steps: dict[str, StepSchema]
-    assigned_resources: dict[str, ResourceAssignmentSchema]
+    description: Annotated[str, SIMPLE_FIELD] = ""
+    copied_from_id: Annotated[UUID | None, SIMPLE_FIELD] = None
+    template: ProcessTemplateSchema | None = None
+    steps: dict[str, StepSchema] = {}
+    assigned_resources: dict[str, ResourceAssignmentSchema] = {}
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
-    _loaded_relations: dict[str, bool] = PrivateAttr(default_factory=dict)
-    _on_unloaded: Literal["silent", "warn", "raise"] = PrivateAttr(default="warn")
-    _warned_unloaded: set[str] = PrivateAttr(default_factory=set)
+    _relation_fields = frozenset({"template", "steps", "assigned_resources"})
 
     @field_validator("assigned_resources", mode="before")
     @classmethod
@@ -146,27 +162,40 @@ class ProcessRunSchema(NamespaceOwnedFields):
         *,
         on_unloaded: Literal["silent", "warn", "raise"] = "warn",
     ) -> "ProcessRunSchema":
-        self._loaded_relations = loaded_relations
-        self._on_unloaded = on_unloaded
-        self._warned_unloaded = set()
+        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
         return self
 
+    def is_loaded(self, relation: str) -> bool:
+        private = getattr(self, "__pydantic_private__", None) or {}
+        return private.get("_loaded_relations", {}).get(relation, False)
+
+    def require_loaded(self, relation: str) -> None:
+        self._handle_unloaded(relation, f"include('{relation}')")
+
     def _handle_unloaded(self, field_name: str, include_hint: str) -> None:
-        if self._loaded_relations.get(field_name, True):
+        private = getattr(self, "__pydantic_private__", None) or {}
+        if private.get("_loaded_relations", {}).get(field_name, True):
             return
         message = (
             f"'{field_name}' was not loaded for ProcessRunSchema; "
             f"use {include_hint} or load='eager'."
         )
-        if self._on_unloaded == "raise":
+        on_unloaded = private.get("_on_unloaded", "warn")
+        warned = private.setdefault("_warned_unloaded", set())
+        if on_unloaded == "raise":
             raise UnloadedFieldError(message)
-        if self._on_unloaded == "warn" and field_name not in self._warned_unloaded:
+        if on_unloaded == "warn" and field_name not in warned:
             warnings.warn(message, UnloadedFieldWarning, stacklevel=3)
-            self._warned_unloaded.add(field_name)
+            warned.add(field_name)
 
     def __getattribute__(self, name: str):
-        if name == "assigned_resources":
-            self._handle_unloaded("assigned_resources", "include('resources')")
-        elif name == "steps":
-            self._handle_unloaded("steps", "include('steps')")
+        if name in object.__getattribute__(self, "_relation_fields"):
+            hint = "resources" if name == "assigned_resources" else name
+            self._handle_unloaded(name, f"include('{hint}')")
         return super().__getattribute__(name)
+
+
+ProcessTemplateRef = ProcessTemplateSchema  # noqa: F811
+ProcessRunRef = ProcessRunSchema  # noqa: F811
+ProcessTemplateSchema.model_rebuild(force=True)
+ProcessRunSchema.model_rebuild(force=True)

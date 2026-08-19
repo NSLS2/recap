@@ -25,7 +25,7 @@ from recap.schemas.attribute import (
     AttributeTemplateValidator,
     AttributeValueSchema,
 )
-from recap.schemas.common import SIMPLE_FIELD, CommonFields, StepStatus
+from recap.schemas.common import SIMPLE_FIELD, CommonFields, LoadAwareMixin, StepStatus
 from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
 from recap.utils.dsl import (
     build_param_values_model,
@@ -50,21 +50,7 @@ def _attr_metadata(vt: Any) -> dict | None:
         return {}
 
 
-class StepTemplateRef(CommonFields):
-    """Lightweight reference to a step template, containing only identity fields.
-
-    Used in serialisation contexts where the full
-    :class:`StepTemplateSchema` is not needed to avoid embedding repeated
-    attribute group data.
-
-    Attributes:
-        name: Human-readable step template name.
-    """
-
-    name: Annotated[str, SIMPLE_FIELD]
-
-
-class StepTemplateSchema(CommonFields):
+class StepTemplateSchema(LoadAwareMixin, CommonFields):
     """Blueprint for a single workflow step within a process template.
 
     Declares the parameter groups (attribute group templates) that capture
@@ -83,8 +69,13 @@ class StepTemplateSchema(CommonFields):
     """
 
     name: Annotated[str, SIMPLE_FIELD]
-    attribute_group_templates: list[AttributeGroupTemplateSchema]
-    resource_slots: dict[str, ResourceSlotSchema]
+    attribute_group_templates: list[AttributeGroupTemplateSchema] = []
+    resource_slots: dict[str, ResourceSlotSchema] = {}
+    _relation_fields = frozenset({"attribute_group_templates", "resource_slots"})
+
+    def set_loaded_relations(self, loaded_relations, *, on_unloaded="warn"):
+        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
+        return self
 
 
 class ParameterSchema(CommonFields):
@@ -133,7 +124,11 @@ class ParameterSchema(CommonFields):
             )
             values_model = build_param_values_model(tmpl.slug or tmpl.name, tmpl_key)
             raw_values = {
-                av.template.name: {"value": av.value, "unit": av.unit}
+                av.template.name: {
+                    "value": av.value,
+                    "unit": av.unit,
+                    "metadata_json": av.metadata_json,
+                }
                 for av in data._values.values()
             }
             return {
@@ -232,9 +227,11 @@ class ParameterSchema(CommonFields):
             attr_tmpl = tmpl_by_name[name]
             if isinstance(raw_value, dict):
                 raw_unit = raw_value.get("unit")
+                raw_metadata = raw_value.get("metadata_json", {})
                 raw_value = raw_value.get("value")
             else:
                 raw_unit = None
+                raw_metadata = {}
 
             # Reuse your validator to perform type coercion & checks
             # Note: we shove `raw_value` into 'default' to leverage coerce_default()
@@ -248,6 +245,7 @@ class ParameterSchema(CommonFields):
             coerced[name] = {
                 "value": validator.default,  # already converted by coerce_default
                 "unit": attr_tmpl.unit if raw_unit is None else raw_unit,
+                "metadata_json": raw_metadata,
             }
 
         self.values = self.values.__class__.model_validate(coerced)
@@ -338,7 +336,7 @@ class ParameterSchema(CommonFields):
         return f"ParameterSchema(template={self.template.name!r}, {attrs})"
 
 
-class StepSchema(CommonFields):
+class StepSchema(LoadAwareMixin, CommonFields):
     """A concrete step instance within a :class:`~recap.schemas.process.ProcessRunSchema`.
 
     Each step corresponds to one :class:`StepTemplateSchema` from the parent
@@ -360,13 +358,18 @@ class StepSchema(CommonFields):
     """
 
     name: Annotated[str, SIMPLE_FIELD]
-    template: StepTemplateSchema
-    parameters: BaseModel | dict[str, ParameterSchema]
-    state: Annotated[StepStatus, SIMPLE_FIELD]
-    process_run_id: Annotated[UUID, SIMPLE_FIELD]
+    template: StepTemplateSchema | None = None
+    parameters: BaseModel | dict[str, ParameterSchema] = {}
+    state: Annotated[StepStatus, SIMPLE_FIELD] = StepStatus.PENDING
+    process_run_id: Annotated[UUID | None, SIMPLE_FIELD] = None
     parent_id: Annotated[UUID | None, SIMPLE_FIELD] = None
     children: list["StepSchema"] = Field(default_factory=list)
     resources: dict[str, "ResourceSchema"] = Field(default_factory=dict)
+    _relation_fields = frozenset({"template", "parameters", "children", "resources"})
+
+    def set_loaded_relations(self, loaded_relations, *, on_unloaded="warn"):
+        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
+        return self
 
     def generate_child(self):
         return self.model_copy(deep=True, update={"id": None, "parent_id": self.id})
@@ -394,4 +397,7 @@ class StepSchema(CommonFields):
         return self
 
 
-StepSchema.model_rebuild()
+StepTemplateRef = StepTemplateSchema
+StepTemplate = StepTemplateSchema
+StepTemplateSchema.model_rebuild(force=True)
+StepSchema.model_rebuild(force=True)
