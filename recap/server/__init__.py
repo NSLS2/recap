@@ -1,1 +1,1 @@
-"""recap GraphQL server package."""
+"""recap REST server package."""

@@ -6,12 +6,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, Request, Response
 
 from recap.adapter.local import LocalBackend
-from recap.adapter.transport import serialize_model
+from recap.adapter.transport import QueryRequest, QueryResult, serialize_model
 from recap.authentication.models import RequestActor
 from recap.authorization.policy import (
     SnapshotNamespacePolicy,
     UnrestrictedNamespacePolicy,
 )
+from recap.client.permissions import ActorPermissions
 from recap.commands.context import DiscardAuditSink
 from recap.commands.models import CommandContext
 from recap.commands.registry import COMMAND_REGISTRY, CommandRegistration
@@ -21,14 +22,18 @@ from recap.dsl.drafts import (
     ProcessTemplateDraft,
     ResourceTemplateDraft,
 )
-from recap.schemas.namespace import NamespaceSchema
+from recap.exceptions import AuthorizationDenied, RecapValidationError
+from recap.schemas.namespace import NamespaceContext, NamespaceSchema
 from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
 from recap.schemas.resource import (
     ResourceSchema,
     ResourceTemplateSchema,
 )
 from recap.server.errors import request_id_from
+from recap.server.query_models import QueryRPCRequest
+from recap.server.query_service import QueryService
 from recap.server.rest_models import (
+    CopyProcessRunRequest,
     CopyResourceRequest,
     CreateNamespaceRequest,
     CreateResourceRequest,
@@ -55,27 +60,105 @@ def command_service(request: Request) -> CommandService:
 
 
 def _context(request: Request, actor: RequestActor, idempotency_key: str):
-    provider = getattr(request.app.state, "authorization_snapshot_provider", None)
-    policy = (
-        SnapshotNamespacePolicy(provider.acquire())
-        if provider is not None
-        else getattr(
-            request.app.state, "namespace_policy", UnrestrictedNamespacePolicy()
-        )
-    )
     return CommandContext(
         actor=actor,
         request_id=request_id_from(request),
-        policy=policy,
+        policy=_policy(request),
         audit_sink=DiscardAuditSink(),
         authorization_generation=None,
         idempotency_key=idempotency_key,
     )
 
 
+def _policy(request: Request):
+    provider = getattr(request.app.state, "authorization_snapshot_provider", None)
+    return (
+        SnapshotNamespacePolicy(provider.acquire())
+        if provider is not None
+        else getattr(
+            request.app.state, "namespace_policy", UnrestrictedNamespacePolicy()
+        )
+    )
+
+
 def _set_etag(response: Response, entity):
     response.headers["ETag"] = f'"{entity.revision}"'
     return serialize_model(entity) if isinstance(entity, ResourceSchema) else entity
+
+
+def _query_service(request: Request) -> QueryService:
+    return QueryService(LocalBackend(request.app.state.session_factory))
+
+
+def _canonical_namespace_path(path: str) -> str:
+    try:
+        return canonicalize_namespace_path(path)
+    except (TypeError, ValueError) as exc:
+        raise RecapValidationError("Invalid namespace path") from exc
+
+
+def _query_request(body: QueryRPCRequest) -> QueryRequest:
+    try:
+        return QueryRequest(
+            entity=body.entity,
+            projection=body.projection,
+            namespace_path=_canonical_namespace_path(body.namespace_path),
+            spec=body.spec,
+        )
+    except (TypeError, ValueError) as exc:
+        raise RecapValidationError("Invalid query request") from exc
+
+
+@router.post("/query", response_model=QueryResult)
+def query(
+    body: QueryRPCRequest,
+    request: Request,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+) -> QueryResult:
+    return _query_service(request).query(
+        _query_request(body), actor=actor, policy=_policy(request)
+    )
+
+
+@router.post("/query/count")
+def query_count(
+    body: QueryRPCRequest,
+    request: Request,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+) -> int:
+    return _query_service(request).count(
+        _query_request(body), actor=actor, policy=_policy(request)
+    )
+
+
+@router.get("/permissions", response_model=ActorPermissions)
+def permissions(
+    request: Request,
+    namespace_path: str,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+) -> ActorPermissions:
+    return _query_service(request).permissions(
+        _canonical_namespace_path(namespace_path), actor=actor, policy=_policy(request)
+    )
+
+
+@router.get(
+    "/namespaces/context/{namespace_path:path}", response_model=NamespaceContext
+)
+def namespace_context(
+    namespace_path: str,
+    request: Request,
+    response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+) -> NamespaceContext:
+    path = _canonical_namespace_path(namespace_path)
+    if not _policy(request).can_discover_namespace(actor, path):
+        raise AuthorizationDenied(conceal=True)
+    context = _query_service(request).backend.get_namespace_context(
+        path
+    )
+    response.headers["ETag"] = f'"{context.revision}"'
+    return context
 
 
 @router.put(
@@ -337,6 +420,29 @@ def create_process_run(
 ) -> ProcessRunSchema:
     command = registration.decode_command(
         {"namespace_path": namespace_path}, {}, body
+    )
+    result = CommandService(request.app.state.session_factory).execute(
+        command, _context(request, actor, idempotency_key)
+    )
+    return _set_etag(response, result)
+
+
+@router.post(
+    "/process-runs/{source_process_run_id}/copies", response_model=None, status_code=201
+)
+def copy_process_run(
+    source_process_run_id: UUID,
+    body: CopyProcessRunRequest,
+    request: Request,
+    response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("copy_process_run"))
+    ],
+) -> ProcessRunSchema:
+    command = registration.decode_command(
+        {"source_process_run_id": source_process_run_id}, {}, body
     )
     result = CommandService(request.app.state.session_factory).execute(
         command, _context(request, actor, idempotency_key)

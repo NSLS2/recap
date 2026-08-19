@@ -9,7 +9,6 @@ from recap.adapter import (
     ReadBackend,
     WriteBackend,
 )
-from recap.adapter.graphql import GraphQLAdapter
 from recap.adapter.local import LocalBackend
 
 
@@ -38,18 +37,6 @@ def test_local_backend_satisfies_independent_capabilities():
         assert isinstance(lb, NamespaceCatalog)
         assert isinstance(lb, NamespaceContextResolver)
         assert isinstance(lb, NamespaceWriter)
-
-
-def test_graphql_adapter_satisfies_read_backend():
-    adapter = GraphQLAdapter("http://recap.test/graphql")
-    try:
-        assert isinstance(adapter, ReadBackend)
-        assert not isinstance(adapter, NamespaceCatalog)
-        assert not isinstance(adapter, NamespaceContextResolver)
-        assert not isinstance(adapter, NamespaceWriter)
-        assert not isinstance(adapter, AuthorizedReadBackend)
-    finally:
-        adapter.close()
 
 
 def test_authorized_read_backend_is_separate_from_public_read_backend():

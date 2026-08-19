@@ -5,11 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from secrets import token_urlsafe
 from typing import Any
+from urllib.parse import quote
 from uuid import UUID
 
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from recap.adapter.http_transport import HTTPResult, HTTPTransport
+from recap.adapter.transport import QueryRequest, QueryResult, hydrate_result
+from recap.client.permissions import ActorPermissions
 from recap.commands.models import (
     CommandContext,
     CommandModel,
@@ -17,6 +20,8 @@ from recap.commands.models import (
     UpdateNamespace,
 )
 from recap.commands.registry import COMMAND_REGISTRY
+from recap.dsl.query import QuerySpec, SchemaT
+from recap.exceptions import RecapProtocolError
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
 
@@ -66,16 +71,19 @@ class RESTAdapter:
         body: dict[str, Any] | None = None,
         etag: str | None = None,
         idempotency_key: str | None = None,
+        idempotent: bool = True,
+        params: dict[str, str] | None = None,
     ) -> RESTResult:
         headers: dict[str, str] = {}
         if etag is not None:
             headers["If-Match"] = etag
-        if idempotency_key is not None or method in {"PUT", "POST", "PATCH"}:
+        if idempotent and (idempotency_key is not None or method in {"PUT", "POST", "PATCH"}):
             headers["Idempotency-Key"] = idempotency_key or token_urlsafe(18)
         url = f"{self._base_url}{path}"
-        response: HTTPResult = self._transport.request(
-            method, url, json=body, headers=headers
-        )
+        request_kwargs = {"json": body, "headers": headers}
+        if params is not None:
+            request_kwargs["params"] = params
+        response: HTTPResult = self._transport.request(method, url, **request_kwargs)
         return RESTResult(
             response.body,
             response.etag,
@@ -117,6 +125,66 @@ class RESTAdapter:
             route += f"/{path}"
         result = self._request("GET", route)
         return list(result.entity or [])
+
+    def query(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ) -> list[SchemaT]:
+        request = QueryRequest.from_query(schema, spec, namespace_path=namespace_path)
+        response = self._request(
+            "POST", "/api/v1/query", body=request.model_dump(mode="json"), idempotent=False
+        )
+        try:
+            result = QueryResult.model_validate(response.entity)
+            return hydrate_result(schema, result)
+        except RecapProtocolError:
+            raise
+        except (KeyError, TypeError, ValueError, ValidationError):
+            raise RecapProtocolError(
+                "Malformed REST query response", url=f"{self._base_url}/api/v1/query",
+                request_id=response.request_id,
+            ) from None
+
+    def count(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ) -> int:
+        request = QueryRequest.from_query(schema, spec, namespace_path=namespace_path)
+        response = self._request(
+            "POST", "/api/v1/query/count", body=request.model_dump(mode="json"), idempotent=False
+        )
+        if not isinstance(response.entity, int) or isinstance(response.entity, bool):
+            raise RecapProtocolError(
+                "Malformed REST count response", url=f"{self._base_url}/api/v1/query/count",
+                request_id=response.request_id,
+            )
+        return response.entity
+
+    def permissions(self, namespace_path: str) -> ActorPermissions:
+        response = self._request(
+            "GET", "/api/v1/permissions", params={"namespace_path": namespace_path},
+            idempotent=False,
+        )
+        try:
+            return ActorPermissions.model_validate(response.entity)
+        except (TypeError, ValueError, ValidationError):
+            raise RecapProtocolError(
+                "Malformed REST permissions response", url=f"{self._base_url}/api/v1/permissions",
+                request_id=response.request_id,
+            ) from None
+
+    def get_namespace_context(self, path: str) -> NamespaceContext:
+        encoded = "/".join(quote(segment, safe="") for segment in path.strip("/").split("/"))
+        route = f"/api/v1/namespaces/context/{encoded}"
+        response = self._request("GET", route, idempotent=False)
+        try:
+            context = NamespaceContext.model_validate(response.entity)
+            if response.etag is not None:
+                context = context.model_copy(update={"etag": response.etag})
+            return context
+        except (TypeError, ValueError, ValidationError):
+            raise RecapProtocolError(
+                "Malformed REST namespace context response", url=f"{self._base_url}{route}",
+                request_id=response.request_id,
+            ) from None
 
     def create(
         self,

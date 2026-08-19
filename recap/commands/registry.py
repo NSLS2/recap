@@ -12,6 +12,7 @@ from recap.adapter.transport import _prepare_dynamic_models
 from recap.commands.errors import CommandValidationError
 from recap.commands.models import (
     CommandModel,
+    CopyProcessRun,
     CopyResource,
     CreateNamespace,
     CreateProcessRun,
@@ -39,6 +40,7 @@ from recap.schemas.resource import (
     ResourceTemplateSchema,
 )
 from recap.server.rest_models import (
+    CopyProcessRunRequest,
     CopyResourceRequest,
     CreateNamespaceRequest,
     CreateResourceRequest,
@@ -231,6 +233,31 @@ def _decode_copy_resource(
         source_resource_id=_path_uuid(path_params, "source_resource_id"),
         destination_namespace_path=destination,
         options=ResourceCopyOptions.model_validate(data),
+    )
+
+
+def _encode_copy_process_run(command: CommandModel) -> EncodedRequest:
+    assert isinstance(command, CopyProcessRun)
+    return EncodedRequest(
+        method="POST",
+        path=f"/api/v1/process-runs/{command.source_process_run_id}/copies",
+        body={
+            "destination_namespace": command.destination_namespace_path,
+            **command.options.model_dump(mode="json"),
+        },
+        etag=None,
+    )
+
+
+def _decode_copy_process_run(
+    path_params: Mapping[str, Any], headers: Mapping[str, Any], body: BaseModel
+) -> CopyProcessRun:
+    data = _body_data(body)
+    destination = data.pop("destination_namespace")
+    return CopyProcessRun(
+        source_process_run_id=_path_uuid(path_params, "source_process_run_id"),
+        destination_namespace_path=destination,
+        options=data,
     )
 
 
@@ -502,6 +529,17 @@ COMMAND_REGISTRY = CommandRegistry(
             encode_request=_encode_copy_resource,
             decode_command=_decode_copy_resource,
             decode_response=_decode_resource_response,
+        ),
+        CommandRegistration(
+            command_type=CopyProcessRun,
+            name="copy_process_run",
+            service_handler="copy_process_run",
+            method="POST",
+            route_template="/api/v1/process-runs/{source_process_run_id}/copies",
+            request_model=CopyProcessRunRequest,
+            encode_request=_encode_copy_process_run,
+            decode_command=_decode_copy_process_run,
+            decode_response=_decode_process_run_response,
         ),
         CommandRegistration(
             command_type=CreateResourceTemplate,

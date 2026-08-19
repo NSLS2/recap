@@ -33,8 +33,7 @@ def test_constructor_has_no_database_url_argument():
     assert "url" not in inspect.signature(RecapClient).parameters
 
 
-def test_from_url_wires_graphql_reads_and_rest_writes_without_db_discovery():
-    from recap.adapter.graphql import GraphQLAdapter
+def test_from_url_wires_one_rest_adapter_without_db_discovery():
     from recap.adapter.rest import RESTAdapter
     from recap.client import RecapClient
     from recap.client.backend import ClientBackend
@@ -45,12 +44,12 @@ def test_from_url_wires_graphql_reads_and_rest_writes_without_db_discovery():
         )
 
     assert isinstance(client.backend, ClientBackend)
-    assert isinstance(client.backend.reader, GraphQLAdapter)
+    assert isinstance(client.backend.reader, RESTAdapter)
     assert isinstance(client.backend.writer, RESTAdapter)
     assert client.backend.namespaces is client.backend.writer
     assert client.backend.namespace_writer is client.backend.writer
     assert client.backend.permissions is client.backend.reader
-    assert client.backend.context_resolver is None
+    assert client.backend.context_resolver is client.backend.reader
     reader = client.backend.reader
     writer = client.backend.writer
     assert reader._transport is writer._transport
@@ -62,14 +61,22 @@ def test_from_url_wires_graphql_reads_and_rest_writes_without_db_discovery():
 
 
 def test_from_url_query_maker_uses_client_backend_facade():
-    from recap.adapter.graphql import GraphQLAdapter
-    from recap.client import RecapClient
+    from uuid import uuid4
 
-    client = RecapClient.from_url("http://localhost:8000", api_key="secret")
-    qm = client.namespace("test").query_maker()
+    from recap.adapter.rest import RESTAdapter
+    from recap.client import RecapClient
+    from recap.schemas.namespace import NamespaceContext
+
+    with patch.object(
+        RESTAdapter,
+        "get_namespace_context",
+        return_value=NamespaceContext(id=uuid4(), path="test"),
+    ):
+        client = RecapClient.from_url("http://localhost:8000", api_key="secret")
+        qm = client.namespace("test").query_maker()
 
     assert qm.backend is client.backend
-    assert isinstance(qm.backend.reader, GraphQLAdapter)
+    assert isinstance(qm.backend.reader, RESTAdapter)
     client.close()
 
 

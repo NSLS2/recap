@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from recap.lifecycle import LifecycleStatus
+from recap.schemas.process import ProcessRunCopyOptions
 from recap.schemas.resource import ResourceCopyOptions
 
 
@@ -69,4 +70,8 @@ class SetLifecycleStatusRequest(RestModel):
 
 
 class CopyResourceRequest(RestModel, ResourceCopyOptions):
+    destination_namespace: str
+
+
+class CopyProcessRunRequest(RestModel, ProcessRunCopyOptions):
     destination_namespace: str

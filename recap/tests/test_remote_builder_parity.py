@@ -1,4 +1,4 @@
-"""Remote command writes and GraphQL read parity."""
+"""Remote command writes and REST read parity."""
 
 from unittest.mock import patch
 
@@ -6,7 +6,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
-from recap.adapter.graphql import GraphQLAdapter
+from recap.adapter.rest import RESTAdapter
 from recap.client import RecapClient
 from recap.exceptions import (
     RecapAuthenticationError,
@@ -18,40 +18,14 @@ from recap.server.app import create_app
 
 
 @pytest.fixture(params=["local", "remote"], ids=["local", "remote"])
-def command_client(request, tmp_path, monkeypatch):
+def command_client(request, tmp_path, rest_loopback_client):
     db_path = tmp_path / f"{request.param}-commands.db"
     if request.param == "local":
         with RecapClient.from_sqlite(db_path) as client:
             yield client
         return
 
-    api_key = "command-parity-secret"
-    with TestClient(create_app(db_path, api_key=api_key)) as app_client:
-        def request(_client, method, url, **kwargs):
-            response = app_client.request(
-                method, url.removeprefix("http://recap.test"), **kwargs
-            )
-            return httpx2.Response(
-                response.status_code,
-                headers=response.headers,
-                content=response.content,
-                request=httpx2.Request(
-                    method, url, headers=kwargs.get("headers")
-                ),
-            )
-
-        monkeypatch.setattr(
-            httpx2.Client,
-            "request",
-            request,
-        )
-        monkeypatch.setattr(
-            httpx2.Client,
-            "post",
-            lambda _client, url, **kwargs: app_client.post("/graphql", **kwargs),
-        )
-        with RecapClient.from_url("http://recap.test", api_key=api_key) as client:
-            yield client
+    yield rest_loopback_client
 
 
 def seed_command_namespace(client):
@@ -216,7 +190,7 @@ def test_stale_resource_write_preserves_first_mutation(command_client):
         assert persisted.resource.name == "first"
 
 
-def test_remote_writes_are_visible_to_graphql_and_match_rest_entities(tmp_path):
+def test_remote_writes_are_visible_to_rest_queries(tmp_path):
     db_path = tmp_path / "remote.db"
     api_key = "remote-secret"
     app_client = TestClient(create_app(db_path, api_key=api_key))
@@ -226,12 +200,8 @@ def test_remote_writes_are_visible_to_graphql_and_match_rest_entities(tmp_path):
         response = app_client.request(method, path, **kwargs)
         return response
 
-    def post(_client, url, **kwargs):
-        return app_client.post("/graphql", **kwargs)
-
     with (
         patch.object(httpx2.Client, "request", request),
-        patch.object(httpx2.Client, "post", post),
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
     ):
         namespace = remote.namespace("beamline/amx")
@@ -288,7 +258,12 @@ def test_scoped_remote_query_uses_view_namespace():
     client = RecapClient.from_url("http://recap.test", api_key="secret")
     scoped = client.namespace("beamline/amx")
 
-    query = scoped.query_maker().resources()
+    with patch.object(
+        RESTAdapter,
+        "get_namespace_context",
+        return_value=type("Context", (), {"path": "beamline/amx"})(),
+    ):
+        query = scoped.query_maker().resources()
 
     assert query._context.path == "beamline/amx"
     scoped.close()
@@ -311,18 +286,8 @@ def test_scoped_remote_public_builders_use_namespace_routes(tmp_path):
             template_entity = response.json()
         return response
 
-    def post(_client, url, **kwargs):
-        return app_client.post("/graphql", **kwargs)
-
     with (
         patch.object(httpx2.Client, "request", request),
-        patch.object(httpx2.Client, "post", post),
-        patch.object(
-            GraphQLAdapter,
-            "get_resource_template",
-            side_effect=AssertionError("builder must use GraphQL query()"),
-        ),
-        patch.object(GraphQLAdapter, "find_resources_by_identity", return_value=[]),
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
     ):
         namespace = remote.namespace("beamline/amx")
@@ -358,18 +323,8 @@ def test_scoped_remote_create_resource_uses_namespace_route(tmp_path):
             template_entity = response.json()
         return response
 
-    def post(_client, url, **kwargs):
-        return app_client.post("/graphql", **kwargs)
-
     with (
         patch.object(httpx2.Client, "request", request),
-        patch.object(httpx2.Client, "post", post),
-        patch.object(
-            GraphQLAdapter,
-            "get_resource_template",
-            side_effect=AssertionError("existing-resource reload must use query()"),
-        ),
-        patch.object(GraphQLAdapter, "find_resources_by_identity", return_value=[]),
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
     ):
         namespace = remote.namespace("beamline/amx")
@@ -385,7 +340,7 @@ def test_scoped_remote_create_resource_uses_namespace_route(tmp_path):
             query_paths.append(namespace_path)
             return [resource]
 
-        with patch.object(GraphQLAdapter, "query", query), namespace.build_resource(
+        with patch.object(RESTAdapter, "query", query), namespace.build_resource(
             resource_id=resource.id
         ) as builder:
             assert builder.resource.id == resource.id
@@ -393,59 +348,6 @@ def test_scoped_remote_create_resource_uses_namespace_route(tmp_path):
 
         assert resource.name == "S-001"
         assert ("POST", "/api/v1/resources/beamline/amx") in request_paths
-        namespace.close()
-
-
-def test_remote_resource_builder_loads_by_uuid_filter_through_graphql(tmp_path):
-    db_path = tmp_path / "remote-builder-uuid.db"
-    api_key = "remote-secret"
-    app_client = TestClient(create_app(db_path, api_key=api_key))
-
-    def request(_client, method, url, **kwargs):
-        path = url.removeprefix("http://recap.test")
-        return app_client.request(method, path, **kwargs)
-
-    def post(_client, url, **kwargs):
-        return app_client.post("/graphql", **kwargs)
-
-    with (
-        patch.object(httpx2.Client, "request", request),
-        patch.object(httpx2.Client, "post", post),
-        RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
-    ):
-        namespace = remote.namespace("beamline/amx")
-        remote.create_namespace("beamline")
-        namespace.create_namespace(namespace.namespace_path)
-        with namespace.build_resource_template(name="Sample", type_names=["sample"]):
-            pass
-        resource = namespace.create_resource("S-001", "Sample")
-
-        spec = {
-            "filters": {"template__id": str(resource.template.id)},
-            "include_mutable": True,
-        }
-        query_response = app_client.post(
-            "/graphql",
-            headers={"Authorization": f"Apikey {api_key}"},
-            json={
-                "query": "query($spec: JSON!) { execute_query(schema_name: \"ResourceSchema\", namespace_path: \"beamline/amx\", spec: $spec) }",
-                "variables": {"spec": spec},
-            },
-        )
-        count_response = app_client.post(
-            "/graphql",
-            headers={"Authorization": f"Apikey {api_key}"},
-            json={
-                "query": "query($spec: JSON!) { execute_count(schema_name: \"ResourceSchema\", namespace_path: \"beamline/amx\", spec: $spec) }",
-                "variables": {"spec": spec},
-            },
-        )
-        assert query_response.json()["data"]["execute_query"]["items"]
-        assert count_response.json()["data"]["execute_count"] == 1
-
-        with namespace.build_resource(resource_id=resource.id) as builder:
-            assert builder.resource.id == resource.id
-
         namespace.close()
 
 
@@ -458,14 +360,9 @@ def test_remote_resource_builder_reports_missing_template_without_lookup(tmp_pat
         path = url.removeprefix("http://recap.test")
         return app_client.request(method, path, **kwargs)
 
-    def post(_client, url, **kwargs):
-        return app_client.post("/graphql", **kwargs)
-
     with (
         patch.object(httpx2.Client, "request", request),
-        patch.object(httpx2.Client, "post", post),
-        patch.object(GraphQLAdapter, "query", return_value=[]),
-        patch.object(GraphQLAdapter, "get_resource_template") as get_template,
+        patch.object(RESTAdapter, "query", return_value=[]),
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
     ):
         namespace = remote.namespace("beamline/amx")
@@ -478,7 +375,6 @@ def test_remote_resource_builder_reports_missing_template_without_lookup(tmp_pat
         ):
             namespace.build_resource("S-001", "Missing")
 
-        get_template.assert_not_called()
         namespace.close()
 
 
@@ -500,11 +396,6 @@ def test_remote_namespace_write_rejects_invalid_api_key(tmp_path, monkeypatch):
             httpx2.Client,
             "request",
             request,
-        )
-        monkeypatch.setattr(
-            httpx2.Client,
-            "post",
-            lambda _client, url, **kwargs: app_client.post("/graphql", **kwargs),
         )
         with RecapClient.from_url(
             "http://recap.test", api_key="wrong-key"

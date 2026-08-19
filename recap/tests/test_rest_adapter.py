@@ -8,6 +8,8 @@ import pytest
 
 from recap.adapter.http_transport import HTTPResult, HTTPTransport
 from recap.adapter.transport import serialize_model
+from recap.client.permissions import ActorPermissions
+from recap.dsl.query import QuerySpec
 from recap.exceptions import (
     RecapAuthenticationError,
     RecapConflictError,
@@ -15,6 +17,7 @@ from recap.exceptions import (
     RecapInternalError,
     RecapNotFoundError,
     RecapPermissionDeniedError,
+    RecapProtocolError,
     RecapRequestError,
     RecapServiceUnavailableError,
     RecapValidationError,
@@ -86,25 +89,6 @@ def test_missing_api_key_is_rejected_without_transport():
         RESTAdapter("https://recap.test")
 
 
-def test_injected_falsey_transport_is_preserved():
-    from recap.adapter.rest import RESTAdapter
-
-    class FalseyTransport:
-        def __bool__(self):
-            return False
-
-        def close(self):
-            pass
-
-    transport = FalseyTransport()
-
-    with patch("recap.adapter.rest.HTTPTransport") as transport_type:
-        adapter = RESTAdapter("https://recap.test", _transport=transport)
-
-    transport_type.assert_not_called()
-    assert adapter._transport is transport
-
-
 def test_request_preserves_transport_request_id():
     from recap.adapter.rest import RESTAdapter
 
@@ -158,27 +142,6 @@ def test_update_namespace_preserves_explicit_empty_etag():
     )
 
     assert transport.request.call_args.kwargs["headers"]["If-Match"] == ""
-
-
-def test_namespace_methods_dispatch_through_registry_execute(monkeypatch):
-    from recap.adapter.rest import RESTAdapter
-    from recap.commands.models import CreateNamespace, UpdateNamespace
-
-    adapter = RESTAdapter("https://recap.test", _transport=_transport())
-    returned = object()
-    commands = []
-
-    def execute(command, context, **kwargs):
-        commands.append(command)
-        return returned
-
-    monkeypatch.setattr(adapter, "execute", execute)
-    context = SimpleNamespace(idempotency_key="idem-1")
-
-    assert adapter.create_namespace("beamline", {"owner": "amx"}, context) is returned
-    assert adapter.update_namespace(uuid4(), 2, {"owner": "fmx"}, None, context) is returned
-    assert isinstance(commands[0], CreateNamespace)
-    assert isinstance(commands[1], UpdateNamespace)
 
 
 def test_execute_hydrates_copy_resource():
@@ -324,6 +287,90 @@ def test_list_child_namespaces_uses_get_without_write_headers():
         headers={},
     )
     assert result == ["amx", "fmx"]
+
+
+def test_read_operations_send_wire_payloads_and_no_idempotency_headers():
+    from recap.adapter.rest import RESTAdapter
+    from recap.schemas.resource import ResourceSchema
+
+    permissions = {
+        "identities": [],
+        "snapshot_generation": None,
+        "effective_scopes": ["namespace:read"],
+        "matched_namespace_paths": ["beamline/amx"],
+        "groups": [],
+        "roles": [],
+    }
+    transport = _transport(
+        {"entity": "resource", "projection": "full", "items": []}
+    )
+    transport.request.side_effect = [
+        HTTPResult({"entity": "resource", "projection": "full", "items": []}, None, None),
+        HTTPResult(4, None, None),
+        HTTPResult(permissions, None, None),
+        HTTPResult(_namespace_body(), '"1"', None),
+    ]
+    adapter = RESTAdapter("https://recap.test", _transport=transport)
+
+    assert adapter.query(
+        ResourceSchema, QuerySpec(filters={"name": "sample"}), namespace_path="beamline/amx"
+    ) == []
+    assert adapter.count(ResourceSchema, QuerySpec(), namespace_path="beamline/amx") == 4
+    assert isinstance(adapter.permissions("beamline/amx"), ActorPermissions)
+    adapter.get_namespace_context("beamline/amx station")
+
+    query_call, count_call, permissions_call, context_call = transport.request.call_args_list
+    assert query_call.kwargs["json"]["namespace_path"] == "beamline/amx"
+    assert query_call.kwargs["json"]["entity"] == "resource"
+    assert query_call.kwargs["json"]["projection"] == "full"
+    assert query_call.kwargs["json"]["spec"]["filters"] == {"name": "sample"}
+    assert count_call.kwargs["json"]["namespace_path"] == "beamline/amx"
+    assert count_call.kwargs["json"]["entity"] == "resource"
+    assert count_call.kwargs["json"]["spec"]["filters"] == {}
+    assert permissions_call.kwargs["params"] == {"namespace_path": "beamline/amx"}
+    assert context_call.args[:2] == (
+        "GET",
+        "https://recap.test/api/v1/namespaces/context/beamline/amx%20station",
+    )
+    assert context_call.kwargs["json"] is None
+    for call in transport.request.call_args_list:
+        assert "Idempotency-Key" not in call.kwargs["headers"]
+
+
+@pytest.mark.parametrize(
+    ("operation", "body", "message"),
+    [
+        ("query", None, "Malformed REST query response"),
+        ("count", True, "Malformed REST count response"),
+        ("permissions", {}, "Malformed REST permissions response"),
+        ("context", {}, "Malformed REST namespace context response"),
+    ],
+)
+def test_read_operations_reject_malformed_success_bodies(operation, body, message):
+    from recap.adapter.rest import RESTAdapter
+    from recap.schemas.resource import ResourceSchema
+
+    adapter = RESTAdapter("https://recap.test", _transport=_transport(body))
+    with pytest.raises(RecapProtocolError, match=message):
+        if operation == "query":
+            adapter.query(ResourceSchema, QuerySpec(), namespace_path="beamline/amx")
+        elif operation == "count":
+            adapter.count(ResourceSchema, QuerySpec(), namespace_path="beamline/amx")
+        elif operation == "permissions":
+            adapter.permissions("beamline/amx")
+        else:
+            adapter.get_namespace_context("beamline/amx")
+
+
+def test_query_rejects_schema_mismatch_in_success_body():
+    from recap.adapter.rest import RESTAdapter
+    from recap.schemas.resource import ResourceSchema
+
+    transport = _transport({"entity": "process_run", "projection": "full", "items": []})
+    adapter = RESTAdapter("https://recap.test", _transport=transport)
+
+    with pytest.raises(RecapProtocolError, match="schema does not match"):
+        adapter.query(ResourceSchema, QuerySpec(), namespace_path="beamline/amx")
 
 
 def test_close_delegates_to_transport():

@@ -46,6 +46,7 @@ class HTTPTransport:
         *,
         json: Any = None,
         headers: dict[str, str] | None = None,
+        params: dict[str, str] | None = None,
     ) -> HTTPResult:
         request_headers = {
             key: value
@@ -54,9 +55,10 @@ class HTTPTransport:
         }
         request_headers.update(self._headers())
         try:
-            response = self._client.request(
-                method, url, json=json, headers=request_headers
-            )
+            request_kwargs = {"json": json, "headers": request_headers}
+            if params is not None:
+                request_kwargs["params"] = params
+            response = self._client.request(method, url, **request_kwargs)
         except httpx.RequestError as exc:
             raise RecapConnectionError(
                 url=self.redact(url), message=self.redact(str(exc))

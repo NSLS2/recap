@@ -14,6 +14,7 @@ from recap.dsl.drafts import (
     ResourceTemplateDraft,
 )
 from recap.lifecycle import LifecycleStatus
+from recap.schemas.process import ProcessRunCopyOptions
 from recap.schemas.resource import ResourceCopyOptions
 from recap.server.audit import AuditSink
 
@@ -91,6 +92,12 @@ class UpdateProcessRun(CommandModel):
     status: str | None = None
     assignments: dict[str, UUID] | None = None
     steps: dict[str, dict[str, dict[str, object]]] | None = None
+
+
+class CopyProcessRun(CommandModel):
+    source_process_run_id: UUID
+    destination_namespace_path: str
+    options: ProcessRunCopyOptions = ProcessRunCopyOptions()
 
 
 class SetLifecycleStatus(CommandModel):

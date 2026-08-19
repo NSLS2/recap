@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class ReadBackend(Protocol):
-    """Read-only backend contract. Implemented by LocalBackend and GraphQLAdapter."""
+    """Read-only backend contract implemented by local and REST backends."""
 
     def query(
         self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str

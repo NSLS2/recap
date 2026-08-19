@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class ServerConfig(BaseSettings):
-    """Configuration for the recap GraphQL server.
+    """Configuration for the recap REST server.
 
     Configuration precedence is direct kwargs > environment variables > YAML
     values. Environment variables use the ``RECAP_`` prefix.

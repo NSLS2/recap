@@ -36,10 +36,11 @@ from recap.db.namespace import Namespace, NamespaceRepository
 from recap.db.process import (
     ProcessRun,
     ProcessTemplate,
+    ResourceAssignment,
     ResourceSlot,
 )
 from recap.db.resource import Property, Resource, ResourceTemplate, ResourceType
-from recap.db.step import StepTemplate, StepTemplateResourceSlotBinding
+from recap.db.step import Step, StepTemplate, StepTemplateResourceSlotBinding
 from recap.dsl.drafts import (
     ProcessRunDraft,
     ProcessTemplateDraft,
@@ -49,7 +50,11 @@ from recap.exceptions import AuthorizationDenied
 from recap.lifecycle import LifecycleStatus, validate_transition
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.namespace import NamespaceSchema
-from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
+from recap.schemas.process import (
+    ProcessRunCopyOptions,
+    ProcessRunSchema,
+    ProcessTemplateSchema,
+)
 from recap.schemas.resource import (
     ResourceCopyOptions,
     ResourceSchema,
@@ -568,7 +573,7 @@ class CommandService:
                 if value is None:
                     raise CommandValidationError(
                         f"Property {attribute_name!r} not found in group {group_name!r}"
-                    )
+                )
                 if isinstance(raw_value, dict):
                     value.set_value(deepcopy(raw_value.get("value")))
                     if "unit" in raw_value:
@@ -1124,7 +1129,7 @@ class CommandService:
                 session.add(run)
                 session.flush()
                 self._apply_run_assignments(session, run, draft.assignments, context)
-                self._apply_run_steps(run, draft.steps)
+                self._apply_run_steps(session, run, draft.steps)
                 session.flush()
                 session.expire_all()
                 run = session.get(ProcessRun, run.id)
@@ -1217,7 +1222,8 @@ class CommandService:
                 if assignments is not None:
                     self._apply_run_assignments(session, run, assignments, context)
                 if steps is not None:
-                    self._apply_run_steps(run, steps)
+                    self._apply_run_steps(session, run, steps)
+                    session.flush()
                 values: dict[str, Any] = {}
                 if description is not None:
                     values["description"] = description
@@ -1264,6 +1270,120 @@ class CommandService:
                 str(process_run_id),
                 error,
                 resource_type="process_run",
+            )
+            raise
+
+    def copy_process_run(  # noqa: C901
+        self,
+        context: CommandContext,
+        *,
+        source_process_run_id: UUID,
+        destination_namespace_path: str,
+        options: ProcessRunCopyOptions | None = None,
+    ):
+        options = options or ProcessRunCopyOptions()
+        destination_path = canonicalize_namespace_path(destination_namespace_path)
+        fingerprint = command_fingerprint(
+            method="POST",
+            route_template="/api/v1/process-runs/{source_process_run_id}/copies",
+            namespace_path=destination_path,
+            source_id=source_process_run_id,
+            body=options,
+        )
+        try:
+            with self._session_factory.begin() as session:
+                source = session.get(ProcessRun, source_process_run_id)
+                if source is None:
+                    raise CommandNotFoundError("Process run not found")
+                destination = session.scalar(
+                    select(Namespace).where(Namespace.path == destination_path)
+                )
+                if destination is None:
+                    raise CommandNotFoundError("Destination namespace not found")
+                self._authorize_scope(
+                    context, source.namespace.path, Scope.PROCESS_RUN_READ, "copy_process_run"
+                )
+                self._authorize_scope(
+                    context, destination.path, Scope.PROCESS_RUN_WRITE, "copy_process_run"
+                )
+                decision = self._claim(
+                    IdempotencyRepository(session), context, fingerprint, lambda _id: None
+                )
+                if decision is not None and decision.replayed:
+                    return ProcessRunSchema.model_validate(decision.response)
+
+                changes = options.changes
+                copied = ProcessRun(
+                    id=uuid4(),
+                    namespace=destination,
+                    name=source.name,
+                    description=(
+                        changes.description
+                        if changes.description is not None
+                        else source.description
+                    ),
+                    template=source.template,
+                    copied_from=source,
+                    status=LifecycleStatus.MUTABLE,
+                    revision=1,
+                )
+                session.add(copied)
+                session.flush()
+                for slot, assignment in source.assignments.items():
+                    copied.resources[slot] = assignment.resource
+                def copy_step(source_step, target_parent=None):
+                    target_step = copied.steps.get(source_step.name)
+                    if target_step is None:
+                        target_step = Step(
+                            template=source_step.template,
+                            name=source_step.name,
+                            parent=target_parent,
+                            process_run=copied,
+                            state=source_step.state,
+                        )
+                        copied.steps[target_step.name] = target_step
+                    elif target_parent is not None:
+                        target_step.parent = target_parent
+                    for child in source_step.children:
+                        copy_step(child, target_step)
+                    for name, source_parameter in source_step.parameters.items():
+                        target_parameter = target_step.parameters.get(name)
+                        if target_parameter is None:
+                            continue
+                        for value_name, source_value in source_parameter._values.items():
+                            target_value = target_parameter._values.get(value_name)
+                            if target_value is not None:
+                                target_value.value_json = deepcopy(source_value.value_json)
+                                target_value.unit = source_value.unit
+                                target_value.metadata_json = deepcopy(source_value.metadata_json)
+                    for assignment in source_step.assignments.values():
+                        target_step.assignments[assignment.resource_slot_id] = ResourceAssignment(
+                            process_run=copied,
+                            resource_slot=assignment.resource_slot,
+                            step=target_step,
+                            resource=assignment.resource,
+                        )
+                    return target_step
+
+                for source_step in source.steps.values():
+                    copy_step(source_step)
+                if changes.assignments is not None:
+                    self._apply_run_assignments(session, copied, changes.assignments, context)
+                if changes.steps is not None:
+                    self._apply_run_steps(session, copied, changes.steps)
+                session.flush()
+                result = self._process_run_schema(copied)
+                if decision is not None:
+                    IdempotencyRepository(session).complete(
+                        decision, target_id=str(copied.id), response=result.model_dump(mode="json")
+                    )
+                self._emit_success(
+                    session, context, "copy_process_run", str(copied.id), resource_type="process_run"
+                )
+                return result
+        except Exception as error:
+            self._emit_failure(
+                context, "copy_process_run", str(source_process_run_id), error, resource_type="process_run"
             )
             raise
 
@@ -1328,7 +1448,7 @@ class CommandService:
                 run.resources[slot] = resource
 
     @staticmethod
-    def _apply_run_steps(run, steps):
+    def _apply_run_steps(session, run, steps):
         for step_name, step_data in steps.items():
             step = run.steps.get(step_name)
             if step is None:
@@ -1365,6 +1485,7 @@ class CommandService:
                             value.unit = raw["unit"]
                     else:
                         value.set_value(raw)
+                    session.add(value)
 
     @staticmethod
     def _materialize_resource_template(session, namespace, draft):
