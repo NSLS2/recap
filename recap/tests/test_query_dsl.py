@@ -18,15 +18,11 @@ from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.process import (
-    ProcessRunRef,
     ProcessRunSchema,
-    ProcessTemplateRef,
     ProcessTemplateSchema,
 )
 from recap.schemas.resource import (
-    ResourceRef,
     ResourceSchema,
-    ResourceTemplateRef,
     ResourceTemplateSchema,
 )
 from recap.utils.database import get_or_create
@@ -126,10 +122,6 @@ def seed_process_run(
 
     db_session.commit()
     return run.namespace, run
-
-
-def test_legacy_grouping_query_family_is_removed(db_session):
-    assert not hasattr(make_query(db_session), "campaigns")
 
 
 def test_process_run_pagination_and_filtering(db_session):
@@ -276,6 +268,49 @@ def test_query_accepts_eager_load(factory, schema, read_client):
     assert query._spec.load_mode == "eager"
 
 
+def test_query_entity_and_load_parity(read_client):
+    query = read_client.query_maker()
+
+    resources = query.resources().filter(name="plate-1").all()
+    templates = query.resource_templates().filter(name="Parity plate").all()
+    runs = query.process_runs().filter(name="run-high").all()
+    process_templates = query.process_templates().filter(name="Parity workflow").all()
+
+    assert [type(item) for item in resources] == [ResourceSchema]
+    assert [type(item) for item in templates] == [ResourceTemplateSchema]
+    assert [type(item) for item in runs] == [ProcessRunSchema]
+    assert [type(item) for item in process_templates] == [ProcessTemplateSchema]
+    assert [item.name for item in resources] == ["plate-1"]
+    assert [item.name for item in templates] == ["Parity plate"]
+    assert [item.name for item in runs] == ["run-high"]
+    assert [item.name for item in process_templates] == ["Parity workflow"]
+
+    assert query.resources().filter(name="plate-1").count() == 1
+    assert query.resources().filter(name="missing").first() is None
+
+
+def test_query_relations_and_identity_are_local_remote_parity(read_client):
+    query = read_client.query_maker()
+    partial = query.resources().filter(name="plate-1").first()
+    assert partial is not None
+    assert partial.is_loaded("properties") is False
+
+    direct_template = query.resource_templates().filter(name="Parity plate").first()
+    loaded = query.resources().filter(name="plate-1").include_template().first()
+    eager = query.resources(load="eager").filter(name="plate-1").first()
+    run = query.process_runs().filter(name="run-high").include_resources().first()
+    repeated = query.resources().filter(name="plate-1").first()
+
+    assert loaded is partial
+    assert loaded.template is direct_template
+    assert run is not None
+    assert next(iter(run.assigned_resources.values())).resource is loaded
+    assert repeated is loaded
+
+    assert eager is loaded
+    assert eager.is_loaded("properties") is True
+
+
 def test_deprecated_query_names_warn_and_normalize_immediately(db_session):
     with pytest.warns(DeprecationWarning) as warnings_seen:
         query = make_query(db_session).resources(shape="schema", load="full")
@@ -329,15 +364,6 @@ def test_query_rejects_unknown_shape_and_load(kwargs, message, db_session):
     "factory",
     ["process_runs", "process_templates", "resources", "resource_templates"],
 )
-def test_query_include_rejects_ref_shape(factory, db_session):
-    with pytest.raises(ValueError, match="shape='full'"):
-        getattr(make_query(db_session), factory)(shape="ref").include("relation")
-
-
-@pytest.mark.parametrize(
-    "factory",
-    ["process_runs", "process_templates", "resources", "resource_templates"],
-)
 def test_query_include_rejects_eager_load(factory, db_session):
     with pytest.raises(ValueError, match="load='eager'"):
         getattr(make_query(db_session), factory)(load="eager").include("relation")
@@ -377,10 +403,9 @@ def test_process_run_query_can_return_ref(db_session):
 
     ref = make_query(db_session).process_runs(shape="ref").filter(id=run.id).first()
 
-    assert isinstance(ref, ProcessRunRef)
-    assert isinstance(ref.template, ProcessTemplateRef)
-    # Ref objects should not expose steps
-    assert not hasattr(ref, "steps")
+    assert isinstance(ref, ProcessRunSchema)
+    assert isinstance(ref.template, ProcessTemplateSchema)
+    assert ref.is_loaded("steps") is False
 
 
 def test_process_template_query_can_return_ref(db_session):
@@ -393,8 +418,8 @@ def test_process_template_query_can_return_ref(db_session):
         .first()
     )
 
-    assert isinstance(ref, ProcessTemplateRef)
-    assert not hasattr(ref, "step_templates")
+    assert isinstance(ref, ProcessTemplateSchema)
+    assert ref.step_templates == {}
 
 
 def test_process_template_includes(db_session):
@@ -412,6 +437,18 @@ def test_process_template_includes(db_session):
     assert tmpl is not None
     assert "Step-pt-include" in tmpl.step_templates
     assert any(rs.name.startswith("slot-pt-include") for rs in tmpl.resource_slots)
+    assert tmpl.is_loaded("step_templates") is True
+    assert tmpl.is_loaded("resource_slots") is True
+
+
+def test_process_template_query_marks_unrequested_relations_unloaded(db_session):
+    _, run = seed_process_run(db_session, name="pt-flags", with_resource=True)
+
+    tmpl = make_query(db_session).process_templates().filter(id=run.template.id).first()
+
+    assert tmpl is not None
+    assert tmpl.is_loaded("step_templates") is False
+    assert tmpl.is_loaded("resource_slots") is False
 
 
 def test_resource_queries_can_return_refs(db_session):
@@ -432,9 +469,9 @@ def test_resource_queries_can_return_refs(db_session):
         .first()
     )
 
-    assert isinstance(res_ref, ResourceRef)
-    assert isinstance(res_ref.template, ResourceTemplateRef)
-    assert isinstance(tmpl_ref, ResourceTemplateRef)
+    assert isinstance(res_ref, ResourceSchema)
+    assert isinstance(res_ref.template, ResourceTemplateSchema)
+    assert isinstance(tmpl_ref, ResourceTemplateSchema)
 
 
 def test_resource_template_includes(db_session):
@@ -468,6 +505,23 @@ def test_resource_template_includes(db_session):
         for at in tmpl.attribute_group_templates[0].attribute_templates
     )
     assert any(t.name == "rt-inc" for t in tmpl.types)
+    assert tmpl.is_loaded("children") is True
+    assert tmpl.is_loaded("attribute_group_templates") is True
+    assert tmpl.is_loaded("types") is True
+    assert tmpl.is_loaded("parent") is False
+
+
+def test_eager_template_query_marks_all_relations_loaded(db_session):
+    _, run = seed_process_run(db_session, name="pt-eager", with_resource=True)
+    process_template = (
+        make_query(db_session)
+        .process_templates(load="eager")
+        .filter(id=run.template.id)
+        .first()
+    )
+    assert process_template is not None
+    assert process_template.is_loaded("step_templates") is True
+    assert process_template.is_loaded("resource_slots") is True
 
 
 def test_resource_property_filtering_and_parent_scope(db_session):

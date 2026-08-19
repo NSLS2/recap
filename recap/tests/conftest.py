@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
+from functools import partial
 from pathlib import Path
 from shutil import copy2
 from uuid import uuid4
@@ -11,12 +12,34 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from recap.adapter.http_transport import HTTPTransport
+from recap.adapter.rest import RESTAdapter
+from recap.client.backend import ClientBackend
 from recap.client.base_client import RecapClient
 from recap.db.base import Base
 from recap.db.namespace import Namespace
 from recap.server.app import create_app
 from recap.utils.general import Direction
 from recap.utils.migrations import apply_migrations as upgrade_database
+
+
+def _loopback_request(app_client: TestClient, request: httpx2.Request) -> httpx2.Response:
+    response = app_client.request(
+        request.method,
+        str(request.url),
+        headers=dict(request.headers),
+        content=request.content,
+    )
+    return httpx2.Response(
+        response.status_code,
+        headers=response.headers,
+        content=response.content,
+        request=request,
+    )
+
+
+def _loopback_transport(app_client: TestClient) -> httpx2.MockTransport:
+    return httpx2.MockTransport(partial(_loopback_request, app_client))
 
 
 @contextmanager
@@ -64,6 +87,28 @@ def api_client(tmp_path):
 @pytest.fixture
 def auth_header():
     return {"Authorization": "Apikey secret"}
+
+
+@pytest.fixture
+def rest_loopback_client(tmp_path):
+    """Build remote client over FastAPI TestClient transport, not HTTP mocks."""
+    db_path = tmp_path / "rest-loopback.db"
+    api_key = "loopback-secret"
+    with TestClient(create_app(db_path, api_key=api_key)) as app_client:
+        transport = HTTPTransport(api_key)
+        transport._client.close()
+        transport._client = httpx2.Client(transport=_loopback_transport(app_client))
+        rest = RESTAdapter("http://recap.test", _transport=transport)
+        backend = ClientBackend(
+            reader=rest,
+            writer=rest,
+            namespaces=rest,
+            namespace_writer=rest,
+            context_resolver=rest,
+            permissions=rest,
+        )
+        with RecapClient._from_backends(backend) as client:
+            yield client
 
 
 @pytest.fixture
@@ -117,20 +162,19 @@ def copy_database() -> Callable[[Path, Path], Path]:
     return copy
 
 
-def _seed_graphql_namespace(client: RecapClient) -> str:
+def _seed_query_namespace(client: RecapClient) -> str:
     return client.create_namespace("test/namespace").path
 
 
-def _seed_graphql_resource_tree(client: RecapClient) -> str:
+def _seed_query_resource_tree(client: RecapClient) -> str:
     namespace_path = client.create_namespace("test/resource-tree").path
     with client.build_resource_template(name="Parent", type_names=["container"]) as builder:
         builder.close_child()
     with client.build_resource_template(name="Child", type_names=["sample"]) as builder:
         builder.close_child()
     with client.build_resource("root", "Parent") as builder:
-        builder.add_child("nested", "Child")
+        nested = builder.add_child("nested", "Child").resource
     root = client.get_resource("root", "Parent")
-    nested = client.create_resource("nested", "Child", parent=root)
     client.build_resource(resource_id=nested.id).activate()
     client.build_resource(resource_id=root.id).activate()
     return namespace_path
@@ -184,7 +228,7 @@ def _seed_parity_graph(client: RecapClient) -> str:
         ("run-low", second_plate, 5),
     ):
         with client.build_process_run(
-            name, "GraphQL parity run", "Parity workflow", "1.0"
+            name, "REST parity run", "Parity workflow", "1.0"
         ) as run:
             run.assign_resource("plate", plate)
             parameters = run.get_params("Collect")
@@ -201,8 +245,8 @@ def integration_seed_path(blank_database_path, tmp_path_factory) -> Path:
     copy2(blank_database_path, path)
     with RecapClient.from_sqlite(path) as client:
         client.create_namespace("test")
-        _seed_graphql_namespace(client)
-        _seed_graphql_resource_tree(client)
+        _seed_query_namespace(client)
+        _seed_query_resource_tree(client)
         _seed_parity_graph(client)
     return path
 
@@ -213,17 +257,17 @@ def integration_database_path(integration_seed_path, copy_database, tmp_path) ->
 
 
 @pytest.fixture
-def graphql_namespace_path() -> str:
+def query_namespace_path() -> str:
     return "test/namespace"
 
 
 @pytest.fixture
-def graphql_resource_tree_path() -> str:
+def query_resource_tree_path() -> str:
     return "test/resource-tree"
 
 
 @pytest.fixture
-def read_client_pair(integration_seed_path, copy_database, tmp_path, monkeypatch):
+def read_client_pair(integration_seed_path, copy_database, tmp_path):
     """Create isolated local and remote clients over a composite seed copy."""
     db_path = copy_database(integration_seed_path, tmp_path / "parity.db")
     with ExitStack() as stack:
@@ -233,13 +277,22 @@ def read_client_pair(integration_seed_path, copy_database, tmp_path, monkeypatch
         api_key = "parity-secret"
         app_client = stack.enter_context(TestClient(create_app(db_path, api_key=api_key)))
 
-        def request(_client, method, url, **kwargs):
-            assert url.endswith("/graphql")
-            return app_client.request(method, "/graphql", **kwargs)
-
-        monkeypatch.setattr(httpx2.Client, "request", request)
+        transport = HTTPTransport(api_key)
+        transport._client.close()
+        transport._client = httpx2.Client(transport=_loopback_transport(app_client))
+        rest = RESTAdapter("http://recap.test", _transport=transport)
         remote = stack.enter_context(
-            RecapClient.from_url("http://recap.test", api_key=api_key)
+            RecapClient._from_backends(
+                ClientBackend(
+                    reader=rest,
+                    writer=rest,
+                    namespaces=rest,
+                    namespace_writer=rest,
+                    context_resolver=rest,
+                    permissions=rest,
+                ),
+                namespace="test/mx-parity",
+            )
         )
         yield local, remote
 

@@ -75,7 +75,8 @@ def _to_datetime(value):
 
 def _to_array(v):
     items = _parse_array_like(v)  # your existing helper
-    return MutableList(items)
+    # Avoid handing ORM mutable wrappers across conversion boundaries.
+    return list(items)
 
 
 CONVERTERS = {

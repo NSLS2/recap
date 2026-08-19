@@ -18,10 +18,11 @@ import pytest
 from sqlalchemy.orm import sessionmaker
 
 from recap.adapter.local import LocalBackend
+from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
-from recap.db.step import StepTemplate
+from recap.db.step import StepTemplate, StepTemplateResourceSlotBinding
 from recap.dsl.query import QueryDSL
 from recap.schemas.namespace import NamespaceContext
 from recap.utils.general import Direction
@@ -37,15 +38,20 @@ def make_query(db_session, namespace):
     )
 
 
-def _seed_run_with_resource_chain(db_session, *, name, depth):
+def _seed_run_with_resource_chain(db_session, *, name, depth, namespace=None):
     """Create a process run with one assigned resource that roots a linear
     child chain of ``depth`` nodes. Returns the ProcessRun."""
     with db_session.no_autoflush:
-        namespace = Namespace(path=f"perf/{name}", metadata_json={})
+        namespace = namespace or Namespace(path=f"perf/{name}", metadata_json={})
         template = ProcessTemplate(
             namespace=namespace, name=f"Template-{name}", version="1.0"
         )
         step_template = StepTemplate(name=f"Step-{name}", process_template=template)
+        parameter_group = AttributeGroupTemplate(name=f"Parameters-{name}")
+        parameter_group.attribute_templates.append(
+            AttributeTemplate(name="dwell", value_type="int", default_value="1")
+        )
+        step_template.attribute_group_templates.append(parameter_group)
         run = ProcessRun(
             name=f"Run-{name}",
             description=f"Process run for {name}",
@@ -53,7 +59,9 @@ def _seed_run_with_resource_chain(db_session, *, name, depth):
             namespace=namespace,
         )
 
-    db_session.add_all([namespace, template, step_template])
+    db_session.add_all([template, step_template])
+    if namespace not in db_session:
+        db_session.add(namespace)
     db_session.flush()
     resource_type = ResourceType(name=f"resource-type-{uuid4().hex}")
     resource_template = ResourceTemplate(
@@ -65,6 +73,10 @@ def _seed_run_with_resource_chain(db_session, *, name, depth):
         process_template=template,
         resource_type=resource_type,
         direction=Direction.input,
+    )
+    db_session.add(slot)
+    step_template.bindings["input"] = StepTemplateResourceSlotBinding(
+        role="input", resource_slot=slot
     )
 
     root = Resource(namespace=namespace, name=f"{name}-0", template=resource_template)
@@ -163,3 +175,38 @@ def test_process_run_include_resources_hydrates_full_chain(db_session):
             node = node.children[f"chain-{level + 1}"]
         else:
             assert node.children == {}
+
+
+@pytest.mark.performance
+def test_process_run_resource_hydration_is_breadth_independent(db_session):
+    """Run, step, parameter, and assignment breadth must not create N+1 SQL."""
+    namespace = Namespace(path=f"perf/breadth-{uuid4().hex}", metadata_json={})
+    db_session.add(namespace)
+    db_session.flush()
+    runs = [
+        _seed_run_with_resource_chain(db_session, name=f"breadth-{index}", depth=3, namespace=namespace)
+        for index in range(4)
+    ]
+    target = db_session.get_bind()
+    query = make_query(db_session, namespace).process_runs(
+        on_unloaded="raise"
+    ).include(["steps", "steps.parameters", "resources"])
+
+    with count_statements(target) as baseline_counter:
+        make_query(db_session, namespace).process_runs().filter(id=runs[0].id).include(
+            ["steps", "steps.parameters", "resources"]
+        ).all()
+    with count_statements(target) as counter:
+        loaded = query.all()
+
+    assert {run.id for run in loaded} == {run.id for run in runs}
+    assert counter["n"] <= 55, (
+        f"breadth-dependent hydration exceeded fixed batch bound: "
+        f"one run={baseline_counter['n']}, four runs={counter['n']} SQL statements"
+    )
+    for run in loaded:
+        assert run.steps
+        assert next(iter(run.steps.values())).parameters
+        assignment = next(iter(run.assigned_resources.values()))
+        assert assignment.resource.children
+        assert assignment.resource.children[next(iter(assignment.resource.children))]

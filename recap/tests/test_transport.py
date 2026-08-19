@@ -19,12 +19,18 @@ from recap.dsl.query import (
     PropertyFilter,
     QuerySpec,
 )
+from recap.exceptions import RecapProtocolError
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
+    AttributeTemplateSchema,
 )
 from recap.schemas.common import StepStatus
 from recap.schemas.process import ProcessRunSchema
-from recap.schemas.resource import ResourceSchema
+from recap.schemas.resource import (
+    PropertySchema,
+    ResourceSchema,
+    ResourceTemplateSchema,
+)
 from recap.tests.transport_factories import (
     STAMP,
     attribute_group,
@@ -89,6 +95,18 @@ def test_query_request_serializes_complete_supported_query_spec():
     assert request.spec["load_mode"] == "eager"
     assert "full" not in request.spec.values()
     assert "include_mutable" not in request.spec
+
+
+def test_hydrate_result_rejects_contradictory_legacy_schema_metadata():
+    result = QueryResult(
+        entity="process_run",
+        projection="full",
+        schema_name="ResourceSchema",
+        items=[],
+    )
+
+    with pytest.raises(RecapProtocolError, match="does not match"):
+        hydrate_result(ResourceSchema, result)
 
 
 def test_query_request_serializes_include_mutable_when_true():
@@ -218,6 +236,118 @@ def test_resource_round_trip_preserves_full_graph_and_transport_state():
         "properties": False,
     }
     assert hydrated.children["child"]._on_unloaded == "silent"
+
+
+def test_serialize_model_truncates_repeated_cyclic_template_edges():
+    parent = ResourceTemplateSchema.model_construct(
+        id=uuid4(),
+        namespace_id=uuid4(),
+        create_date=STAMP,
+        modified_date=STAMP,
+        status="ACTIVE",
+        revision=1,
+        name="Parent",
+        slug="parent",
+        version="1.0",
+        labels=[],
+        types=[],
+        children={},
+        attribute_group_templates=[],
+    )
+    child = ResourceTemplateSchema.model_construct(
+        id=uuid4(),
+        namespace_id=parent.namespace_id,
+        create_date=STAMP,
+        modified_date=STAMP,
+        status="ACTIVE",
+        revision=1,
+        name="Child",
+        slug="child",
+        version="1.0",
+        labels=[],
+        types=[],
+        children={},
+        attribute_group_templates=[],
+    )
+    parent.children = {"child": child}
+    child.parent = parent
+
+    payload = serialize_model(parent)
+
+    assert payload["children"]["child"]["parent"]["id"] == str(parent.id)
+    assert "children" not in payload["children"]["child"]["parent"]
+
+
+def test_resource_round_trip_preserves_hydrated_array_override_and_metadata():
+    group = AttributeGroupTemplateSchema(
+        **{
+            **{
+                "id": uuid4(),
+                "create_date": STAMP,
+                "modified_date": STAMP,
+                "namespace_id": uuid4(),
+                "status": "ACTIVE",
+                "revision": 1,
+                "labels": [],
+            },
+            "name": "Measurements",
+            "slug": "measurements",
+            "attribute_templates": [
+                AttributeTemplateSchema(
+                    **{
+                        "id": uuid4(),
+                        "create_date": STAMP,
+                        "modified_date": STAMP,
+                        "namespace_id": uuid4(),
+                        "status": "ACTIVE",
+                        "revision": 1,
+                        "labels": [],
+                        "name": "Samples",
+                        "slug": "samples",
+                        "value_type": "array",
+                        "unit": "uL",
+                        "default_value": [1],
+                        "metadata_json": {"source": "detector"},
+                    }
+                )
+            ],
+        }
+    )
+    resource = minimal_resource()
+    resource.template.attribute_group_templates = [group]
+    resource.properties = {"Measurements": PropertySchema(
+        id=uuid4(),
+        create_date=STAMP,
+        modified_date=STAMP,
+        template=group,
+        values={
+            "Samples": {
+                "value": [1, 1],
+                "unit": "mL",
+                "metadata_json": {"sample": "override"},
+            }
+        },
+    )}
+    resource.set_loaded_relations({"children": True, "properties": True})
+
+    payload = serialize_model(resource)
+    [hydrated] = hydrate_result(
+        ResourceSchema,
+        QueryResult(schema_name="ResourceSchema", items=[payload]),
+    )
+
+    value = hydrated.properties.measurements.values.samples
+    assert value.value == [1, 1]
+    assert value.unit == "mL"
+    assert value.metadata_json == {"sample": "override"}
+
+    [rehydrated] = hydrate_result(
+        ResourceSchema,
+        QueryResult(
+            schema_name="ResourceSchema", items=[serialize_model(hydrated)]
+        ),
+    )
+    assert rehydrated.properties.measurements.values.samples.value == [1, 1]
 
 
 def test_minimal_resource_round_trip_does_not_trigger_unloaded_guard():

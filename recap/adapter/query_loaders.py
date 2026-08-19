@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+from recap.adapter.schema_registry import SCHEMA_REGISTRY
 from recap.db.attribute import AttributeGroupTemplate, AttributeValue
 from recap.db.process import (
     ProcessRun,
@@ -29,6 +30,22 @@ def _dedupe_preserve_order(values: list[str]) -> list[str]:
 
 
 PRELOAD_STATEMENTS = {
+    (ProcessRunSchema, "template"): [
+        chain_load(ProcessRun.template, ProcessTemplate.resource_slots),
+        chain_load(
+            ProcessRun.template,
+            ProcessTemplate.step_templates,
+            StepTemplate.attribute_group_templates,
+            AttributeGroupTemplate.attribute_templates,
+        ),
+        chain_load(
+            ProcessRun.template,
+            ProcessTemplate.step_templates,
+            StepTemplate.bindings,
+            StepTemplateResourceSlotBinding.resource_slot,
+            ResourceSlot.resource_type,
+        ),
+    ],
     (ProcessRunSchema, "steps"): [
         chain_load(ProcessRun.steps, Step.children),
         chain_load(ProcessRun.steps, Step.parameters),
@@ -160,7 +177,10 @@ EXTRA_FULL_LOADERS = {
 
 
 def preload_options(schema: type[BaseModel], name: str) -> list:
-    return PRELOAD_STATEMENTS[(schema, name)]
+    try:
+        return PRELOAD_STATEMENTS[(schema, name)]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported preload '{name}' for {schema.__name__}") from exc
 
 
 def resolve_loader_options(
@@ -176,5 +196,12 @@ def resolve_loader_options(
         opts.extend(EXTRA_FULL_LOADERS.get(schema, []))
 
     for preload in _dedupe_preserve_order(requested_preloads):
+        canonical = {
+            ResourceRef: ResourceSchema,
+            ProcessRunRef: ProcessRunSchema,
+        }.get(schema, schema)
+        registration = SCHEMA_REGISTRY.by_model(canonical)
+        if preload not in registration.loader_capabilities:
+            raise ValueError(f"Unsupported preload '{preload}' for {schema.__name__}")
         opts.extend(preload_options(schema, preload))
     return opts

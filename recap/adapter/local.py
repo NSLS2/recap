@@ -11,10 +11,12 @@ from sqlalchemy import (
     Integer,
     Select,
     String,
+    bindparam,
     cast,
     exists,
     func,
     select,
+    text,
 )
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import and_, or_
@@ -33,6 +35,7 @@ from recap.adapter.query_loaders import (
     resolve_loader_options,
 )
 from recap.adapter.resource_construct import ResourceSchemaHydrator
+from recap.adapter.schema_registry import SCHEMA_REGISTRY
 from recap.authorization.query import AuthorizedQuery
 from recap.commands.models import (
     CommandContext,
@@ -63,7 +66,7 @@ from recap.exceptions import (
     RecapPermissionDeniedError,
 )
 from recap.lifecycle import LifecycleStatus
-from recap.schemas.namespace import NamespaceContext, NamespaceSchema
+from recap.schemas.namespace import NamespaceContext, NamespaceRef, NamespaceSchema
 from recap.schemas.process import (
     ProcessRunRef,
     ProcessRunSchema,
@@ -87,6 +90,7 @@ from recap.utils.namespace import namespace_ancestors
 
 SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
     NamespaceSchema: Namespace,
+    NamespaceRef: Namespace,
     ResourceTemplateSchema: ResourceTemplate,
     ResourceTemplateRef: ResourceTemplate,
     ProcessRunRef: ProcessRun,
@@ -96,6 +100,30 @@ SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
     ResourceRef: Resource,
     ProcessTemplateSchema: ProcessTemplate,
 }
+
+
+def _set_template_load_flags(
+    value: BaseModel, schema: type[BaseModel], spec: QuerySpec
+) -> BaseModel:
+    relation_fields = {
+        ProcessTemplateSchema: {"step_templates", "resource_slots"},
+        ResourceTemplateSchema: {
+            "types",
+            "parent",
+            "children",
+            "attribute_group_templates",
+        },
+    }.get(schema)
+    if relation_fields is None:
+        return value
+    preloads = set(spec.preloads)
+    return value.set_loaded_relations(
+        {
+            relation: spec.load_mode == "eager" or relation in preloads
+            for relation in relation_fields
+        },
+        on_unloaded=spec.on_unloaded or "warn",
+    )
 
 
 def _coerce_field_value(field_name: str, column, value):
@@ -172,6 +200,33 @@ def _apply_field_expressions(model, stmt, spec, joined_paths):
     return stmt
 
 
+_SPECIAL_FILTERS = {"labels__contains", "types__names_in"}
+
+
+def _validate_query_paths(schema: type[BaseModel], spec: QuerySpec) -> None:
+    try:
+        model = SCHEMA_REGISTRY.by_model(schema).orm_model
+    except KeyError:
+        model = SCHEMA_MODEL_MAPPING[schema]
+    stmt = select(model)
+    joined_paths: dict[tuple[str, ...], type] = {}
+
+    for field in spec.filters:
+        if field in _SPECIAL_FILTERS:
+            continue
+        resolve_path(model, stmt, tuple(field.split("__")), joined_paths)
+
+    for predicate in spec.predicates:
+        if not isinstance(predicate, FieldPredicate):
+            raise ValueError("Query predicates must use Field(...)")
+        resolve_path(model, stmt, tuple(predicate.field.split(".")), joined_paths)
+
+    for ordering in spec.orderings:
+        if not isinstance(ordering, FieldOrdering):
+            raise ValueError("Query orderings must use Field(...)")
+        resolve_path(model, stmt, tuple(ordering.field.split(".")), joined_paths)
+
+
 class LocalBackend(
     ReadBackend,
     WriteBackend,
@@ -185,6 +240,9 @@ class LocalBackend(
     def close(self):
         """Retained for client lifecycle compatibility; sessions are short-lived."""
         return None
+
+    def validate_query(self, schema: type[SchemaT], spec: QuerySpec) -> None:
+        _validate_query_paths(schema, spec)
 
     def execute(
         self,
@@ -669,17 +727,32 @@ class LocalBackend(
         """
         if not root_ids:
             return []
-        res_tbl = Resource.__table__
-        base_cte = (
-            select(res_tbl.c.id).where(res_tbl.c.id.in_(root_ids)).cte(recursive=True)
-        )
-        children = select(res_tbl.c.id).where(res_tbl.c.parent_id == base_cte.c.id)
-        subtree_cte = base_cte.union_all(children)
-
-        stmt = (
-            select(Resource)
-            .join(subtree_cte, Resource.id == subtree_cte.c.id)
-            .options(*self._resource_subtree_loaders())
+        subtree_ids = [
+            value if isinstance(value, UUID) else UUID(str(value))
+            for value in session.execute(
+            text(
+                """
+                WITH RECURSIVE resource_subtree(id) AS (
+                    SELECT id FROM resource WHERE id IN :root_ids
+                    UNION ALL
+                    SELECT child.id
+                    FROM resource AS child
+                    JOIN resource_subtree AS parent ON child.parent_id = parent.id
+                )
+                SELECT id FROM resource_subtree
+                """
+            ).bindparams(
+                bindparam(
+                    "root_ids",
+                    expanding=True,
+                    type_=Resource.__table__.c.id.type,
+                )
+            ),
+            {"root_ids": root_ids},
+            ).scalars().all()
+        ]
+        stmt = select(Resource).where(Resource.id.in_(subtree_ids)).options(
+            *self._resource_subtree_loaders()
         )
         return list(session.scalars(stmt).unique())
 
@@ -819,7 +892,10 @@ class LocalBackend(
         namespace_path: str,
         authorization: AuthorizedQuery | None = None,
     ) -> Select:
-        model = SCHEMA_MODEL_MAPPING[schema]
+        try:
+            model = SCHEMA_REGISTRY.by_model(schema).orm_model
+        except KeyError:
+            model = SCHEMA_MODEL_MAPPING[schema]
         stmt = select(model)
         if authorization is None:
             stmt = self._apply_namespace_visibility(model, stmt, spec, namespace_path)
@@ -963,6 +1039,7 @@ class LocalBackend(
                     include_steps=include_steps,
                     include_step_parameters=include_step_parameters,
                     include_resources=include_resources,
+                    include_template=spec.load_mode == "eager" or "template" in spec.preloads,
                     full=spec.load_mode == "eager",
                     on_unloaded=spec.on_unloaded or "warn",
                     children_map=children_map,
@@ -1002,8 +1079,32 @@ class LocalBackend(
                     full=spec.load_mode == "eager",
                     on_unloaded=spec.on_unloaded or "warn",
                 )
+            if spec.load_mode != "eager" and not spec.preloads:
+                relation_fields = {
+                    ProcessTemplateSchema: {"step_templates", "resource_slots"},
+                    ResourceTemplateSchema: {
+                        "types",
+                        "parent",
+                        "children",
+                        "attribute_group_templates",
+                    },
+                }.get(schema, set())
+                return [
+                    _set_template_load_flags(
+                        schema.model_construct(
+                            **{
+                                name: value
+                                for name, value in obj.__dict__.items()
+                                if name in schema.model_fields and name not in relation_fields
+                            }
+                        ),
+                        schema,
+                        spec,
+                    )
+                    for obj in list(session.scalars(stmt).unique())
+                ]
             return [
-                schema.model_validate(obj)
+                _set_template_load_flags(schema.model_validate(obj), schema, spec)
                 for obj in list(session.scalars(stmt).unique())
             ]
 

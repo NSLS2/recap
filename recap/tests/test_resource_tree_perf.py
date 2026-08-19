@@ -107,3 +107,32 @@ def test_load_eager_resource_tree_bounded_count(client):
     # template/attribute-group, not per resource). The pre-fix path issued one
     # lazy load per node; this asserts a depth-independent constant instead.
     assert counter["n"] <= 18, f"expected bounded count, got {counter['n']}"
+
+
+@pytest.mark.performance
+def test_load_eager_resource_tree_is_multi_root_bounded(client):
+    """Several roots must share one recursive subtree load."""
+    _make_template(client, name="TreePerfRoots")
+    roots = []
+    for index in range(4):
+        root = client.create_resource(
+            f"root-{index}", "TreePerfRoots", on_existing="create"
+        )
+        parent = root
+        for level in range(1, 3):
+            parent = client.create_resource(
+                f"root-{index}-{level}",
+                "TreePerfRoots",
+                parent=parent,
+                on_existing="create",
+            )
+        client.build_resource(resource_id=root.id).activate()
+        roots.append(root)
+
+    with count_statements(client) as counter:
+        trees = client.query_maker().resources(load="eager").all()
+
+    by_name = {tree.name: tree for tree in trees}
+    assert {tree.name for tree in trees} == {root.name for root in roots}
+    assert all(_walk_depth(by_name[root.name]) == 3 for root in roots)
+    assert counter["n"] <= 19, f"multi-root hydration exceeded batch bound: {counter['n']}"

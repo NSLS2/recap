@@ -1,72 +1,23 @@
-from functools import lru_cache
 from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel
 
-from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
+from recap.adapter.entity_hydration import EntityHydrationContext
+from recap.adapter.resource_construct import ResourceSchemaHydrator
 from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
-from recap.db.resource import Property, Resource, ResourceTemplate, ResourceType
+from recap.db.resource import Resource
 from recap.db.step import Parameter, StepTemplate
-from recap.schemas.attribute import (
-    AttributeGroupTemplateSchema,
-    AttributeTemplateSchema,
-    AttributeValueSchema,
-)
-from recap.schemas.common import SIMPLE_FIELD
 from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
-from recap.schemas.resource import (
-    PropertySchema,
-    ResourceAssignmentSchema,
-    ResourceRef,
-    ResourceSchema,
-    ResourceSlotSchema,
-    ResourceTemplateRef,
-    ResourceTemplateSchema,
-    ResourceTypeSchema,
-)
+from recap.schemas.resource import ResourceAssignmentSchema, ResourceSchema
 from recap.schemas.step import ParameterSchema, StepSchema, StepTemplateSchema
-from recap.utils.dsl import build_param_values_model
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
-@lru_cache(maxsize=128)
-def _simple_field_mapping(
-    schema: type[BaseModel],
-) -> tuple[tuple[str, str | None], ...]:
-    return tuple(
-        (field_name, field_info.alias)
-        for field_name, field_info in schema.model_fields.items()
-        if SIMPLE_FIELD in field_info.metadata
-    )
-
-
 class ProcessRunSchemaHydrator:
-    def __init__(self):
-        self._process_template_cache: dict = {}
-        self._step_template_cache: dict = {}
-        self._resource_slot_cache: dict = {}
-        self._resource_type_cache: dict = {}
-        self._resource_template_cache: dict = {}
-        self._resource_template_ref_cache: dict = {}
-        self._resource_ref_cache: dict = {}
-        self._resource_cache: dict = {}
-        self._attr_group_cache: dict = {}
-        self._attr_template_cache: dict = {}
-
-    def _simple_field_values(
-        self,
-        schema: type[SchemaT],
-        source: Any,
-    ) -> dict[str, Any]:
-        values: dict[str, Any] = {}
-        for field_name, alias in _simple_field_mapping(schema):
-            if hasattr(source, field_name):
-                values[field_name] = getattr(source, field_name)
-                continue
-            if alias and hasattr(source, alias):
-                values[field_name] = getattr(source, alias)
-        return values
+    def __init__(self, context: EntityHydrationContext | None = None):
+        self._context = context or EntityHydrationContext()
+        self._resource_hydrator = ResourceSchemaHydrator(self._context)
 
     def _construct_with_simple_fields(
         self,
@@ -74,292 +25,73 @@ class ProcessRunSchemaHydrator:
         source: Any,
         **overrides: Any,
     ) -> SchemaT:
-        values = self._simple_field_values(schema, source)
-        values.update(overrides)
-        return schema.model_construct(**values)
-
-    def _build_param_values_model_from_template(
-        self,
-        template: AttributeGroupTemplateSchema,
-    ) -> type[BaseModel]:
-        tmpl_key = tuple(
-            (
-                at.name,
-                at.slug,
-                at.value_type,
-                at.metadata,
-                at.unit,
-            )
-            for at in template.attribute_templates
-        )
-        return build_param_values_model(template.slug or template.name, tmpl_key)
-
-    def _construct_attribute_template(
-        self,
-        attr_template: AttributeTemplate,
-    ) -> AttributeTemplateSchema:
-        cached = self._attr_template_cache.get(attr_template.id)
-        if cached is not None:
-            return cached
-        schema = AttributeTemplateSchema.model_validate(
-            attr_template, from_attributes=True
-        )
-        self._attr_template_cache[attr_template.id] = schema
-        return schema
-
-    def _construct_attribute_group_template(
-        self,
-        group_template: AttributeGroupTemplate,
-    ) -> AttributeGroupTemplateSchema:
-        cached = self._attr_group_cache.get(group_template.id)
-        if cached is not None:
-            return cached
-        schema = self._construct_with_simple_fields(
-            AttributeGroupTemplateSchema,
-            group_template,
-            attribute_templates=[],
-        )
-        self._attr_group_cache[group_template.id] = schema
-        schema.attribute_templates = [
-            self._construct_attribute_template(at)
-            for at in group_template.attribute_templates
-        ]
-        return schema
-
-    def _construct_resource_type(
-        self,
-        resource_type: ResourceType,
-    ) -> ResourceTypeSchema:
-        cached = self._resource_type_cache.get(resource_type.id)
-        if cached is not None:
-            return cached
-        schema = ResourceTypeSchema.model_validate(resource_type, from_attributes=True)
-        self._resource_type_cache[resource_type.id] = schema
-        return schema
-
-    def _construct_resource_template_ref(
-        self,
-        template: ResourceTemplate,
-    ) -> ResourceTemplateRef:
-        cached = self._resource_template_ref_cache.get(template.id)
-        if cached is not None:
-            return cached
-        schema = self._construct_with_simple_fields(
-            ResourceTemplateRef,
-            template,
-            parent=None,
-            types=[],
-        )
-        self._resource_template_ref_cache[template.id] = schema
-        schema.types = [self._construct_resource_type(rt) for rt in template.types]
-        if template.parent is not None:
-            schema.parent = self._construct_resource_template_ref(template.parent)
-        return schema
-
-    def _construct_resource_slot(
-        self,
-        slot: ResourceSlot,
-    ) -> ResourceSlotSchema:
-        cached = self._resource_slot_cache.get(slot.id)
-        if cached is not None:
-            return cached
-        schema = ResourceSlotSchema.model_validate(slot, from_attributes=True)
-        self._resource_slot_cache[slot.id] = schema
-        return schema
+        return self._context.construct_with_simple_fields(schema, source, **overrides)
 
     def _construct_step_template(
         self,
         template: StepTemplate,
+        *,
+        on_unloaded: Literal["silent", "warn", "raise"] = "warn",
     ) -> StepTemplateSchema:
-        cached = self._step_template_cache.get(template.id)
-        if cached is not None:
-            return cached
-        schema = self._construct_with_simple_fields(
-            StepTemplateSchema,
-            template,
-            attribute_group_templates=[],
-            resource_slots={},
+        return self._context.construct_step_template(
+            template, include_relations=True, on_unloaded=on_unloaded
         )
-        self._step_template_cache[template.id] = schema
-        schema.attribute_group_templates = [
-            self._construct_attribute_group_template(ag)
-            for ag in template.attribute_group_templates
-        ]
-        schema.resource_slots = {
-            binding.role: self._construct_resource_slot(binding.resource_slot)
-            for binding in template.bindings.values()
-        }
-        return schema
 
     def _construct_step_template_minimal(
         self,
         template: StepTemplate,
+        *,
+        on_unloaded: Literal["silent", "warn", "raise"] = "warn",
     ) -> StepTemplateSchema:
-        return self._construct_with_simple_fields(
-            StepTemplateSchema,
-            template,
-            attribute_group_templates=[],
-            resource_slots={},
+        return self._context.construct_step_template(
+            template, include_relations=False, on_unloaded=on_unloaded
         )
 
     def _construct_process_template(
         self,
         template: ProcessTemplate,
+        *,
+        on_unloaded: Literal["silent", "warn", "raise"] = "warn",
     ) -> ProcessTemplateSchema:
-        cached = self._process_template_cache.get(template.id)
-        if cached is not None:
-            return cached
-        schema = self._construct_with_simple_fields(
-            ProcessTemplateSchema,
-            template,
-            step_templates={},
-            resource_slots=[],
+        return self._context.construct_process_template(
+            template, include_relations=True, on_unloaded=on_unloaded
         )
-        self._process_template_cache[template.id] = schema
-        schema.resource_slots = [
-            self._construct_resource_slot(slot) for slot in template.resource_slots
-        ]
-        schema.step_templates = {
-            st.name: self._construct_step_template(st)
-            for st in template.step_templates.values()
-        }
-        return schema
 
     def _construct_process_template_minimal(
         self,
         template: ProcessTemplate,
+        *,
+        on_unloaded: Literal["silent", "warn", "raise"] = "warn",
     ) -> ProcessTemplateSchema:
-        return self._construct_with_simple_fields(
-            ProcessTemplateSchema,
-            template,
-            step_templates={},
-            resource_slots=[],
-        )
-
-    def _construct_resource_template(
-        self,
-        template: ResourceTemplate,
-    ) -> ResourceTemplateSchema:
-        cached = self._resource_template_cache.get(template.id)
-        if cached is not None:
-            return cached
-        schema = self._construct_with_simple_fields(
-            ResourceTemplateSchema,
-            template,
-            types=[],
-            parent=None,
-            children={},
-            attribute_group_templates=[],
-        )
-        self._resource_template_cache[template.id] = schema
-        schema.types = [self._construct_resource_type(rt) for rt in template.types]
-        if template.parent is not None:
-            schema.parent = self._construct_resource_template_ref(template.parent)
-        schema.children = {
-            child.name: self._construct_resource_template(child)
-            for child in template.children.values()
-        }
-        schema.attribute_group_templates = [
-            self._construct_attribute_group_template(ag)
-            for ag in template.attribute_group_templates
-        ]
-        return schema
-
-    def _construct_resource_ref(
-        self,
-        resource: Resource,
-    ) -> ResourceRef:
-        cached = self._resource_ref_cache.get(resource.id)
-        if cached is not None:
-            return cached
-        schema = self._construct_with_simple_fields(
-            ResourceRef,
-            resource,
-            template=self._construct_resource_template_ref(resource.template),
-        )
-        self._resource_ref_cache[resource.id] = schema
-        return schema
-
-    def _construct_property_schema(
-        self,
-        prop: Property,
-    ) -> PropertySchema:
-        group_template = self._construct_attribute_group_template(prop.template)
-        values_model = self._build_param_values_model_from_template(group_template)
-        value_fields = {
-            at.slug: AttributeValueSchema.model_construct(
-                value=prop._values[at.name].value if at.name in prop._values else None,
-                unit=prop._values[at.name].unit if at.name in prop._values else at.unit,
-            )
-            for at in group_template.attribute_templates
-        }
-        return self._construct_with_simple_fields(
-            PropertySchema,
-            prop,
-            template=group_template,
-            values=values_model.model_construct(**value_fields),
+        return self._context.construct_process_template(
+            template, include_relations=False, on_unloaded=on_unloaded
         )
 
     def _construct_parameter_schema(
         self,
         param: Parameter,
     ) -> ParameterSchema:
-        group_template = self._construct_attribute_group_template(param.template)
-        values_model = self._build_param_values_model_from_template(group_template)
-        value_fields = {
-            at.slug: AttributeValueSchema.model_construct(
-                value=param._values[at.name].value
-                if at.name in param._values
-                else None,
-                unit=param._values[at.name].unit
-                if at.name in param._values
-                else at.unit,
-            )
-            for at in group_template.attribute_templates
-        }
-        return self._construct_with_simple_fields(
-            ParameterSchema,
-            param,
-            template=group_template,
-            values=values_model.model_construct(**value_fields),
-        )
+        return self._context.construct_parameter_schema(param)
+
+    def _construct_resource_slot(self, slot: ResourceSlot):
+        return self._context.construct_resource_slot(slot)
 
     def _construct_resource_schema(
         self,
         resource: Resource,
         children_map: dict[Any, list[Resource]] | None = None,
+        *,
+        on_unloaded: Literal["silent", "warn", "raise"] = "warn",
     ) -> ResourceSchema:
-        cached = self._resource_cache.get(resource.id)
-        if cached is not None:
-            return cached
-        schema = self._construct_with_simple_fields(
-            ResourceSchema,
+        return self._resource_hydrator._construct_resource_schema(
             resource,
-            template=self._construct_resource_template(resource.template),
-            parent=None,
-            children={},
-            properties={},
+            include_template=True,
+            include_properties=True,
+            include_children=True,
+            full=True,
+            on_unloaded=on_unloaded,
+            children_map=children_map,
         )
-        self._resource_cache[resource.id] = schema
-        if resource.parent is not None:
-            schema.parent = self._construct_resource_ref(resource.parent)
-        # When a pre-assembled ``children_map`` is supplied, build children
-        # from it instead of walking ``resource.children`` -- the latter
-        # re-triggers a lazy load per node (the N+1 this path fixes).
-        child_resources = (
-            children_map.get(resource.id, [])
-            if children_map is not None
-            else resource.children.values()
-        )
-        schema.children = {
-            child.name: self._construct_resource_schema(child, children_map)
-            for child in child_resources
-        }
-        schema.properties = {
-            prop.template.name: self._construct_property_schema(prop)
-            for prop in resource.properties.values()
-        }
-        return schema
 
     def _post_build_dynamic_models(  # noqa
         self,
@@ -402,14 +134,17 @@ class ProcessRunSchemaHydrator:
         include_steps: bool,
         include_step_parameters: bool,
         include_resources: bool,
+        include_template: bool,
         full: bool,
         on_unloaded: Literal["silent", "warn", "raise"],
         children_map: dict[Any, list[Resource]] | None = None,
     ) -> ProcessRunSchema:
         template = (
-            self._construct_process_template(run.template)
-            if full
-            else self._construct_process_template_minimal(run.template)
+            self._construct_process_template(run.template, on_unloaded=on_unloaded)
+            if full or include_template
+            else self._construct_process_template_minimal(
+                run.template, on_unloaded=on_unloaded
+            )
         )
 
         steps: dict[str, StepSchema] = {}
@@ -419,9 +154,13 @@ class ProcessRunSchemaHydrator:
                 StepSchema,
                 step,
                 template=(
-                    self._construct_step_template(step.template)
+                    self._construct_step_template(
+                        step.template, on_unloaded=on_unloaded
+                    )
                     if full
-                    else self._construct_step_template_minimal(step.template)
+                    else self._construct_step_template_minimal(
+                        step.template, on_unloaded=on_unloaded
+                    )
                 ),
                 parameters=(
                     {
@@ -434,7 +173,9 @@ class ProcessRunSchemaHydrator:
                 children=[],
                 resources=(
                     {
-                        role: self._construct_resource_schema(res, children_map)
+                        role: self._construct_resource_schema(
+                            res, children_map, on_unloaded=on_unloaded
+                        )
                         for role, res in step.resources.items()
                     }
                     if include_resources
@@ -460,7 +201,9 @@ class ProcessRunSchemaHydrator:
                     ResourceAssignmentSchema.model_construct(
                         slot=self._construct_resource_slot(assigned.slot),
                         resource=self._construct_resource_schema(
-                            assigned.resource, children_map
+                            assigned.resource,
+                            children_map,
+                            on_unloaded=on_unloaded,
                         ),
                         step_id=None,
                     )
@@ -475,6 +218,7 @@ class ProcessRunSchemaHydrator:
         )
         process_run.set_loaded_relations(
             {
+                "template": full or include_template,
                 "steps": include_steps,
                 "assigned_resources": include_resources,
             },
@@ -493,6 +237,7 @@ class ProcessRunSchemaHydrator:
         include_steps: bool,
         include_step_parameters: bool,
         include_resources: bool,
+        include_template: bool,
         full: bool,
         on_unloaded: Literal["silent", "warn", "raise"],
         children_map: dict[Any, list[Resource]] | None = None,
@@ -503,6 +248,7 @@ class ProcessRunSchemaHydrator:
                 include_steps=include_steps,
                 include_step_parameters=include_step_parameters,
                 include_resources=include_resources,
+                include_template=include_template,
                 full=full,
                 on_unloaded=on_unloaded,
                 children_map=children_map,
