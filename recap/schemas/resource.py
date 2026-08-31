@@ -305,9 +305,10 @@ class ResourceCopyChanges(BaseModel):
 
 
 class ResourceCopyOptions(BaseModel):
-    """Name and property overrides for a resource copy operation."""
+    """Name, parent, and property overrides for a resource copy operation."""
 
     name: str | None = None
+    parent_id: UUID | None = None
     changes: ResourceCopyChanges = Field(default_factory=ResourceCopyChanges)
 
 

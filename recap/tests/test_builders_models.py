@@ -169,3 +169,50 @@ def test_resource_builder_add_child_persists_and_links(client, recwarn):
     assert "AC-Leaf" in parent.children
     assert parent.children["AC-Leaf"].id == child.id
     assert not [warning for warning in recwarn if warning.category.__name__ == "SAWarning"]
+
+
+def test_resource_builder_add_child_copies_uuid_source(client):
+    with client.build_resource_template(name="AC-UUID-Group", type_names=["group"]):
+        pass
+    with client.build_resource_template(name="AC-UUID-Leaf", type_names=["leaf"]):
+        pass
+
+    group = client.create_resource("AC-UUID-Group-1", "AC-UUID-Group")
+    source = client.create_resource("AC-UUID-Source", "AC-UUID-Leaf")
+
+    with client.build_resource(resource_id=group.id) as builder:
+        child_builder = builder.add_child(source.id)
+        copied_id = child_builder.resource.id
+
+        assert child_builder.parent is builder
+        assert copied_id != source.id
+        assert child_builder.resource.copied_from_id == source.id
+        assert child_builder.resource.template.id == source.template.id
+
+    with client.build_resource(resource_id=group.id) as builder:
+        refreshed = builder.get_model(update=True)
+    assert refreshed.children[source.name].id == copied_id
+    assert refreshed.children[source.name].copied_from_id == source.id
+
+
+def test_resource_builder_add_child_copies_resource_schema_source(client):
+    with client.build_resource_template(name="AC-Schema-Group", type_names=["group"]):
+        pass
+    with client.build_resource_template(name="AC-Schema-Leaf", type_names=["leaf"]):
+        pass
+
+    group = client.create_resource("AC-Schema-Group-1", "AC-Schema-Group")
+    source = client.create_resource("AC-Schema-Source", "AC-Schema-Leaf")
+
+    with client.build_resource(resource_id=group.id) as builder:
+        child_builder = builder.add_child(source)
+
+        assert child_builder.parent is builder
+        assert child_builder.resource.id != source.id
+        assert child_builder.resource.copied_from_id == source.id
+        assert child_builder.resource.template.id == source.template.id
+
+    with client.build_resource(resource_id=group.id) as builder:
+        refreshed = builder.get_model(update=True)
+    assert refreshed.children[source.name].id == child_builder.resource.id
+    assert refreshed.children[source.name].copied_from_id == source.id

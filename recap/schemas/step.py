@@ -388,8 +388,11 @@ class StepSchema(LoadAwareMixin, CommonFields):
             param_values[field_name] = param
 
         if param_fields:
+            template = self.__dict__.get("template")
+            if template is None:
+                return self
             model = build_step_parameters_model(
-                self.template.name,
+                template.name,
                 tuple(param_fields),
             )
             self.parameters = model.model_validate(param_values)

@@ -182,6 +182,15 @@ class ProcessRunSchemaHydrator:
                     else {}
                 ),
             )
+            step_schema.set_loaded_relations(
+                {
+                    "template": full,
+                    "parameters": include_step_parameters,
+                    "children": include_steps,
+                    "resources": include_resources,
+                },
+                on_unloaded=on_unloaded,
+            )
             steps[step.name] = step_schema
 
         if include_steps:

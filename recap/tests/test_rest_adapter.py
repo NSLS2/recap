@@ -167,7 +167,12 @@ def test_execute_hydrates_copy_resource():
     transport.request.assert_called_once_with(
         "POST",
         f"https://recap.test/api/v1/resources/{source}/copies",
-        json={"destination_namespace": "beamline/amx", "name": None, "changes": {"properties": {}}},
+        json={
+            "destination_namespace": "beamline/amx",
+            "name": None,
+            "parent_id": None,
+            "changes": {"properties": {}},
+        },
         headers={"Idempotency-Key": "idem-copy"},
     )
 

@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
+from recap.commands.errors import CommandNotFoundError
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.namespace import Namespace
 from recap.db.resource import Resource, ResourceTemplate
@@ -145,6 +146,74 @@ def test_copy_resource_deep_copies_full_graph_with_new_ids(client):
         for resource in clone["resources"]
         if resource.id != copied.id
     )
+
+
+def test_copy_resource_attaches_full_clone_as_parent_child(client):
+    setup = _create_source(client)
+    with client.connection_state.sessionmaker.begin() as session:
+        namespace = session.get(Namespace, setup["source_namespace_id"])
+        template = session.get(Resource, setup["source_id"]).template
+        group = Resource(name="group", template=template, namespace=namespace)
+        session.add(group)
+        session.flush()
+        group_id = group.id
+
+    copied = client.namespace(setup["source_namespace_path"]).copy_resource(
+        setup["source_id"], ResourceCopyOptions(parent_id=group_id)
+    )
+
+    clone = _load_tree(client, copied.id)["root"]
+    assert clone.parent_id == group_id
+    assert clone.copied_from_id == setup["source_id"]
+    assert {item.name for item in _load_tree(client, copied.id)["resources"]} == {
+        "root",
+        "child",
+        "grandchild",
+    }
+
+
+def test_copy_resource_rejects_missing_parent(client):
+    setup = _create_source(client)
+
+    with pytest.raises(CommandNotFoundError, match="Parent resource not found"):
+        client.namespace(setup["source_namespace_path"]).copy_resource(
+            setup["source_id"], ResourceCopyOptions(parent_id=uuid4())
+        )
+
+
+def test_copy_resource_rejects_parent_from_another_namespace(client):
+    setup = _create_source(client)
+    with client.connection_state.sessionmaker.begin() as session:
+        foreign_namespace = session.get(Namespace, setup["sibling_namespace_id"])
+        template = session.get(Resource, setup["source_id"]).template
+        foreign_parent = Resource(
+            name="foreign-group", template=template, namespace=foreign_namespace
+        )
+        session.add(foreign_parent)
+        session.flush()
+        foreign_parent_id = foreign_parent.id
+
+    with pytest.raises(ValueError, match="Parent resource belongs to another namespace"):
+        client.namespace(setup["source_namespace_path"]).copy_resource(
+            setup["source_id"], ResourceCopyOptions(parent_id=foreign_parent_id)
+        )
+
+
+def test_copy_resource_rejects_duplicate_child_name(client):
+    setup = _create_source(client)
+    with client.connection_state.sessionmaker.begin() as session:
+        namespace = session.get(Namespace, setup["source_namespace_id"])
+        template = session.get(Resource, setup["source_id"]).template
+        group = Resource(name="group", template=template, namespace=namespace)
+        Resource(name="root", template=template, namespace=namespace, parent=group)
+        session.add(group)
+        session.flush()
+        group_id = group.id
+
+    with pytest.raises(ValueError, match="already has a child named"):
+        client.namespace(setup["source_namespace_path"]).copy_resource(
+            setup["source_id"], ResourceCopyOptions(parent_id=group_id)
+        )
 
 
 def test_copy_resource_isolates_mutable_values_and_applies_root_overrides(client):

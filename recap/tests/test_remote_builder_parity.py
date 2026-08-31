@@ -114,6 +114,33 @@ def test_resource_copy_has_local_remote_parity(command_client):
     assert copied.template.id == source.template.id
 
 
+def test_resource_copy_as_child_has_local_remote_parity(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(name="Group", type_names=["group"]):
+        pass
+    with scoped.build_resource_template(name="Sample", type_names=["sample"]):
+        pass
+    group = scoped.create_resource("group-1", "Group")
+    source = scoped.create_resource("sample-1", "Sample")
+    source_child = scoped.create_resource("sample-child", "Sample", parent=source)
+
+    with scoped.build_resource(resource_id=group.id) as builder:
+        copied = builder.add_child(source)
+
+    assert copied.resource.id != source.id
+    assert copied.resource.copied_from_id == source.id
+    copied_descendant = copied.resource.children["sample-child"]
+    assert copied_descendant.id != source_child.id
+    assert all(
+        descendant.copied_from_id is None
+        for descendant in copied.resource.children.values()
+    )
+    with scoped.build_resource(resource_id=group.id) as loader:
+        refreshed = loader.get_model(update=True)
+    assert refreshed.children["sample-1"].id == copied.resource.id
+    assert refreshed.children["sample-1"].copied_from_id == source.id
+
+
 def test_resource_lifecycle_has_local_remote_parity(command_client):
     scoped = seed_command_namespace(command_client)
     with scoped.build_resource_template(name="Sample", type_names=["sample"]):

@@ -1,5 +1,5 @@
 from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -295,6 +295,7 @@ def test_copy_resource_codec_preserves_default_options_on_wire():
     assert encoded.body == {
         "destination_namespace": "beamline/amx",
         "name": None,
+        "parent_id": None,
         "changes": {"properties": {}},
     }
 
@@ -312,9 +313,30 @@ def test_copy_resource_codec_preserves_explicit_options_on_wire():
     assert encoded.body == {
         "destination_namespace": "beamline/amx",
         "name": "copy",
+        "parent_id": None,
         "changes": {"properties": {"group": {"value": 2}}},
     }
     assert encoded.path == f"/api/v1/resources/{resource_id}/copies"
+
+
+def test_copy_resource_codec_preserves_parent_id_on_wire():
+    source_id = UUID("00000000-0000-0000-0000-000000000001")
+    parent_id = UUID("00000000-0000-0000-0000-000000000002")
+    command = CopyResource(
+        source_resource_id=source_id,
+        destination_namespace_path="beamline/amx",
+        options=ResourceCopyOptions(parent_id=parent_id),
+    )
+
+    encoded = COMMAND_REGISTRY.by_command(command).encode_request(command)
+
+    assert encoded.body["parent_id"] == str(parent_id)
+    decoded = COMMAND_REGISTRY.by_command(command).decode_command(
+        {"source_resource_id": str(source_id)},
+        {},
+        CopyResourceRequest.model_validate(encoded.body),
+    )
+    assert decoded.options.parent_id == parent_id
 
 
 def test_resource_codecs_preserve_wire_shapes_and_revision_headers():

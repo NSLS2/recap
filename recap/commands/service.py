@@ -473,6 +473,23 @@ class CommandService:
                     raise CommandValidationError(
                         "Destination namespace must be the source namespace or its descendant"
                     )
+                parent = session.get(Resource, options.parent_id) if options.parent_id else None
+                if options.parent_id is not None and parent is None:
+                    raise CommandNotFoundError("Parent resource not found")
+                if parent is not None and parent.namespace_id != destination.id:
+                    raise CommandValidationError(
+                        "Parent resource belongs to another namespace"
+                    )
+                copy_name = options.name if options.name is not None else source.name
+                if parent is not None and session.scalar(
+                    select(Resource.id).where(
+                        Resource.parent_id == parent.id,
+                        Resource.name == copy_name,
+                    )
+                ) is not None:
+                    raise CommandValidationError(
+                        f"Parent resource already has a child named {copy_name!r}"
+                    )
                 idempotency = IdempotencyRepository(session)
                 decision = self._claim(
                     idempotency, context, fingerprint, lambda _id: None
@@ -513,7 +530,8 @@ class CommandService:
                         clone(child, result)
                     return result
 
-                copied = clone(source)
+                with session.no_autoflush:
+                    copied = clone(source, parent=parent)
                 copied.copied_from = source
                 if options.name is not None:
                     copied.name = options.name

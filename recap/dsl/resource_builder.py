@@ -1,7 +1,7 @@
 import json
 import warnings
 from datetime import UTC, datetime
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, overload
 from uuid import UUID
 
 from pydantic import BaseModel, Field, create_model
@@ -414,11 +414,53 @@ class ResourceBuilder:
         self._draft = detached_model(model)
         self._submitted = False
 
+    @overload
     def add_child(
         self, name: str, template_name: str, template_version: str = "1.0"
+    ) -> "ResourceBuilder": ...
+
+    @overload
+    def add_child(self, source: UUID | ResourceSchema) -> "ResourceBuilder": ...
+
+    def add_child(
+        self,
+        name_or_source: str | UUID | ResourceSchema,
+        template_name: str | None = None,
+        template_version: str = "1.0",
     ) -> "ResourceBuilder":
+        if isinstance(name_or_source, (UUID, ResourceSchema)):
+            if template_name is not None or template_version != "1.0":
+                raise TypeError("Copied child accepts exactly one source argument")
+            source_id = (
+                name_or_source.id
+                if isinstance(name_or_source, ResourceSchema)
+                else name_or_source
+            )
+            copied = self.backend._execute(
+                CopyResource(
+                    source_resource_id=source_id,
+                    destination_namespace_path=self.namespace_context.path,
+                    options=ResourceCopyOptions(parent_id=self.resource.id),
+                ),
+                self._command_context,
+            )
+            if not isinstance(copied, ResourceSchema):
+                raise RuntimeError("Copy resource command did not return a resource")
+            child_builder = ResourceBuilder(
+                name=None,
+                template_name=None,
+                backend=self.backend,
+                namespace_context=self.namespace_context,
+                command_context=self._command_context,
+                parent=self,
+                resource_id=copied.id,
+            )
+            self._draft.children[copied.name] = child_builder.resource
+            return child_builder
+        if template_name is None:
+            raise TypeError("New child requires name and template_name")
         child_builder = ResourceBuilder(
-            name=name,
+            name=name_or_source,
             template_name=template_name,
             template_version=template_version,
             namespace_context=self.namespace_context,
@@ -427,7 +469,7 @@ class ResourceBuilder:
             parent=self,
         )
         child_builder.save()
-        self._draft.children[name] = child_builder.resource
+        self._draft.children[name_or_source] = child_builder.resource
         return child_builder
 
     def close_child(self):

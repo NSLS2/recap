@@ -169,6 +169,37 @@ def test_copy_resource_uses_destination_namespace_in_body(api_client, idempotenc
     assert copied.json()["name"] == "plate-copy"
 
 
+def test_copy_resource_accepts_parent_id(api_client, idempotency_headers):
+    api_client.put(
+        "/api/v1/namespaces/beamline",
+        headers=idempotency_headers("copy-child-namespace"),
+        json={"metadata": {}},
+    )
+    template = api_client.post(
+        "/api/v1/resource-templates/beamline",
+        headers=idempotency_headers("copy-child-template"),
+        json={"name": "plate", "version": "1", "type_names": []},
+    )
+    parent = api_client.post(
+        "/api/v1/resources/beamline",
+        headers=idempotency_headers("copy-child-parent"),
+        json={"name": "group", "template_id": template.json()["id"]},
+    )
+    source = api_client.post(
+        "/api/v1/resources/beamline",
+        headers=idempotency_headers("copy-child-source"),
+        json={"name": "source", "template_id": template.json()["id"]},
+    )
+    copied = api_client.post(
+        f"/api/v1/resources/{source.json()['id']}/copies",
+        headers=idempotency_headers("copy-as-child"),
+        json={"destination_namespace": "beamline", "parent_id": parent.json()["id"]},
+    )
+
+    assert copied.status_code == 201
+    assert copied.json()["copied_from_id"] == source.json()["id"]
+
+
 def test_copy_resource_requires_destination_namespace(api_client, idempotency_headers):
     response = api_client.post(
         "/api/v1/resources/00000000-0000-0000-0000-000000000000/copies",

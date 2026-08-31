@@ -43,3 +43,19 @@ explicit. A `with` block also saves the root template when it exits.
 Use template children for required hierarchy such as experiment, sample, and
 vial. Use runtime children when count or structure is discovered during an
 experiment and should not change the template for every future instance.
+
+## Copy an existing resource into a group
+
+Use runtime children to group an existing resource without changing its source
+or its template. Pass either its `ResourceSchema` or UUID to `add_child`:
+
+```python
+with namespace.build_resource(resource_id=group.id) as group_builder:
+    copied_sample = group_builder.add_child(sample)
+```
+
+The operation copies the selected resource and its full descendant subtree
+beneath the group. The copied root has `copied_from_id == sample.id`;
+descendants do not individually record lineage. A copied root keeps its source
+name, and a group cannot receive another child with the same name. Rename the
+source before grouping when that name already exists under the group.

@@ -61,7 +61,10 @@ def count_statements(target):
              client.namespace("existing")
         assert counter["n"] == 0
     """
-    engine = getattr(target, "engine", target)
+    connection_state = getattr(target, "connection_state", None)
+    engine = getattr(connection_state, "engine", None)
+    if engine is None:
+        engine = getattr(target, "engine", target)
     counter = {"n": 0}
 
     def _before(conn, cursor, statement, parameters, context, executemany):
