@@ -161,7 +161,9 @@ class CommandService:
                 obj = session.get(model, object_id)
                 if obj is None:
                     raise CommandNotFoundError(f"{object_type} not found")
-                self._authorize_scope(context, obj.namespace.path, scope, "set_lifecycle_status")
+                self._authorize_scope(
+                    context, obj.namespace.path, scope, "set_lifecycle_status"
+                )
                 fingerprint = command_fingerprint(
                     method="POST",
                     route_template="/api/v1/lifecycle/{object_type}/{object_id}",
@@ -195,13 +197,17 @@ class CommandService:
                 validate_transition(obj.status, target_status)
                 if target_status is LifecycleStatus.ACTIVE:
                     if isinstance(obj, ProcessRun):
-                        obj.finalize()
+                        obj.finalize(bump_revision=False)
                     else:
-                        obj.activate()
+                        obj.activate(bump_revision=False)
                 else:
-                    obj.archive()
+                    obj.archive(bump_revision=False)
                 compare_and_swap_revision(
-                    session, model, object_id, expected_revision=expected_revision, values={}
+                    session,
+                    model,
+                    object_id,
+                    expected_revision=expected_revision,
+                    values={},
                 )
                 session.flush()
                 session.refresh(obj)
@@ -211,9 +217,9 @@ class CommandService:
                     expected_revision=expected_revision,
                     status=status,
                 )
-                result = COMMAND_REGISTRY.by_type(
-                    SetLifecycleStatus
-                ).decode_response(obj, None, command=lifecycle_command)
+                result = COMMAND_REGISTRY.by_type(SetLifecycleStatus).decode_response(
+                    obj, None, command=lifecycle_command
+                )
                 if decision is not None:
                     idempotency.complete(
                         decision,
@@ -221,12 +227,20 @@ class CommandService:
                         response=result.model_dump(mode="json"),
                     )
                 self._emit_success(
-                    session, context, "set_lifecycle_status", str(object_id), resource_type=object_type
+                    session,
+                    context,
+                    "set_lifecycle_status",
+                    str(object_id),
+                    resource_type=object_type,
                 )
                 return result
         except Exception as error:
             self._emit_failure(
-                context, "set_lifecycle_status", str(object_id), error, resource_type=object_type
+                context,
+                "set_lifecycle_status",
+                str(object_id),
+                error,
+                resource_type=object_type,
             )
             raise
 
@@ -573,7 +587,7 @@ class CommandService:
                 if value is None:
                     raise CommandValidationError(
                         f"Property {attribute_name!r} not found in group {group_name!r}"
-                )
+                    )
                 if isinstance(raw_value, dict):
                     value.set_value(deepcopy(raw_value.get("value")))
                     if "unit" in raw_value:
@@ -698,7 +712,9 @@ class CommandService:
 
                 values: dict[str, Any] = {}
                 if local_metadata is not None:
-                    values["metadata_json"] = merge(namespace.metadata_json, local_metadata)
+                    values["metadata_json"] = merge(
+                        namespace.metadata_json, local_metadata
+                    )
                 if status is not None:
                     try:
                         validate_transition(namespace.status, status)
@@ -1231,7 +1247,7 @@ class CommandService:
                     try:
                         target_status = LifecycleStatus(status)
                         if target_status is LifecycleStatus.ACTIVE:
-                            run.finalize()
+                            run.finalize(bump_revision=False)
                         else:
                             validate_transition(run.status, target_status)
                             values["status"] = target_status
@@ -1301,13 +1317,22 @@ class CommandService:
                 if destination is None:
                     raise CommandNotFoundError("Destination namespace not found")
                 self._authorize_scope(
-                    context, source.namespace.path, Scope.PROCESS_RUN_READ, "copy_process_run"
+                    context,
+                    source.namespace.path,
+                    Scope.PROCESS_RUN_READ,
+                    "copy_process_run",
                 )
                 self._authorize_scope(
-                    context, destination.path, Scope.PROCESS_RUN_WRITE, "copy_process_run"
+                    context,
+                    destination.path,
+                    Scope.PROCESS_RUN_WRITE,
+                    "copy_process_run",
                 )
                 decision = self._claim(
-                    IdempotencyRepository(session), context, fingerprint, lambda _id: None
+                    IdempotencyRepository(session),
+                    context,
+                    fingerprint,
+                    lambda _id: None,
                 )
                 if decision is not None and decision.replayed:
                     return ProcessRunSchema.model_validate(decision.response)
@@ -1331,6 +1356,7 @@ class CommandService:
                 session.flush()
                 for slot, assignment in source.assignments.items():
                     copied.resources[slot] = assignment.resource
+
                 def copy_step(source_step, target_parent=None):
                     target_step = copied.steps.get(source_step.name)
                     if target_step is None:
@@ -1350,40 +1376,61 @@ class CommandService:
                         target_parameter = target_step.parameters.get(name)
                         if target_parameter is None:
                             continue
-                        for value_name, source_value in source_parameter._values.items():
+                        for (
+                            value_name,
+                            source_value,
+                        ) in source_parameter._values.items():
                             target_value = target_parameter._values.get(value_name)
                             if target_value is not None:
-                                target_value.value_json = deepcopy(source_value.value_json)
+                                target_value.value_json = deepcopy(
+                                    source_value.value_json
+                                )
                                 target_value.unit = source_value.unit
-                                target_value.metadata_json = deepcopy(source_value.metadata_json)
+                                target_value.metadata_json = deepcopy(
+                                    source_value.metadata_json
+                                )
                     for assignment in source_step.assignments.values():
-                        target_step.assignments[assignment.resource_slot_id] = ResourceAssignment(
-                            process_run=copied,
-                            resource_slot=assignment.resource_slot,
-                            step=target_step,
-                            resource=assignment.resource,
+                        target_step.assignments[assignment.resource_slot_id] = (
+                            ResourceAssignment(
+                                process_run=copied,
+                                resource_slot=assignment.resource_slot,
+                                step=target_step,
+                                resource=assignment.resource,
+                            )
                         )
                     return target_step
 
                 for source_step in source.steps.values():
                     copy_step(source_step)
                 if changes.assignments is not None:
-                    self._apply_run_assignments(session, copied, changes.assignments, context)
+                    self._apply_run_assignments(
+                        session, copied, changes.assignments, context
+                    )
                 if changes.steps is not None:
                     self._apply_run_steps(session, copied, changes.steps)
                 session.flush()
                 result = self._process_run_schema(copied)
                 if decision is not None:
                     IdempotencyRepository(session).complete(
-                        decision, target_id=str(copied.id), response=result.model_dump(mode="json")
+                        decision,
+                        target_id=str(copied.id),
+                        response=result.model_dump(mode="json"),
                     )
                 self._emit_success(
-                    session, context, "copy_process_run", str(copied.id), resource_type="process_run"
+                    session,
+                    context,
+                    "copy_process_run",
+                    str(copied.id),
+                    resource_type="process_run",
                 )
                 return result
         except Exception as error:
             self._emit_failure(
-                context, "copy_process_run", str(source_process_run_id), error, resource_type="process_run"
+                context,
+                "copy_process_run",
+                str(source_process_run_id),
+                error,
+                resource_type="process_run",
             )
             raise
 
@@ -1429,7 +1476,9 @@ class CommandService:
             resource = session.scalar(
                 select(Resource)
                 .where(Resource.id == resource_id)
-                .options(joinedload(Resource.template).joinedload(ResourceTemplate.types))
+                .options(
+                    joinedload(Resource.template).joinedload(ResourceTemplate.types)
+                )
             )
             if resource is None:
                 raise CommandNotFoundError("Resource not found")

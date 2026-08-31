@@ -75,17 +75,23 @@ class ProcessTemplate(RevisionedLifecycleMixin, TimestampMixin, Base):
     def _normalize_labels(self, key, labels):
         return [make_slug(label) for label in labels]
 
-    def activate(self):
-        validate_transition(
-            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ACTIVE
-        )
+    def activate(self, *, bump_revision: bool = True):
+        source_status = self.status or LifecycleStatus.MUTABLE
+        validate_transition(source_status, LifecycleStatus.ACTIVE)
+        if source_status is LifecycleStatus.ACTIVE:
+            return
         self.status = LifecycleStatus.ACTIVE
+        if bump_revision and inspect(self).persistent and self.revision is not None:
+            self.revision += 1
 
-    def archive(self):
-        validate_transition(
-            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ARCHIVED
-        )
+    def archive(self, *, bump_revision: bool = True):
+        source_status = self.status or LifecycleStatus.MUTABLE
+        validate_transition(source_status, LifecycleStatus.ARCHIVED)
+        if source_status is LifecycleStatus.ARCHIVED:
+            return
         self.status = LifecycleStatus.ARCHIVED
+        if bump_revision and inspect(self).persistent and self.revision is not None:
+            self.revision += 1
 
 
 class ResourceSlot(TimestampMixin, Base):
@@ -249,17 +255,23 @@ class ProcessRun(RevisionedLifecycleMixin, TimestampMixin, Base):
             ar.append(AssignedResource(slot=resource_slot, resource=resource))
         return ar
 
-    def finalize(self):
-        validate_transition(
-            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ACTIVE
-        )
+    def finalize(self, *, bump_revision: bool = True):
+        source_status = self.status or LifecycleStatus.MUTABLE
+        validate_transition(source_status, LifecycleStatus.ACTIVE)
+        if source_status is LifecycleStatus.ACTIVE:
+            return
         self.status = LifecycleStatus.ACTIVE
+        if bump_revision and inspect(self).persistent and self.revision is not None:
+            self.revision += 1
 
-    def archive(self):
-        validate_transition(
-            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ARCHIVED
-        )
+    def archive(self, *, bump_revision: bool = True):
+        source_status = self.status or LifecycleStatus.MUTABLE
+        validate_transition(source_status, LifecycleStatus.ARCHIVED)
+        if source_status is LifecycleStatus.ARCHIVED:
+            return
         self.status = LifecycleStatus.ARCHIVED
+        if bump_revision and inspect(self).persistent and self.revision is not None:
+            self.revision += 1
 
 
 @event.listens_for(ProcessTemplate, "before_update", propagate=True)
@@ -447,15 +459,23 @@ def _validate_status_change(root):
 def _enforce_provenance_lifecycle(session, flush_context, instances):  # noqa: C901
     from recap.db.resource import Resource
 
-    # Stable references activate their provenance definitions/instances in the
-    # same unit of work. Freeze checks below use the persisted source status.
+    # Resource creation freezes its template definition. Process-run inputs and
+    # outputs freeze only when the run is finalized.
     for obj in tuple(session.new):
-        if isinstance(obj, ProcessRun) and obj.template is not None:
-            obj.template.activate()
-        elif isinstance(obj, Resource) and obj.template is not None:
+        if isinstance(obj, Resource) and obj.template is not None:
             _resource_template_root(obj.template).activate()
-        elif isinstance(obj, ResourceAssignment) and obj.resource is not None:
-            _resource_root(obj.resource).activate()
+
+    for obj in tuple(session.dirty):
+        if not isinstance(obj, ProcessRun) or obj.status is not LifecycleStatus.ACTIVE:
+            continue
+        history = inspect(obj).attrs.status.history
+        if not history.has_changes():
+            continue
+        if obj.template is not None:
+            obj.template.activate()
+        for assignment in obj.assignments.values():
+            if assignment.resource is not None:
+                _resource_root(assignment.resource).activate()
 
     lifecycle_roots = {
         obj
@@ -484,7 +504,8 @@ def _enforce_provenance_lifecycle(session, flush_context, instances):  # noqa: C
                 attr.key
                 for attr in state.attrs
                 if attr.history.has_changes()
-                and attr.key not in {"assignments", "status", "modified_date"}
+                and attr.key
+                not in {"assignments", "revision", "status", "modified_date"}
             }
             if not changed_keys and obj not in session.deleted:
                 continue

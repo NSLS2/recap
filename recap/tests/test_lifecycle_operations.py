@@ -33,7 +33,7 @@ def test_aggregate_lifecycle_operations(model, db_session):
         aggregate.activate()
 
 
-def test_first_process_run_activates_template_and_finalize_freezes_run(db_session):
+def test_finalize_process_run_activates_template_and_bumps_revision(db_session):
     namespace = _namespace(db_session, "process-run")
     template = ProcessTemplate(name="process", version="1", namespace=namespace)
     template.step_templates["step"] = StepTemplate(
@@ -49,6 +49,8 @@ def test_first_process_run_activates_template_and_finalize_freezes_run(db_sessio
     )
     db_session.add(template)
     db_session.flush()
+    assert template.status is LifecycleStatus.MUTABLE
+    assert template.revision == 1
 
     run = ProcessRun(
         name="run",
@@ -59,11 +61,18 @@ def test_first_process_run_activates_template_and_finalize_freezes_run(db_sessio
     db_session.add(run)
     db_session.flush()
 
-    assert template.status is LifecycleStatus.ACTIVE
+    assert template.status is LifecycleStatus.MUTABLE
+    assert template.revision == 1
     assert run.status is LifecycleStatus.MUTABLE
+    assert run.revision == 1
+
     run.finalize()
     db_session.flush()
+
+    assert template.status is LifecycleStatus.ACTIVE
+    assert template.revision == 2
     assert run.status is LifecycleStatus.ACTIVE
+    assert run.revision == 2
 
     value = run.steps["step"].parameters["params"]._values["value"]
     value.value = 2
@@ -71,7 +80,7 @@ def test_first_process_run_activates_template_and_finalize_freezes_run(db_sessio
         db_session.flush()
 
 
-def test_assignment_activates_nested_resource_root_in_same_flush(db_session):
+def test_finalize_process_run_activates_assigned_resource_root(db_session):
     from recap.db.process import ResourceAssignment, ResourceSlot
     from recap.utils.general import Direction
 
@@ -104,8 +113,18 @@ def test_assignment_activates_nested_resource_root_in_same_flush(db_session):
     db_session.add(assignment)
     db_session.flush()
 
-    assert root.status is LifecycleStatus.ACTIVE
+    assert root.status is LifecycleStatus.MUTABLE
+    assert root.revision == 1
     assert child.status is LifecycleStatus.MUTABLE
+    assert child.revision == 1
+
+    run.finalize()
+    db_session.flush()
+
+    assert root.status is LifecycleStatus.ACTIVE
+    assert root.revision == 2
+    assert child.status is LifecycleStatus.MUTABLE
+    assert child.revision == 1
 
 
 def test_process_run_rejects_illegal_finalize_transition(db_session):

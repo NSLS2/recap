@@ -143,17 +143,23 @@ class ResourceTemplate(RevisionedLifecycleMixin, TimestampMixin, Base):
         child.namespace = self.namespace
         return child
 
-    def activate(self):
-        validate_transition(
-            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ACTIVE
-        )
+    def activate(self, *, bump_revision: bool = True):
+        source_status = self.status or LifecycleStatus.MUTABLE
+        validate_transition(source_status, LifecycleStatus.ACTIVE)
+        if source_status is LifecycleStatus.ACTIVE:
+            return
         self.status = LifecycleStatus.ACTIVE
+        if bump_revision and inspect(self).persistent and self.revision is not None:
+            self.revision += 1
 
-    def archive(self):
-        validate_transition(
-            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ARCHIVED
-        )
+    def archive(self, *, bump_revision: bool = True):
+        source_status = self.status or LifecycleStatus.MUTABLE
+        validate_transition(source_status, LifecycleStatus.ARCHIVED)
+        if source_status is LifecycleStatus.ARCHIVED:
+            return
         self.status = LifecycleStatus.ARCHIVED
+        if bump_revision and inspect(self).persistent and self.revision is not None:
+            self.revision += 1
 
 
 # --- Keep slug always in sync with name ---
@@ -297,9 +303,7 @@ class Resource(RevisionedLifecycleMixin, TimestampMixin, Base):
             session = object_session(self)
             if session is not None:
                 session.add(child)
-            child._initialize_from_resource_template(
-                child_ct, visited, max_depth - 1
-            )
+            child._initialize_from_resource_template(child_ct, visited, max_depth - 1)
 
     __table_args__ = (
         UniqueConstraint(
@@ -309,17 +313,23 @@ class Resource(RevisionedLifecycleMixin, TimestampMixin, Base):
         ),
     )
 
-    def activate(self):
-        validate_transition(
-            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ACTIVE
-        )
+    def activate(self, *, bump_revision: bool = True):
+        source_status = self.status or LifecycleStatus.MUTABLE
+        validate_transition(source_status, LifecycleStatus.ACTIVE)
+        if source_status is LifecycleStatus.ACTIVE:
+            return
         self.status = LifecycleStatus.ACTIVE
+        if bump_revision and inspect(self).persistent and self.revision is not None:
+            self.revision += 1
 
-    def archive(self):
-        validate_transition(
-            self.status or LifecycleStatus.MUTABLE, LifecycleStatus.ARCHIVED
-        )
+    def archive(self, *, bump_revision: bool = True):
+        source_status = self.status or LifecycleStatus.MUTABLE
+        validate_transition(source_status, LifecycleStatus.ARCHIVED)
+        if source_status is LifecycleStatus.ARCHIVED:
+            return
         self.status = LifecycleStatus.ARCHIVED
+        if bump_revision and inspect(self).persistent and self.revision is not None:
+            self.revision += 1
 
 
 # --- Keep slug always in sync with name ---

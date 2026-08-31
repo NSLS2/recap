@@ -184,9 +184,8 @@ class IdentityMap:
         relation_fields = getattr(type(current), "_relation_fields", frozenset())
         for name in relation_fields:
             if (
-                (incoming_flags.get(name) is True or name in incoming.model_fields_set)
-                and name in type(current).model_fields
-            ):
+                incoming_flags.get(name) is True or name in incoming.model_fields_set
+            ) and name in type(current).model_fields:
                 setattr(current, name, incoming.__dict__.get(name))
 
     @staticmethod
@@ -219,7 +218,7 @@ class IdentityMap:
                 not cls._empty_relation_value(current_value)
                 and not cls._empty_relation_value(incoming_value)
                 and cls._relation_conflicts(current_value, incoming_value)
-             ):
+            ):
                 raise IdentityMergeConflict(
                     f"Conflicting {type(current).__name__} identity {current.id} "
                     f"at equal revision: {name}"
@@ -230,13 +229,22 @@ class IdentityMap:
                 continue
             if name in relation_fields:
                 continue
-            if _loaded_relations(current).get(name) is False or _loaded_relations(incoming).get(name) is False:
+            if (
+                _loaded_relations(current).get(name) is False
+                or _loaded_relations(incoming).get(name) is False
+            ):
                 continue
             current_value = current.__dict__.get(name)
             incoming_value = incoming.__dict__.get(name)
-            if name == "status" and isinstance(current_value, LifecycleStatus) and isinstance(incoming_value, LifecycleStatus):
+            if (
+                name == "status"
+                and isinstance(current_value, LifecycleStatus)
+                and isinstance(incoming_value, LifecycleStatus)
+            ):
                 continue
-            if isinstance(current_value, (BaseModel, list, dict)) or isinstance(incoming_value, (BaseModel, list, dict)):
+            if isinstance(current_value, BaseModel | list | dict) or isinstance(
+                incoming_value, BaseModel | list | dict
+            ):
                 current_loaded = _loaded_relations(current).get(name) is True
                 incoming_loaded = _loaded_relations(incoming).get(name) is True
                 if (
@@ -248,13 +256,13 @@ class IdentityMap:
                     raise IdentityMergeConflict(
                         f"Conflicting {type(current).__name__} identity {current.id} "
                         f"at equal revision: {name}"
-                )
+                    )
                 continue
             if current_value != incoming_value:
                 raise IdentityMergeConflict(
                     f"Conflicting {type(current).__name__} identity {current.id} "
                     f"at equal revision: {name}"
-                    )
+                )
 
     @classmethod
     def _relation_signature(
@@ -313,18 +321,28 @@ class IdentityMap:
             incoming_id = getattr(incoming, "id", None)
             if current_id != incoming_id:
                 return current != incoming
+            current_revision = getattr(current, "revision", None)
+            incoming_revision = getattr(incoming, "revision", None)
+            if (
+                current_revision is not None
+                and incoming_revision is not None
+                and current_revision != incoming_revision
+            ):
+                return False
             pair = (id(current), id(incoming))
             if pair in _seen:
                 return False
             _seen.add(pair)
             relation_fields = getattr(type(current), "_relation_fields", frozenset())
-            for name in current.model_fields_set & incoming.model_fields_set - relation_fields:
+            for name in (
+                current.model_fields_set & incoming.model_fields_set - relation_fields
+            ):
                 if name in {"create_date", "modified_date", "status"}:
                     continue
                 left = current.__dict__.get(name)
                 right = incoming.__dict__.get(name)
-                if isinstance(left, (BaseModel, list, dict)) or isinstance(
-                    right, (BaseModel, list, dict)
+                if isinstance(left, BaseModel | list | dict) or isinstance(
+                    right, BaseModel | list | dict
                 ):
                     if cls._relation_conflicts(left, right, _seen):
                         return True
@@ -354,10 +372,15 @@ class IdentityMap:
                 return False
             current_by_key = {cls._value_key(item): item for item in current}
             incoming_by_key = {cls._value_key(item): item for item in incoming}
-            if not (set(current_by_key).issubset(incoming_by_key) or set(incoming_by_key).issubset(current_by_key)):
+            if not (
+                set(current_by_key).issubset(incoming_by_key)
+                or set(incoming_by_key).issubset(current_by_key)
+            ):
                 return True
             return any(
-                cls._relation_conflicts(current_by_key[key], incoming_by_key[key], _seen)
+                cls._relation_conflicts(
+                    current_by_key[key], incoming_by_key[key], _seen
+                )
                 for key in current_by_key.keys() & incoming_by_key.keys()
             )
         return current != incoming
@@ -371,20 +394,26 @@ class IdentityMap:
         return cls._relation_signature(value)
 
     @classmethod
-    def _equivalent_with_repeated_array_values(cls, current: Any, incoming: Any) -> bool:
+    def _equivalent_with_repeated_array_values(
+        cls, current: Any, incoming: Any
+    ) -> bool:
         """Recognize stale hydrated array wrappers without hiding real conflicts."""
         left = cls._relation_signature(current)
         right = cls._relation_signature(incoming)
         if left == right:
             return True
-        return cls._dedupe_repeated_sequences(left) == cls._dedupe_repeated_sequences(right)
+        return cls._dedupe_repeated_sequences(left) == cls._dedupe_repeated_sequences(
+            right
+        )
 
     @classmethod
     def _dedupe_repeated_sequences(cls, value: Any) -> Any:
         if isinstance(value, tuple):
             items = tuple(cls._dedupe_repeated_sequences(item) for item in value)
             for size in range(1, len(items) // 2 + 1):
-                if len(items) % size == 0 and items == items[:size] * (len(items) // size):
+                if len(items) % size == 0 and items == items[:size] * (
+                    len(items) // size
+                ):
                     return items[:size]
             return items
         return value
@@ -415,7 +444,9 @@ class IdentityMap:
                     if item not in candidate:
                         return False
                     continue
-                match = candidate_by_id.get((cls._family(item), getattr(item, "id", None)))
+                match = candidate_by_id.get(
+                    (cls._family(item), getattr(item, "id", None))
+                )
                 if match is None or not cls._model_is_compatible_extension(item, match):
                     return False
             return True
@@ -438,7 +469,7 @@ class IdentityMap:
                         or cls._model_is_compatible_extension(right, left)
                     ):
                         return False
-                elif isinstance(left, (list, dict)) or isinstance(right, (list, dict)):
+                elif isinstance(left, list | dict) or isinstance(right, list | dict):
                     if not (
                         cls._relation_is_extension(left, right)
                         or cls._relation_is_extension(right, left)
@@ -449,12 +480,16 @@ class IdentityMap:
             return True
         if getattr(base, "id", None) != getattr(candidate, "id", None):
             return False
-        for name in base.model_fields_set & candidate.model_fields_set - relation_fields:
+        for name in (
+            base.model_fields_set & candidate.model_fields_set - relation_fields
+        ):
             if name in {"create_date", "modified_date"}:
                 continue
             left = base.__dict__.get(name)
             right = candidate.__dict__.get(name)
-            if isinstance(left, (BaseModel, list, dict)) or isinstance(right, (BaseModel, list, dict)):
+            if isinstance(left, BaseModel | list | dict) or isinstance(
+                right, BaseModel | list | dict
+            ):
                 if cls._relation_signature(left) != cls._relation_signature(right):
                     return False
             elif name == "status":
@@ -462,7 +497,10 @@ class IdentityMap:
             elif left != right:
                 return False
         for name in relation_fields:
-            if _loaded_relations(base).get(name) is True and _loaded_relations(candidate).get(name) is True:
+            if (
+                _loaded_relations(base).get(name) is True
+                and _loaded_relations(candidate).get(name) is True
+            ):
                 left = base.__dict__.get(name)
                 right = candidate.__dict__.get(name)
                 if (
@@ -496,22 +534,28 @@ class IdentityMap:
             if loaded and relation in type(current).model_fields:
                 value = self._canonicalize_value(incoming.__dict__.get(relation))
                 existing = current.__dict__.get(relation)
-                if (value is not None or existing is None) and not self._merge_container(
-                    existing, value
-                ):
+                if (
+                    value is not None or existing is None
+                ) and not self._merge_container(existing, value):
                     setattr(current, relation, value)
         if isinstance(current, LoadAware):
-                current.set_loaded_relations(
+            current.set_loaded_relations(
                 merged_flags,
-                on_unloaded=(getattr(current, "__pydantic_private__", {}) or {}).get("_on_unloaded", "warn"),
+                on_unloaded=(getattr(current, "__pydantic_private__", {}) or {}).get(
+                    "_on_unloaded", "warn"
+                ),
             )
 
-    def _merge_authoritative_relations(self, current: BaseModel, incoming: BaseModel) -> None:
+    def _merge_authoritative_relations(
+        self, current: BaseModel, incoming: BaseModel
+    ) -> None:
         """Apply command responses even when transport omits load metadata."""
         self._merge_loaded_relations(current, incoming)
         for name in getattr(type(current), "_relation_fields", frozenset()):
             if name in incoming.model_fields_set and name in type(current).model_fields:
-                setattr(current, name, self._canonicalize_value(incoming.__dict__.get(name)))
+                setattr(
+                    current, name, self._canonicalize_value(incoming.__dict__.get(name))
+                )
 
     def _merge_container(  # noqa: C901
         self,
@@ -522,8 +566,8 @@ class IdentityMap:
     ) -> bool:
         if _seen is None:
             _seen = set()
-        if isinstance(current, (BaseModel, list, dict)) and isinstance(
-            incoming, (BaseModel, list, dict)
+        if isinstance(current, BaseModel | list | dict) and isinstance(
+            incoming, BaseModel | list | dict
         ):
             pair = (id(current), id(incoming))
             if pair in _seen:

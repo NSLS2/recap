@@ -217,26 +217,28 @@ def test_first_use_freezes_template_and_rejects_update(command_setup):
     with factory.begin() as session:
         template = session.get(ProcessTemplate, created.id)
         session.add(
-            ProcessRun(
+            run := ProcessRun(
                 namespace_id=namespace.id,
                 name="run-1",
                 description="freeze template",
                 template=template,
             )
         )
+        session.flush()
+        run.finalize()
 
     with pytest.raises(CommandConflictError, match="active"):
         service.update_process_template(
             replace(context, idempotency_key="template-2"),
             template_id=created.id,
-            expected_revision=1,
+            expected_revision=2,
             draft=process_draft(labels=["too-late"]),
         )
 
     with factory() as session:
         stored = session.get(ProcessTemplate, created.id)
         assert stored.status is LifecycleStatus.ACTIVE
-        assert stored.revision == 1
+        assert stored.revision == 2
         assert stored.labels == ["mx"]
     assert audit.records[-1].outcome.value == "error"
 

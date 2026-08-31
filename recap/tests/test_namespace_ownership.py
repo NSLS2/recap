@@ -207,7 +207,7 @@ def test_aggregate_schemas_expose_namespace_lifecycle_and_copy_identity(db_sessi
         assert schema.namespace_id == namespace.id
         assert schema.revision == 1
     assert [schema.status for schema in schemas] == [
-        LifecycleStatus.ACTIVE,
+        LifecycleStatus.MUTABLE,
         LifecycleStatus.MUTABLE,
         LifecycleStatus.ACTIVE,
         LifecycleStatus.MUTABLE,
