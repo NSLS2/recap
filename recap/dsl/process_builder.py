@@ -36,6 +36,7 @@ from recap.exceptions import (
 )
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.attribute import AttributeTemplateValidator
+from recap.schemas.namespace import NamespaceContext
 from recap.schemas.process import (
     ProcessRunSchema,
     ProcessTemplateRef,
@@ -57,21 +58,17 @@ class ProcessTemplateBuilder:
 
     def __init__(  # noqa: C901
         self,
-        namespace_id: UUID,
         name: str | None,
         version: str | None,
         *,
         backend: ClientBackend,
+        namespace_context: NamespaceContext,
+        command_context: CommandContext,
         process_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
-        namespace_path: str | None = None,
-        command_context: CommandContext | None = None,
     ):
-        if command_context is None:
-            raise ValueError("ProcessTemplateBuilder requires command context")
         self.backend = backend
-        self.namespace_id = namespace_id
-        self.namespace_path = namespace_path
+        self.namespace_context = namespace_context
         self._command_context = command_context
         self._submitted = False
         self._last_draft = None
@@ -82,8 +79,6 @@ class ProcessTemplateBuilder:
         if on_existing not in {"silent", "warn", "raise"}:
             raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
         self.on_existing = on_existing
-        if namespace_path is None:
-            raise ValueError("namespace_path is required for command-backed builders")
         self.name = name
         self.version = version
         self._template: ProcessTemplateRef | None = None
@@ -93,7 +88,9 @@ class ProcessTemplateBuilder:
         if process_template_id is not None:
             self._initialize_command_update(process_template_id)
         elif name is None or version is None:
-            raise ValueError("name and version are required to create a process template")
+            raise ValueError(
+                "name and version are required to create a process template"
+            )
         else:
             existing = self.backend.query(
                 ProcessTemplateSchema,
@@ -102,7 +99,7 @@ class ProcessTemplateBuilder:
                     preloads=["step_templates", "resource_slots"],
                     include_mutable=True,
                 ),
-                namespace_path=namespace_path,
+                namespace_path=self.namespace_context.path,
             )
             if existing:
                 if on_existing == "raise":
@@ -132,7 +129,9 @@ class ProcessTemplateBuilder:
         if self._submitted and draft == self._last_draft:
             return self
         command = (
-            CreateProcessTemplate(namespace_path=self.namespace_path, draft=draft)
+            CreateProcessTemplate(
+                namespace_path=self.namespace_context.path, draft=draft
+            )
             if self._template is None
             else UpdateProcessTemplate(
                 template_id=self._template.id,
@@ -211,7 +210,10 @@ class ProcessTemplateBuilder:
             (slot for slot in self._draft_resource_slots if slot.name == name), None
         )
         if existing is not None:
-            if existing.resource_type != resource_type or existing.direction != direction:
+            if (
+                existing.resource_type != resource_type
+                or existing.direction != direction
+            ):
                 raise ValueError(
                     f"ResourceSlot {name} already exists with different type/direction"
                 )
@@ -287,7 +289,10 @@ class ProcessTemplateBuilder:
                 steps=[
                     StepTemplateDraft(
                         name=step.name,
-                        role_bindings={role: slot.name for role, slot in step.resource_slots.items()},
+                        role_bindings={
+                            role: slot.name
+                            for role, slot in step.resource_slots.items()
+                        },
                         parameter_groups=[
                             AttributeGroupDraft(
                                 name=group.name,
@@ -324,7 +329,7 @@ class ProcessTemplateBuilder:
                 preloads=["step_templates", "resource_slots"],
                 include_mutable=True,
             ),
-            namespace_path=self.namespace_path,
+            namespace_path=self.namespace_context.path,
         )
         if not templates:
             raise RecapNotFoundError(
@@ -364,6 +369,7 @@ class ProcessTemplateBuilder:
                 )
                 step_builder._draft_parameter_groups.append(group_builder)
             self._draft_steps.append(step_builder)
+
 
 class StepTemplateBuilder:
     """Scoped editor for one step's parameter groups and resource bindings."""
@@ -485,47 +491,44 @@ class ProcessRunBuilder:
         name: str | None,
         description: str | None,
         template_name: str | None,
-        namespace_id: UUID | None,
         version: str | None = None,
         *,
         backend: ClientBackend,
+        namespace_context: NamespaceContext,
         process_run_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
-        namespace_path: str | None = None,
-        command_context: CommandContext | None = None,
+        command_context: CommandContext,
         template_id: UUID | None = None,
     ):
         if command_context is None:
             raise ValueError("ProcessRunBuilder requires command context")
         self.backend = backend
-        if namespace_id is None:
-            raise ValueError("Namespace context is required")
-        self.namespace_id = namespace_id
         self.name = name
         self.description = description
+        self.namespace_context = namespace_context
         self.template_name = template_name
         self.version = version
         if on_existing not in {"silent", "warn", "raise"}:
             raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
         self.on_existing = on_existing
-        self.namespace_path = namespace_path
         self._command_context = command_context
         self._template_id = template_id
         self._process_template = None
         self._submitted = False
         self._draft_assignments: dict[str, UUID] = {}
         self._draft_steps: dict[str, dict[str, dict[str, object]]] = {}
-        if namespace_path is None or (
+        if (
             template_id is None
             and process_run_id is None
             and (template_name is None or version is None)
         ):
             raise ValueError(
-                "namespace_path and template_id or process_run_id are "
-                "required for command-backed builders"
+                "template_id or process_run_id are required for command-backed builders"
             )
         self._process_run = (
-            self._reload_process_run(process_run_id) if process_run_id is not None else None
+            self._reload_process_run(process_run_id)
+            if process_run_id is not None
+            else None
         )
         self._draft_process_run = (
             self._process_run.model_copy(deep=True)
@@ -536,7 +539,8 @@ class ProcessRunBuilder:
         if self._process_run is not None:
             self.name = self._process_run.name
             self.description = self._process_run.description
-            self._template_id = self._process_run.__dict__["template"].id
+            # self._template_id = self._process_run.__dict__["template"].id
+            self._template_id = self._process_run.template.id
         filters = (
             {"id": self._template_id}
             if self._template_id is not None
@@ -544,17 +548,16 @@ class ProcessRunBuilder:
         )
         templates = self.backend.query(
             ProcessTemplateSchema,
-                QuerySpec(
-                    filters=filters,
-                    preloads=["step_templates", "resource_slots"],
+            QuerySpec(
+                filters=filters,
+                preloads=["step_templates", "resource_slots"],
                 include_mutable=True,
             ),
-            namespace_path=namespace_path,
+            namespace_path=namespace_context.path,
         )
         if not templates:
             raise ValueError(
-                f"Process template {self.template_name!r} version "
-                f"{self.version!r} not found"
+                f"Process template {self.template_name!r} version {version!r} not found"
             )
         self._process_template = templates[0]
         self._template_id = self._process_template.id
@@ -566,7 +569,7 @@ class ProcessRunBuilder:
                     preloads=["template", "steps", "steps.parameters", "resources"],
                     include_mutable=True,
                 ),
-                namespace_path=namespace_path,
+                namespace_path=namespace_context.path,
             )
             if existing_runs:
                 if on_existing == "raise":
@@ -581,11 +584,15 @@ class ProcessRunBuilder:
                     )
                 self._process_run = existing_runs[0]
                 if not isinstance(self._process_run, ProcessRunSchema):
-                    raise TypeError("Process-run builder requires ProcessRunSchema result")
+                    raise TypeError(
+                        "Process-run builder requires ProcessRunSchema result"
+                    )
                 self.name = self._process_run.name
                 self.description = self._process_run.description
         self._steps = (
-            list(self._process_run.steps.values()) if self._process_run is not None else []
+            list(self._process_run.steps.values())
+            if self._process_run is not None
+            else []
         )
         if self._process_run is not None:
             self._draft_process_run = self._process_run.model_copy(deep=True)
@@ -605,7 +612,7 @@ class ProcessRunBuilder:
             return self
         if self._process_run is None:
             command = CreateProcessRun(
-                namespace_path=self.namespace_path,
+                namespace_path=self.namespace_context.path,
                 draft=ProcessRunDraft(
                     name=self.name,
                     description=self.description,
@@ -614,7 +621,8 @@ class ProcessRunBuilder:
                     steps={
                         step.name: ProcessRunStepDraft()
                         for step in (
-                            getattr(self._process_template, "step_templates", None) or {}
+                            getattr(self._process_template, "step_templates", None)
+                            or {}
                         ).values()
                     },
                 ),
@@ -622,7 +630,7 @@ class ProcessRunBuilder:
         elif self._process_run.status is not LifecycleStatus.MUTABLE:
             command = CopyProcessRun(
                 source_process_run_id=self._process_run.id,
-                destination_namespace_path=self.namespace_path,
+                destination_namespace_path=self.namespace_context.path,
                 options={
                     "changes": {
                         "description": self.description,
@@ -649,14 +657,13 @@ class ProcessRunBuilder:
         self._submitted = True
         return self
 
-    def finalize(self):
-        """Transition process run to ACTIVE/finalized state."""
+    def update_status(self, status: LifecycleStatus):
         self._ensure_command_saved()
         result = self.backend._execute(
             UpdateProcessRun(
                 process_run_id=self._process_run.id,
                 expected_revision=self._process_run.revision,
-                status=LifecycleStatus.ACTIVE.value,
+                status=status.value,
             ),
             self._command_context,
         )
@@ -667,23 +674,13 @@ class ProcessRunBuilder:
             return self
         return self
 
+    def finalize(self):
+        """Transition process run to ACTIVE/finalized state."""
+        self.update_status(LifecycleStatus.ACTIVE)
+
     def archive(self):
         """Transition process run to ARCHIVED."""
-        self._ensure_command_saved()
-        result = self.backend._execute(
-            UpdateProcessRun(
-                process_run_id=self._process_run.id,
-                expected_revision=self._process_run.revision,
-                status=LifecycleStatus.ARCHIVED.value,
-            ),
-            self._command_context,
-        )
-        if isinstance(result, ProcessRunSchema):
-            self._process_run = result
-            self._draft_process_run = result.model_copy(deep=True)
-        elif result is not None:
-            return self
-        return self
+        self.update_status(LifecycleStatus.ARCHIVED)
 
     @property
     def process_run(self) -> ProcessRunSchema:
@@ -698,6 +695,7 @@ class ProcessRunBuilder:
         if model.id != self._process_run.id:
             raise ValueError("ID for this ProcessRun does not match the builder")
         self._draft_process_run = detached_model(model)
+        self.name = model.name
         self.description = model.description
         self._draft_assignments = {
             slot_name: assignment.resource.id
@@ -766,7 +764,10 @@ class ProcessRunBuilder:
         )
         return model.model_validate(
             {
-                **{name: getattr(parameters, name) for name in type(parameters).model_fields},
+                **{
+                    name: getattr(parameters, name)
+                    for name in type(parameters).model_fields
+                },
                 "step_name": step_schema.name,
                 "step_id": step_schema.id,
             }
@@ -787,7 +788,10 @@ class ProcessRunBuilder:
                 value = getattr(value_model, attr_name)
                 if not hasattr(value, "value"):
                     continue
-                values[attr_info.alias or attr_name] = {"value": value.value, "unit": value.unit}
+                values[attr_info.alias or attr_name] = {
+                    "value": value.value,
+                    "unit": value.unit,
+                }
             step_data[field_info.alias or field_name] = values
         self._draft_steps[filled_params.step_name] = step_data
         self._dirty = True
@@ -840,7 +844,7 @@ class ProcessRunBuilder:
                 preloads=["template", "steps", "steps.parameters", "resources"],
                 include_mutable=True,
             ),
-            namespace_path=self.namespace_path,
+            namespace_path=self.namespace_context.path,
         )
         if not runs:
             raise RecapNotFoundError(f"ProcessRun with id {process_run_id} not found")

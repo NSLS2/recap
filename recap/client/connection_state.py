@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from pathlib import Path
 from threading import RLock
 from typing import Any
 
@@ -6,7 +7,7 @@ from recap.client.backend import ClientBackend
 
 
 @dataclass
-class _ConnectionState:
+class ConnectionState:
     backend: ClientBackend
     engine: Any = None
     sessionmaker: Any = None
@@ -14,6 +15,7 @@ class _ConnectionState:
     closed: bool = False
     _engine_disposed: bool = field(default=False, init=False, repr=False)
     _lifecycle_lock: RLock = field(default_factory=RLock, init=False, repr=False)
+    database_path: Path | None = None
 
     def acquire(self) -> None:
         with self._lifecycle_lock:

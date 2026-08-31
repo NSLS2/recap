@@ -1,7 +1,6 @@
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from tempfile import gettempdir
-from threading import RLock
 from typing import Any, Literal, overload
 from uuid import UUID, uuid4
 
@@ -9,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from recap.client.backend import ClientBackend
-from recap.client.connection_state import _ConnectionState
+from recap.client.connection_state import ConnectionState
 from recap.client.permissions import ActorPermissions
 from recap.commands.context import build_local_command_context
 from recap.commands.errors import CommandValidationError
@@ -49,19 +48,35 @@ class RecapClient:
 
     """
 
-    def __init__(self, namespace: str | None = None):
+    @overload
+    def __init__(self, connection_state: ConnectionState, *, namespace_path: str): ...
+
+    @overload
+    def __init__(
+        self, connection_state: ConnectionState, *, namespace_context: NamespaceContext
+    ): ...
+
+    def __init__(
+        self,
+        connection_state: ConnectionState,
+        *,
+        namespace_path: str | None = None,
+        namespace_context: NamespaceContext | None = None,
+    ):
         """Initialise common empty client state.
 
         Use :meth:`from_sqlite` for local clients and :meth:`from_url` for
         remote clients. These are the canonical initialization methods.
         """
-        self._namespace_context: NamespaceContext | None = None
-        self.namespace_path = self._normalize_namespace(namespace)
-        self._connection_state: _ConnectionState | None = None
+        namespace_path = namespace_path if namespace_path is not None else ""
+        self.connection_state: ConnectionState = connection_state
+        self.connection_state.acquire()
+        self._namespace_context: NamespaceContext = (
+            namespace_context
+            if namespace_context is not None
+            else self._resolve_namespace_context(namespace_path)
+        )
         self._closed = False
-        self._close_lock = RLock()
-        self.database_path: Path | None = None
-        self.backend: ClientBackend | None = None
 
     def __repr__(self) -> str:
         return f"RecapClient({self.namespace_path=})"
@@ -70,28 +85,20 @@ class RecapClient:
     def _normalize_namespace(namespace: str | None) -> str:
         return (namespace or "").strip("/")
 
+    @property
+    def namespace_path(self):
+        return self._namespace_context.path
+
     def close(self):
         """Close the underlying session and engine to release SQLite locks.
 
         Safe to call multiple times.  After calling this method the client
         should no longer be used.
         """
-        with self._close_lock:
-            if getattr(self, "_closed", False):
-                return
-            state = getattr(self, "_connection_state", None)
-            if state is not None:
-                state.release()
-                self._connection_state = None
-                self._closed = True
-                return
-            backend = getattr(self, "backend", None)
-            if backend is not None:
-                backend.close()
-            engine = getattr(self, "engine", None)
-            if engine:
-                engine.dispose()
-            self._closed = True
+        if self._closed:
+            return
+        self.connection_state.release()
+        self._closed = True
 
     def __enter__(self):
         """Return the client itself when used as a context manager."""
@@ -106,21 +113,19 @@ class RecapClient:
         cls,
         backend: ClientBackend,
         *,
-        namespace: str | None = None,
+        namespace: str,
         engine: Any = None,
         sessionmaker_: Any = None,
+        database_path: Path | None = None,
     ) -> "RecapClient":
         """Construct a RecapClient with composed backend capabilities."""
-        state = _ConnectionState(
+        state = ConnectionState(
             backend=backend,
             engine=engine,
             sessionmaker=sessionmaker_,
+            database_path=database_path,
         )
-        instance = cls(namespace=namespace)
-        state.acquire()
-        instance._connection_state = state
-        instance.database_path = None
-        instance.backend = backend
+        instance = cls(connection_state=state, namespace_path=namespace)
         return instance
 
     @classmethod
@@ -187,66 +192,42 @@ class RecapClient:
 
     def permissions(self) -> ActorPermissions:
         """Return typed effective permissions for this client's namespace."""
-        if self.backend is None or self.backend.permissions is None:
+        if self.connection_state.backend.permissions is None:
             raise RuntimeError("Permissions API requires a remote read backend")
-        return self.backend.permissions.permissions(self.namespace_path)
+        return self.connection_state.backend.permissions.permissions(
+            self.namespace_path
+        )
 
     def namespace(self, path: str) -> "RecapClient":
         """Return a view scoped to an additive namespace path."""
+        if not isinstance(path, str):
+            raise TypeError("namespace path must be a string")
         child_path = self._normalize_namespace(path)
         namespace_path = "/".join(
             part for part in (self.namespace_path, child_path) if part
         )
-        state = self._connection_state
-        if state is None:
-            raise RuntimeError("Connection state is not available")
-
-        view = self.__class__(namespace=namespace_path)
-        state.acquire()
-        view._connection_state = state
-        view.database_path = self.database_path
-        view.backend = self.backend
-        if hasattr(self, "engine"):
-            view.engine = self.engine
-        if hasattr(self, "_sessionmaker"):
-            view._sessionmaker = self._sessionmaker
+        child_namespace_context = self._resolve_namespace_context(namespace_path)
+        view = self.__class__(
+            connection_state=self.connection_state,
+            namespace_context=child_namespace_context,
+        )
         return view
 
     def __getitem__(self, namespace: str) -> "RecapClient":
-        if not isinstance(namespace, str):
-            raise TypeError("namespace key must be a string")
         return self.namespace(namespace)
 
     def _resolve_namespace_context(
-        self,
-        namespace_path: str | None = None,
-        *,
-        context: NamespaceContext | None = None,
+        self, namespace_path: str | None
     ) -> NamespaceContext:
-        requested_path = self._normalize_namespace(
-            self.namespace_path if namespace_path is None else namespace_path
+        namespace_path = (
+            namespace_path if namespace_path is not None else self.namespace_path
         )
-        if namespace_path is not None and requested_path != self.namespace_path:
-            raise ValueError("Namespace path must match client view scope")
-        if context is not None:
-            if namespace_path is not None and context.path != requested_path:
-                raise ValueError("Namespace context must match namespace path")
-            return context
-        if self._namespace_context is not None:
-            if (
-                namespace_path is not None
-                and self._namespace_context.path != requested_path
-            ):
-                raise ValueError("Namespace context must match client view scope")
-            return self._namespace_context
-        if self.backend is not None and self.backend.context_resolver is not None:
-            try:
-                return self.backend.context_resolver.get_namespace_context(requested_path)
-            except LookupError as exc:
-                if not requested_path:
-                    raise ValueError("Namespace context is required") from exc
-                raise
-        return NamespaceContext(id=UUID(int=0), path=requested_path)
+        try:
+            return self.connection_state.backend.context_resolver.get_namespace_context(
+                namespace_path
+            )
+        except LookupError:
+            raise
 
     @staticmethod
     def _command_context():
@@ -319,10 +300,8 @@ class RecapClient:
             namespace=namespace,
             engine=engine,
             sessionmaker_=sessionmaker_,
+            database_path=target_path,
         )
-        client.engine = engine
-        client._sessionmaker = sessionmaker_
-        client.database_path = target_path
         return client
 
     @overload
@@ -378,10 +357,6 @@ class RecapClient:
             RuntimeError: If the backend has not been initialised.
             TypeError: On invalid argument combinations.
         """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        namespace_context = self._resolve_namespace_context()
-
         if process_template_id is not None:
             if args or kwargs:
                 raise TypeError(
@@ -391,10 +366,9 @@ class RecapClient:
             return ProcessTemplateBuilder(
                 name=None,
                 version=None,
-                backend=self.backend,
+                backend=self.connection_state.backend,
                 command_context=self._command_context(),
-                namespace_id=namespace_context.id,
-                namespace_path=namespace_context.path,
+                namespace_context=self.namespace_context,
                 process_template_id=process_template_id,
                 on_existing=on_existing,
             )
@@ -415,10 +389,9 @@ class RecapClient:
         return ProcessTemplateBuilder(
             name=name,
             version=version,
-            backend=self.backend,
+            backend=self.connection_state.backend,
             command_context=self._command_context(),
-            namespace_id=namespace_context.id,
-            namespace_path=namespace_context.path,
+            namespace_context=self.namespace_context,
             on_existing=on_existing,
         )
 
@@ -476,10 +449,6 @@ class RecapClient:
             ValueError: If no namespace context is set when creating a new run.
             TypeError: On invalid argument combinations.
         """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        namespace_context = self._resolve_namespace_context()
-
         if process_run_id is not None:
             if args or kwargs:
                 raise TypeError(
@@ -490,11 +459,10 @@ class RecapClient:
                 name=None,
                 description=None,
                 template_name=None,
-                namespace_id=namespace_context.id,
-                backend=self.backend,
+                backend=self.connection_state.backend,
+                namespace_context=self.namespace_context,
                 command_context=self._command_context(),
                 version=None,
-                namespace_path=namespace_context.path,
                 process_run_id=process_run_id,
                 on_existing=on_existing,
             )
@@ -523,11 +491,10 @@ class RecapClient:
             name=name,
             description=description,
             template_name=template_name,
-            namespace_id=namespace_context.id,
-            backend=self.backend,
+            namespace_context=self.namespace_context,
+            backend=self.connection_state.backend,
             command_context=self._command_context(),
             version=version,
-            namespace_path=namespace_context.path,
             on_existing=on_existing,
         )
 
@@ -593,9 +560,6 @@ class RecapClient:
             TypeError: If *type_names* is a string, contains non-string
                 items, or if conflicting arguments are provided.
         """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        namespace_context = self._resolve_namespace_context()
         if resource_template_id is not None:
             if name is not None or type_names is not None:
                 raise TypeError(
@@ -606,10 +570,9 @@ class RecapClient:
                 name=None,
                 type_names=None,
                 version=version,
-                backend=self.backend,
+                backend=self.connection_state.backend,
                 command_context=self._command_context(),
-                namespace_id=namespace_context.id,
-                namespace_path=namespace_context.path,
+                namespace_context=self.namespace_context,
                 resource_template_id=resource_template_id,
                 on_existing=on_existing,
             )
@@ -625,10 +588,9 @@ class RecapClient:
             name=name,
             type_names=type_names,
             version=version,
-            backend=self.backend,
+            backend=self.connection_state.backend,
             command_context=self._command_context(),
-            namespace_id=namespace_context.id,
-            namespace_path=namespace_context.path,
+            namespace_context=self.namespace_context,
             on_existing=on_existing,
         )
 
@@ -698,9 +660,6 @@ class RecapClient:
             RuntimeError: If the backend has not been initialised.
             TypeError: On invalid argument combinations.
         """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        namespace_context = self._resolve_namespace_context()
         if resource_id is not None:
             if args or kwargs:
                 raise TypeError(
@@ -716,25 +675,23 @@ class RecapClient:
                 name=None,
                 template_name=None,
                 template_version="1.0",
-                backend=self.backend,
+                backend=self.connection_state.backend,
                 command_context=self._command_context(),
-                namespace_id=namespace_context.id,
-                namespace_path=namespace_context.path,
+                namespace_context=self.namespace_context,
                 resource_id=resource_id,
                 on_existing=on_existing,
             )
 
-        resolved_parent = self._resolve_parent(parent, namespace_context)
+        resolved_parent = self._resolve_parent(parent, self.namespace_context)
         name, template_name, template_version = self._parse_resource_args(args, kwargs)
 
         return ResourceBuilder(
             name=name,
             template_name=template_name,
             template_version=template_version,
-            backend=self.backend,
+            backend=self.connection_state.backend,
             command_context=self._command_context(),
-            namespace_id=namespace_context.id,
-            namespace_path=namespace_context.path,
+            namespace_context=self.namespace_context,
             on_existing=on_existing,
             parent=resolved_parent,
         )
@@ -750,7 +707,7 @@ class RecapClient:
         if isinstance(parent, UUID):
             from recap.dsl.query import QuerySpec
 
-            results = self.backend.query(
+            results = self.connection_state.backend.query(
                 ResourceSchema,
                 QuerySpec(
                     filters={"id": parent},
@@ -760,7 +717,9 @@ class RecapClient:
                 namespace_path=(namespace_context or self._namespace_context).path,
             )
             if not results:
-                raise RecapNotFoundError(f"Parent resource with id {parent!r} not found")
+                raise RecapNotFoundError(
+                    f"Parent resource with id {parent!r} not found"
+                )
             return results[0]
         return parent
 
@@ -828,17 +787,13 @@ class RecapClient:
             A :class:`~recap.schemas.resource.ResourceSchema` representing
             the persisted resource, including any auto-created children.
         """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        namespace_context = self._resolve_namespace_context()
         return ResourceBuilder.create(
             name=name,
             template_name=template_name,
             template_version=template_version,
-            backend=self.backend,
-            namespace_path=namespace_context.path,
+            backend=self.connection_state.backend,
+            namespace_context=self.namespace_context,
             command_context=self._command_context(),
-            namespace_id=namespace_context.id,
             parent=parent,
             on_existing=on_existing,
         )
@@ -853,15 +808,12 @@ class RecapClient:
         Destination namespace comes from this client's scope. Returns persisted
         full schema and propagates backend validation or authorization errors.
         """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        namespace_context = self._resolve_namespace_context()
         copy_options = options or ResourceCopyOptions()
         try:
-            return self.backend._execute(
+            return self.connection_state.backend._execute(
                 CopyResource(
                     source_resource_id=source_resource_id,
-                    destination_namespace_path=namespace_context.path,
+                    destination_namespace_path=self.namespace_context.path,
                     options=copy_options,
                 ),
                 self._command_context(),
@@ -875,10 +827,10 @@ class RecapClient:
         options: ProcessRunCopyOptions | None = None,
     ) -> ProcessRunSchema:
         """Copy process run into current namespace with fresh aggregate identity."""
-        if self.backend is None:
+        if self.connection_state.backend is None:
             raise RuntimeError("Backend not initialized")
         namespace_context = self._resolve_namespace_context()
-        return self.backend._execute(
+        return self.connection_state.backend._execute(
             CopyProcessRun(
                 source_process_run_id=source_process_run_id,
                 destination_namespace_path=namespace_context.path,
@@ -944,13 +896,10 @@ class RecapClient:
             :class:`~recap.schemas.resource.ResourceSchema` when
             ``expand=True``.
         """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        namespace_context = self._resolve_namespace_context()
         from recap.dsl.query import QuerySpec
 
         schema = ResourceSchema if expand else ResourceRef
-        results = self.backend.query(
+        results = self.connection_state.backend.query(
             schema,
             QuerySpec(
                 filters={
@@ -962,7 +911,7 @@ class RecapClient:
                 load_mode="eager" if expand else None,
                 include_mutable=True,
             ),
-            namespace_path=namespace_context.path,
+            namespace_path=self.namespace_context.path,
         )
         if not results:
             raise RecapNotFoundError(f"Resource {name!r} not found")
@@ -973,16 +922,19 @@ class RecapClient:
         return results[0]
 
     def create_namespace(
-        self, path: str, metadata: dict[str, Any] | None = None
+        self, path: str, metadata: dict[str, Any] | None = None, as_current=False
     ) -> NamespaceContext:
         """Create a namespace and make it active for subsequent writes."""
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        result = self.backend._execute(
+        result = self.connection_state.backend._execute(
             CreateNamespace(path=path, metadata=metadata), self._command_context()
         )
-        self._namespace_context = self._as_namespace_context(result)
+        if as_current:
+            self._namespace_context = self._as_namespace_context(result)
         return self._namespace_context
+
+    def get_namespace(self, path: str) -> NamespaceContext:
+        """Get existing namespace information"""
+        return self._resolve_namespace_context(path)
 
     def update_namespace(
         self,
@@ -993,7 +945,7 @@ class RecapClient:
         status: LifecycleStatus | None = None,
     ) -> NamespaceContext:
         """Apply namespace metadata/status update and make result active."""
-        if self.backend is None:
+        if self.connection_state.backend is None:
             raise RuntimeError("Backend not initialized")
         context = self._namespace_context
         if namespace_id is None:
@@ -1005,7 +957,7 @@ class RecapClient:
                 raise ValueError("Expected namespace revision is required")
             expected_revision = context.revision
 
-        result = self.backend._execute(
+        result = self.connection_state.backend._execute(
             UpdateNamespace(
                 namespace_id=namespace_id,
                 expected_revision=expected_revision,
@@ -1025,14 +977,12 @@ class RecapClient:
         return NamespaceContext.model_validate(result)
 
     @property
-    def namespace_context(self) -> NamespaceContext | None:
+    def namespace_context(self) -> NamespaceContext:
         return self._namespace_context
 
     def list_namespaces(self) -> list[str]:
         """Return relative names of direct child namespaces."""
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        return self.backend.list_child_namespaces(self.namespace_path)
+        return self.connection_state.backend.list_child_namespaces(self.namespace_path)
 
     def query_maker(
         self,
@@ -1040,12 +990,9 @@ class RecapClient:
         on_unloaded: str = "warn",
     ):
         """Return a query DSL scoped to this client's namespace."""
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        context = self._resolve_namespace_context()
 
         return QueryDSL(
-            self.backend,
-            context=context,
+            self.connection_state.backend,
+            context=self.namespace_context,
             on_unloaded=on_unloaded,
         )

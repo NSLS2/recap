@@ -18,7 +18,7 @@ def test_resource_template_guard_prevents_updates_when_resources_exist(client):
     with client.build_resource("Res1", "GuardedTemplate") as rb:
         resource = rb.resource
 
-    with client._sessionmaker.begin() as session:
+    with client.connection_state.sessionmaker.begin() as session:
         tmpl_model = (
             session.query(ResourceTemplate)
             .filter_by(name="GuardedTemplate", version="1.0")
@@ -30,7 +30,7 @@ def test_resource_template_guard_prevents_updates_when_resources_exist(client):
         session.rollback()
 
     # Ensure the original resource is still intact
-    with client._sessionmaker.begin() as session:
+    with client.connection_state.sessionmaker.begin() as session:
         fetched = session.query(Resource).filter_by(name=resource.name).one()
         template_name = fetched.template.name
     assert fetched is not None
@@ -58,7 +58,7 @@ def test_process_template_guard_prevents_updates_when_runs_exist(client):
     with client.build_process_run("RunGuard", "desc", "PT Guard", "1.0") as prb:
         prb.assign_resource("slot1", resource)
 
-    with client._sessionmaker.begin() as session:
+    with client.connection_state.sessionmaker.begin() as session:
         pt_model = (
             session.query(ProcessTemplate)
             .filter_by(name="PT Guard", version="1.0")
@@ -69,8 +69,12 @@ def test_process_template_guard_prevents_updates_when_runs_exist(client):
             session.flush()
         session.rollback()
 
-    with client._sessionmaker.begin() as session:
-        unchanged = session.query(ProcessTemplate).filter_by(name="PT Guard", version="1.0").one()
+    with client.connection_state.sessionmaker.begin() as session:
+        unchanged = (
+            session.query(ProcessTemplate)
+            .filter_by(name="PT Guard", version="1.0")
+            .one()
+        )
     assert unchanged.name == "PT Guard"
 
 
@@ -81,12 +85,8 @@ def test_active_process_template_rejects_nested_attribute_mutation(client):
             "temperature", "float", "C", 20
         ).close_group().close_step()
 
-    with client._sessionmaker.begin() as session:
-        template = (
-            session.query(ProcessTemplate)
-            .filter_by(name="Nested PT")
-            .one()
-        )
+    with client.connection_state.sessionmaker.begin() as session:
+        template = session.query(ProcessTemplate).filter_by(name="Nested PT").one()
         template.status = LifecycleStatus.ACTIVE
         session.flush()
         attribute = (
@@ -110,15 +110,9 @@ def test_active_resource_template_rejects_nested_child_mutation(client):
     ) as builder:
         builder.add_child("well", ["sample"]).close_child()
 
-    with client._sessionmaker.begin() as session:
-        root = (
-            session.query(ResourceTemplate)
-            .filter_by(name="Nested RT")
-            .one()
-        )
-        child = (
-            session.query(ResourceTemplate).filter_by(name="well").one()
-        )
+    with client.connection_state.sessionmaker.begin() as session:
+        root = session.query(ResourceTemplate).filter_by(name="Nested RT").one()
+        child = session.query(ResourceTemplate).filter_by(name="well").one()
         root.status = LifecycleStatus.ACTIVE
         session.flush()
         child.name = "changed"
@@ -135,14 +129,8 @@ def test_first_resource_instance_activates_template(client):
         pass
     client.create_resource("instance", "Instance RT")
 
-    with client._sessionmaker.begin() as session:
-        template = (
-            session.query(ResourceTemplate)
-            .filter_by(name="Instance RT")
-            .one()
-        )
-        resource = (
-            session.query(Resource).filter_by(name="instance").one()
-        )
+    with client.connection_state.sessionmaker.begin() as session:
+        template = session.query(ResourceTemplate).filter_by(name="Instance RT").one()
+        resource = session.query(Resource).filter_by(name="instance").one()
         assert template.status is LifecycleStatus.ACTIVE
         assert resource.status is LifecycleStatus.MUTABLE

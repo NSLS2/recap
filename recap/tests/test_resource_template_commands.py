@@ -23,6 +23,7 @@ from recap.db.base import Base
 from recap.db.namespace import Namespace
 from recap.db.resource import ResourceTemplate
 from recap.dsl.drafts import AttributeDraft, AttributeGroupDraft, ResourceTemplateDraft
+from recap.schemas.namespace import NamespaceContext
 
 
 class AuditCollector:
@@ -232,6 +233,9 @@ class RecordingBackend:
     def list_child_namespaces(self, parent_path):
         return []
 
+    def get_namespace_context(self, path):
+        return NamespaceContext(id=uuid4(), path=path)
+
     def create_namespace(self, path, metadata, context):
         return None
 
@@ -250,12 +254,12 @@ def test_builder_submits_one_complete_command():
         writer=backend,
         namespaces=backend,
         namespace_writer=backend,
+        context_resolver=backend,
     )
     context = object()
     with ResourceTemplateBuilder(
         backend=client_backend,
-        namespace_id=uuid4(),
-        namespace_path="beamline/amx",
+        namespace_context=NamespaceContext(id=uuid4(), path="beamline/amx"),
         name="plate",
         type_names=["plate"],
         version="1.0",
@@ -283,13 +287,13 @@ def test_builder_submits_nothing_when_body_raises():
         writer=backend,
         namespaces=backend,
         namespace_writer=backend,
+        context_resolver=backend,
     )
     with (
         pytest.raises(RuntimeError, match="stop"),
         ResourceTemplateBuilder(
             backend=client_backend,
-            namespace_id=uuid4(),
-            namespace_path="beamline/amx",
+            namespace_context=NamespaceContext(id=uuid4(), path="beamline/amx"),
             name="plate",
             type_names=["plate"],
             version="1.0",

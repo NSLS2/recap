@@ -5,26 +5,31 @@ import pytest
 
 def _resource_client(client):
     client.create_namespace("builder-identity")
-    return client.namespace("builder-identity")
+    return client
 
 
 def _make_resource(client):
     scoped = _resource_client(client)
-    with scoped.build_resource_template(name="IdentityRT", type_names=["container"]) as template:
-        template.prop_group("details").add_attribute("serial", "str", "", "old").close_group()
+    with scoped.build_resource_template(
+        name="IdentityRT", type_names=["container"]
+    ) as template:
+        template.prop_group("details").add_attribute(
+            "serial", "str", "", "old"
+        ).close_group()
     return scoped, scoped.create_resource("identity-resource", "IdentityRT")
 
 
 def test_resource_exception_discards_detached_draft(client):
     scoped, resource = _make_resource(client)
 
-    with pytest.raises(RuntimeError, match="abort"), scoped.build_resource(
-        resource_id=resource.id
-    ) as builder:
-            draft = builder.get_model()
-            draft.name = "unsaved"
-            builder.set_model(draft)
-            raise RuntimeError("abort")
+    with (
+        pytest.raises(RuntimeError, match="abort"),
+        scoped.build_resource(resource_id=resource.id) as builder,
+    ):
+        draft = builder.get_model()
+        draft.name = "unsaved"
+        builder.set_model(draft)
+        raise RuntimeError("abort")
 
     assert resource.name == "identity-resource"
 

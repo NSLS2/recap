@@ -1,6 +1,6 @@
 from pathlib import Path
 from tempfile import gettempdir
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -8,6 +8,7 @@ from recap.client.backend import ClientBackend
 from recap.client.base_client import RecapClient
 from recap.commands.models import CreateNamespace, UpdateNamespace
 from recap.dsl.query import QuerySpec
+from recap.exceptions import RecapNotFoundError
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceRef, ResourceSchema
@@ -49,6 +50,11 @@ class _NamespaceWriter:
         return (namespace_id, expected_revision, metadata, status, context, etag)
 
 
+class _NamespaceContextResolver:
+    def get_namespace_context(self, path: str):
+        return NamespaceContext(id=uuid4(), path=path)
+
+
 class _ClosableFake:
     def __init__(self):
         self.close_count = 0
@@ -83,6 +89,7 @@ def _backend_values():
         "writer": _Writer(),
         "namespaces": _Namespaces(),
         "namespace_writer": _NamespaceWriter(),
+        "context_resolver": _NamespaceContextResolver(),
     }
 
 
@@ -105,6 +112,7 @@ def test_client_backend_delegates_query_count_and_execute():
         writer=writer,
         namespaces=_Namespaces(),
         namespace_writer=_NamespaceWriter(),
+        context_resolver=_NamespaceContextResolver(),
     )
     spec = QuerySpec()
 
@@ -121,6 +129,7 @@ def test_client_backend_delegates_namespace_operations():
         writer=_Writer(),
         namespaces=namespaces,
         namespace_writer=namespace_writer,
+        context_resolver=_NamespaceContextResolver(),
     )
 
     assert backend.list_child_namespaces("scope") == ["scope"]
@@ -142,6 +151,7 @@ def test_client_backend_closes_shared_capability_once():
         writer=shared,
         namespaces=shared,
         namespace_writer=shared,
+        context_resolver=_NamespaceContextResolver(),
     )
 
     backend.close()
@@ -156,12 +166,14 @@ def test_client_close_delegates_to_backend():
         writer=shared,
         namespaces=shared,
         namespace_writer=shared,
+        context_resolver=_NamespaceContextResolver(),
     )
-    client = RecapClient._from_backends(backend)
+    client = RecapClient._from_backends(backend, namespace="")
 
     client.close()
 
     assert shared.close_count == 1
+
 
 def test_client_backend_is_frozen():
     backend = ClientBackend(**_backend_values())
@@ -170,7 +182,9 @@ def test_client_backend_is_frozen():
         backend.reader = _Reader()
 
 
-@pytest.mark.parametrize("field", ["reader", "writer", "namespaces", "namespace_writer"])
+@pytest.mark.parametrize(
+    "field", ["reader", "writer", "namespaces", "namespace_writer"]
+)
 def test_client_backend_rejects_missing_required_capability(field):
     values = _backend_values()
     values[field] = object()
@@ -187,12 +201,13 @@ def test_client_stores_typed_reader_and_writer():
         writer=writer,
         namespaces=_Namespaces(),
         namespace_writer=_NamespaceWriter(),
+        context_resolver=_NamespaceContextResolver(),
     )
-    client = RecapClient._from_backends(backend)
+    client = RecapClient._from_backends(backend, namespace="")
 
-    assert client.backend is backend
-    assert client.backend.reader is reader
-    assert client.backend.writer is writer
+    assert client.connection_state.backend is backend
+    assert client.connection_state.backend.reader is reader
+    assert client.connection_state.backend.writer is writer
     client.close()
 
 
@@ -205,6 +220,7 @@ def test_copy_resource_routes_through_write_capability():
         writer=writer,
         namespaces=_Namespaces(),
         namespace_writer=_NamespaceWriter(),
+        context_resolver=_NamespaceContextResolver(),
     )
     client = RecapClient._from_backends(backend, namespace="scope")
 
@@ -235,10 +251,11 @@ def test_namespace_operations_route_through_command_writer():
         writer=writer,
         namespaces=_Namespaces(),
         namespace_writer=namespace_writer,
+        context_resolver=_NamespaceContextResolver(),
     )
-    client = RecapClient._from_backends(backend)
+    client = RecapClient._from_backends(backend, namespace="")
 
-    assert client.create_namespace("scope") == context
+    assert client.create_namespace("scope", as_current=True) == context
     assert client.update_namespace() == context
     assert isinstance(writer.commands[0][0], CreateNamespace)
     assert isinstance(writer.commands[1][0], UpdateNamespace)
@@ -247,12 +264,11 @@ def test_namespace_operations_route_through_command_writer():
 
 def test_build_process_run_resolves_root_namespace(tmp_path):
     with RecapClient.from_sqlite(tmp_path / "recap.db") as client:
-        client._namespace_context = None
         with client.build_process_template("tmpl", "1.0") as template:
             template.get_model()
 
         with client.build_process_run("run", "desc", "tmpl", "1.0") as builder:
-            assert builder.namespace_path == ""
+            assert builder.namespace_context.path == ""
 
 
 def test_from_sqlite_returns_root_recap_client(tmp_path):
@@ -263,11 +279,9 @@ def test_from_sqlite_returns_root_recap_client(tmp_path):
     client.close()
 
 
-def test_factories_accept_initial_namespace_scope(tmp_path):
-    local = RecapClient.from_sqlite(tmp_path / "recap.db", namespace="beamline/amx")
-
-    assert local.namespace_path == "beamline/amx"
-    local.close()
+def test_factories_dont_accept_nonexistent_namespace_scope(tmp_path):
+    with pytest.raises(RecapNotFoundError):
+        RecapClient.from_sqlite(tmp_path / "recap.db", namespace="beamline/amx")
 
 
 def test_build_resource_template_validates_type_names(apply_migrations, db_path):
@@ -282,14 +296,17 @@ def test_build_resource_template_validates_type_names(apply_migrations, db_path)
 
 def test_from_sqlite_uses_temp_dir():
     with RecapClient.from_sqlite() as client:
-        assert client.database_path is not None
-        assert client.database_path.exists()
-        assert client.database_path.parent == Path(gettempdir())
+        assert client.connection_state.database_path is not None
+        assert client.connection_state.database_path.exists()
+        assert client.connection_state.database_path.parent == Path(gettempdir())
         client.create_namespace("name")
         assert isinstance(client.namespace_context, NamespaceContext)
 
-    if client.database_path and client.database_path.exists():
-        client.database_path.unlink()
+    if (
+        client.connection_state.database_path
+        and client.connection_state.database_path.exists()
+    ):
+        client.connection_state.database_path.unlink()
 
 
 def test_from_sqlite_reuses_existing_file(tmp_path):
@@ -300,12 +317,14 @@ def test_from_sqlite_reuses_existing_file(tmp_path):
 
     with RecapClient.from_sqlite(db_file) as client:
         scoped = client.namespace("name")
-        assert scoped.namespace_path == "name"
+        assert scoped.namespace_context.path == "name"
         scoped.close()
-        assert client.database_path == db_file
+        assert client.connection_state.database_path == db_file
 
 
-def test_blank_database_copies_are_isolated(blank_database_path, copy_database, tmp_path):
+def test_blank_database_copies_are_isolated(
+    blank_database_path, copy_database, tmp_path
+):
     first_path = copy_database(blank_database_path, tmp_path / "first.db")
     second_path = copy_database(blank_database_path, tmp_path / "second.db")
 
@@ -313,18 +332,23 @@ def test_blank_database_copies_are_isolated(blank_database_path, copy_database, 
         first.create_namespace("only-first")
 
     with RecapClient.from_sqlite(second_path) as second:
-        assert second.backend.namespaces.list_child_namespace_paths("") == []
+        assert (
+            second.connection_state.backend.namespaces.list_child_namespace_paths("")
+            == []
+        )
 
 
 def test_client_fixture_starts_at_root_scope(client):
     assert client.namespace_path == ""
-    assert client.backend.namespaces.list_child_namespace_paths("") == []
+    assert (
+        client.connection_state.backend.namespaces.list_child_namespace_paths("") == []
+    )
 
 
 def test_query_maker_uses_client_namespace_scope(apply_migrations, db_path):
     with RecapClient.from_sqlite(db_path) as client:
         context = client.create_namespace("query-name")
-        qm = client.namespace(context.path).query_maker()
+        qm = client.query_maker()
 
         assert qm.process_runs()._context == context
         assert qm.resources()._context == context
@@ -335,13 +359,13 @@ def test_query_maker_uses_client_namespace_scope(apply_migrations, db_path):
 def test_query_maker_receives_client_backend_reader_facade(client):
     query = client.query_maker()
 
-    assert query.backend is client.backend
+    assert query.backend is client.connection_state.backend
 
 
 def test_query_maker_uses_scoped_namespace_view(apply_migrations, db_path):
     with RecapClient.from_sqlite(db_path) as client:
         other = client.create_namespace("client-other")
-        qm = client.namespace(other.path).query_maker()
+        qm = client.query_maker()
 
         assert qm.process_runs()._context == other
         assert qm.resources()._context == other
@@ -349,20 +373,21 @@ def test_query_maker_uses_scoped_namespace_view(apply_migrations, db_path):
 
 def test_query_maker_can_set_on_unloaded_policy(apply_migrations, db_path):
     with RecapClient.from_sqlite(db_path) as client:
-        context = client.create_namespace("name-policy")
-        qm = client.namespace(context.path).query_maker(on_unloaded="raise")
+        client.create_namespace("name-policy")
+        qm = client.query_maker(on_unloaded="raise")
         assert qm.process_runs()._spec.on_unloaded == "raise"
 
 
 def test_root_query_maker_uses_root_scope_remotely(monkeypatch):
     from recap.adapter.rest import RESTAdapter
 
-    client = RecapClient.from_url("http://recap.test", api_key="secret")
     monkeypatch.setattr(
         RESTAdapter,
         "get_namespace_context",
         lambda _adapter, path: NamespaceContext(id=UUID(int=0), path=path, metadata={}),
     )
+
+    client = RecapClient.from_url("http://recap.test", api_key="secret")
 
     query = client.query_maker().resources()
 
@@ -371,10 +396,17 @@ def test_root_query_maker_uses_root_scope_remotely(monkeypatch):
 
 
 def test_scoped_permissions_use_client_namespace(monkeypatch):
+    from recap.adapter.rest import RESTAdapter
+
+    monkeypatch.setattr(
+        RESTAdapter,
+        "get_namespace_context",
+        lambda _adapter, path: NamespaceContext(id=UUID(int=0), path=path, metadata={}),
+    )
     client = RecapClient.from_url("http://recap.test", api_key="secret")
     calls = []
     monkeypatch.setattr(
-        client.backend.reader,
+        client.connection_state.backend.reader,
         "permissions",
         lambda path: calls.append(path) or object(),
     )
@@ -388,6 +420,12 @@ def test_scoped_permissions_use_client_namespace(monkeypatch):
 def test_remote_get_resource_uses_read_backend(monkeypatch):
     from recap.adapter.rest import RESTAdapter
 
+    monkeypatch.setattr(
+        RESTAdapter,
+        "get_namespace_context",
+        lambda _adapter, path: NamespaceContext(id=UUID(int=0), path=path, metadata={}),
+    )
+
     client = RecapClient.from_url("http://recap.test", api_key="secret")
     expected = ResourceRef.model_construct(id=UUID(int=1), name="sample")
     calls = []
@@ -396,14 +434,9 @@ def test_remote_get_resource_uses_read_backend(monkeypatch):
         calls.append((args, kwargs))
         return [expected]
 
-    monkeypatch.setattr(client.backend.reader, "query", read)
+    monkeypatch.setattr(client.connection_state.backend.reader, "query", read)
     monkeypatch.setattr(
-        RESTAdapter,
-        "get_namespace_context",
-        lambda _adapter, path: NamespaceContext(id=UUID(int=0), path=path, metadata={}),
-    )
-    monkeypatch.setattr(
-        client.backend.writer,
+        client.connection_state.backend.writer,
         "get_resource",
         lambda *args, **kwargs: pytest.fail("remote read used REST backend"),
         raising=False,
@@ -423,7 +456,7 @@ def test_get_resource_uses_supported_relationship_filters(monkeypatch, tmp_path)
         calls.append((args, kwargs))
         return [expected]
 
-    monkeypatch.setattr(client.backend.reader, "query", read)
+    monkeypatch.setattr(client.connection_state.backend.reader, "query", read)
 
     assert client.get_resource("sample", "Sample", "2.0") is expected
     assert calls[0][0][1].filters == {
@@ -440,7 +473,9 @@ def test_get_resource_rejects_multiple_matches(monkeypatch, tmp_path):
         ResourceRef.model_construct(id=UUID(int=5), name="sample"),
         ResourceRef.model_construct(id=UUID(int=6), name="sample"),
     ]
-    monkeypatch.setattr(client.backend.reader, "query", lambda *args, **kwargs: matches)
+    monkeypatch.setattr(
+        client.connection_state.backend.reader, "query", lambda *args, **kwargs: matches
+    )
 
     with pytest.raises(ValueError, match="[Mm]ultiple resources"):
         client.get_resource("sample", "Sample")
@@ -448,6 +483,13 @@ def test_get_resource_rejects_multiple_matches(monkeypatch, tmp_path):
 
 
 def test_uuid_parent_resolution_uses_read_backend(monkeypatch):
+    from recap.adapter.rest import RESTAdapter
+
+    monkeypatch.setattr(
+        RESTAdapter,
+        "get_namespace_context",
+        lambda _adapter, path: NamespaceContext(id=UUID(int=0), path=path, metadata={}),
+    )
     client = RecapClient.from_url("http://recap.test", api_key="secret")
     expected = ResourceRef.model_construct(id=UUID(int=2), name="parent")
     calls = []
@@ -456,12 +498,21 @@ def test_uuid_parent_resolution_uses_read_backend(monkeypatch):
         calls.append((args, kwargs))
         return [expected]
 
-    monkeypatch.setattr(client.backend.reader, "query", read)
+    monkeypatch.setattr(client.connection_state.backend.reader, "query", read)
 
-    assert client._resolve_parent(expected.id, NamespaceContext(
-        id=UUID(int=3), path="beamline", metadata={},
-        status=LifecycleStatus.ACTIVE, revision=1
-    )) is expected
+    assert (
+        client._resolve_parent(
+            expected.id,
+            NamespaceContext(
+                id=UUID(int=3),
+                path="beamline",
+                metadata={},
+                status=LifecycleStatus.ACTIVE,
+                revision=1,
+            ),
+        )
+        is expected
+    )
     assert calls[0][1]["namespace_path"] == "beamline"
     client.close()
 
@@ -469,27 +520,17 @@ def test_uuid_parent_resolution_uses_read_backend(monkeypatch):
 def test_scoped_remote_query_uses_view_namespace(monkeypatch):
     from recap.adapter.rest import RESTAdapter
 
-    client = RecapClient.from_url("http://recap.test", api_key="secret")
-    scoped = client.namespace("beamline/amx")
     monkeypatch.setattr(
         RESTAdapter,
         "get_namespace_context",
         lambda _adapter, path: NamespaceContext(id=UUID(int=0), path=path, metadata={}),
     )
 
+    client = RecapClient.from_url("http://recap.test", api_key="secret")
+    scoped = client.namespace("beamline/amx")
+
     query = scoped.query_maker().resources()
 
     assert query._context.path == "beamline/amx"
     scoped.close()
     client.close()
-
-
-def test_builder_namespace_argument_is_rejected(tmp_path):
-    with (RecapClient.from_sqlite(
-        tmp_path / "recap.db", namespace="beamline/amx"
-    ) as client, pytest.raises(TypeError)):
-            client.build_resource_template(
-                name="Sample",
-                type_names=["sample"],
-                namespace_path="beamline/other",
-            )

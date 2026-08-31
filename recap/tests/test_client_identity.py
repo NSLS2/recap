@@ -4,13 +4,13 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from threading import RLock
 from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from recap.client.backend import ClientBackend
 from recap.client.base_client import RecapClient
-from recap.client.connection_state import _ConnectionState
+from recap.client.connection_state import ConnectionState
 from recap.client.identity import IdentityMap, IdentityMergeConflict
 from recap.schemas.attribute import AttributeValueSchema
 from recap.schemas.namespace import NamespaceContext, NamespaceRef, NamespaceSchema
@@ -99,7 +99,9 @@ def test_namespace_schema_promotes_ref_without_changing_identity():
     assert promoted is canonical
     assert isinstance(canonical, NamespaceSchema)
     assert canonical.revision == 1
-    assert identity_map.intern(NamespaceRef(id=namespace_id, path="sample")) is canonical
+    assert (
+        identity_map.intern(NamespaceRef(id=namespace_id, path="sample")) is canonical
+    )
 
 
 def test_concurrent_intern_returns_one_namespace_canonical():
@@ -182,10 +184,20 @@ def test_equal_revision_cyclic_template_relations_do_not_recurse():
         parent.parent = None
         child.parent = parent
         parent.set_loaded_relations(
-            {"parent": True, "children": True, "types": True, "attribute_group_templates": True}
+            {
+                "parent": True,
+                "children": True,
+                "types": True,
+                "attribute_group_templates": True,
+            }
         )
         child.set_loaded_relations(
-            {"parent": True, "children": True, "types": True, "attribute_group_templates": True}
+            {
+                "parent": True,
+                "children": True,
+                "types": True,
+                "attribute_group_templates": True,
+            }
         )
         return parent
 
@@ -402,7 +414,12 @@ def test_equal_revision_resource_template_projection_upgrade_does_not_conflict()
         attribute_group_templates=[],
     )
     full_template.set_loaded_relations(
-        {"parent": False, "children": True, "types": True, "attribute_group_templates": True}
+        {
+            "parent": False,
+            "children": True,
+            "types": True,
+            "attribute_group_templates": True,
+        }
     )
     first = _resource(resource_id)
     first.namespace_id = namespace_id
@@ -581,7 +598,9 @@ def test_repeated_loaded_value_array_reload_does_not_duplicate_items():
     assert [item.id for item in canonical.template.types] == [type_id]
 
 
-@pytest.mark.parametrize("model", [ParameterSchema, ResourceSlotSchema, ResourceTypeSchema])
+@pytest.mark.parametrize(
+    "model", [ParameterSchema, ResourceSlotSchema, ResourceTypeSchema]
+)
 def test_value_models_are_not_interned(model):
     identity_map = IdentityMap()
     model_id = uuid4()
@@ -605,7 +624,9 @@ def test_models_without_revision_merge_only_when_modified_date_is_newer():
         revision=None,
         metadata={},
     )
-    newer = old.model_copy(update={"path": "new", "modified_date": datetime(2026, 1, 3)})
+    newer = old.model_copy(
+        update={"path": "new", "modified_date": datetime(2026, 1, 3)}
+    )
 
     canonical = identity_map.intern(old)
     identity_map.intern(newer)
@@ -630,7 +651,7 @@ def test_connection_state_clears_identity_map_once_on_final_close():
     object.__setattr__(backend, "identity_map", IdentityMap())
     for name in ("reader", "writer", "namespaces", "namespace_writer"):
         object.__setattr__(backend, name, object())
-    state = _ConnectionState(backend=backend)
+    state = ConnectionState(backend=backend)
     state.acquire()
     state.acquire()
     resource_id = uuid4()
@@ -675,7 +696,9 @@ def test_concurrent_direct_backend_close_closes_capabilities_and_identity_once()
     object.__setattr__(backend, "identity_map", identity_map)
     capabilities = [Closable() for _ in range(4)]
     for name, capability in zip(
-        ("reader", "writer", "namespaces", "namespace_writer"), capabilities, strict=True
+        ("reader", "writer", "namespaces", "namespace_writer"),
+        capabilities,
+        strict=True,
     ):
         object.__setattr__(backend, name, capability)
     resource_id = uuid4()
@@ -785,7 +808,7 @@ def test_backend_close_retries_failed_capability_without_repeating_successful_cl
     assert failing.close_calls == 3
 
 
-def test_recap_client_close_retries_failed_shared_cleanup():
+def test_recap_client_close_retries_failed_shared_cleanup(monkeypatch):
     class FlakyIdentityMap(IdentityMap):
         def __init__(self):
             super().__init__()
@@ -797,36 +820,52 @@ def test_recap_client_close_retries_failed_shared_cleanup():
                 raise RuntimeError("clear failed")
             super().clear()
 
+    class _ContextResolver:
+        def get_namespace_context(self, path=""):
+            pass
+
     backend = ClientBackend.__new__(ClientBackend)
     object.__setattr__(backend, "_close_lock", RLock())
     object.__setattr__(backend, "_closed", False)
     object.__setattr__(backend, "identity_map", FlakyIdentityMap())
+    object.__setattr__(backend, "context_resolver", _ContextResolver())
+    monkeypatch.setattr(
+        backend.context_resolver,
+        "get_namespace_context",
+        lambda _adapter, path="": NamespaceContext(
+            id=UUID(int=0), path=path, metadata={}
+        ),
+    )
     for name in ("reader", "writer", "namespaces", "namespace_writer"):
         object.__setattr__(backend, name, object())
 
-    client = RecapClient._from_backends(backend)
-    state = client._connection_state
+    client = RecapClient._from_backends(backend, namespace="")
+    state = client.connection_state
 
     with pytest.raises(RuntimeError, match="clear failed"):
         client.close()
 
     assert client._closed is False
-    assert client._connection_state is state
+    assert client.connection_state is state
     assert state.closed is False
 
     client.close()
 
     assert client._closed is True
-    assert client._connection_state is None
+    assert client.connection_state is state
     assert state.closed is True
     assert backend.identity_map.clear_calls == 2
 
 
 def test_root_and_scoped_clients_share_identity_map(tmp_path):
     root = RecapClient.from_sqlite(tmp_path / "identity.db")
+    root.create_namespace("beamline")
     scoped = root.namespace("beamline")
 
-    assert scoped.backend.identity_map is root.backend.identity_map
+    assert (
+        scoped.connection_state.backend.identity_map
+        is root.connection_state.backend.identity_map
+    )
 
     scoped.close()
     root.close()
@@ -834,9 +873,14 @@ def test_root_and_scoped_clients_share_identity_map(tmp_path):
 
 def test_final_root_close_clears_shared_identity_map_once(tmp_path):
     root = RecapClient.from_sqlite(tmp_path / "identity.db")
+    root.create_namespace("beamline")
     scoped = root.namespace("beamline")
 
-    with patch.object(root.backend.identity_map, "clear", wraps=root.backend.identity_map.clear) as clear:
+    with patch.object(
+        root.connection_state.backend.identity_map,
+        "clear",
+        wraps=root.connection_state.backend.identity_map.clear,
+    ) as clear:
         scoped.close()
         root.close()
 
@@ -847,7 +891,10 @@ def test_separate_backend_connections_have_separate_identity_maps():
     first = RecapClient.from_sqlite()
     second = RecapClient.from_sqlite()
 
-    assert first.backend.identity_map is not second.backend.identity_map
+    assert (
+        first.connection_state.backend.identity_map
+        is not second.connection_state.backend.identity_map
+    )
 
     first.close()
     second.close()

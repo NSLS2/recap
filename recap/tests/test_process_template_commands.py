@@ -32,6 +32,7 @@ from recap.dsl.drafts import (
 )
 from recap.dsl.process_builder import ProcessTemplateBuilder
 from recap.lifecycle import LifecycleStatus
+from recap.schemas.namespace import NamespaceContext
 from recap.utils.general import Direction
 
 
@@ -261,6 +262,9 @@ class RecordingCommandBackend:
     def list_child_namespaces(self, parent_path):
         return []
 
+    def get_namespace_context(self, path):
+        return NamespaceContext(id=uuid4(), path=path)
+
     def create_namespace(self, path, metadata, context):
         return None
 
@@ -277,6 +281,7 @@ def process_client_backend(existing=None):
         writer=adapter,
         namespaces=adapter,
         namespace_writer=adapter,
+        context_resolver=adapter,
     ), adapter
 
 
@@ -286,8 +291,7 @@ def test_builder_submits_one_complete_command_on_success(command_setup):
 
     with ProcessTemplateBuilder(
         backend=client_backend,
-        namespace_id=namespace.id,
-        namespace_path=namespace.path,
+        namespace_context=NamespaceContext(id=namespace.id, path=namespace.path),
         name="builder-template",
         version="1.0",
         command_context=context,
@@ -317,8 +321,7 @@ def test_builder_submits_nothing_when_context_body_raises(command_setup):
         pytest.raises(RuntimeError, match="stop"),
         ProcessTemplateBuilder(
             backend=client_backend,
-            namespace_id=namespace.id,
-            namespace_path=namespace.path,
+            namespace_context=NamespaceContext(id=namespace.id, path=namespace.path),
             name="builder-template",
             version="1.0",
             command_context=context,
@@ -340,8 +343,7 @@ def test_builder_serializes_existing_template_into_one_update(command_setup):
 
     with ProcessTemplateBuilder(
         backend=client_backend,
-        namespace_id=namespace.id,
-        namespace_path=namespace.path,
+        namespace_context=NamespaceContext(id=namespace.id, path=namespace.path),
         name=None,
         version=None,
         process_template_id=existing.id,

@@ -4,6 +4,7 @@ from uuid import uuid4
 from recap.client.backend import ClientBackend
 from recap.commands.models import UpdateProcessTemplate
 from recap.dsl.process_builder import ProcessTemplateBuilder
+from recap.schemas.namespace import NamespaceContext
 
 
 class RecordingBackend:
@@ -38,6 +39,9 @@ class RecordingBackend:
     ):
         return None
 
+    def get_namespace_context(self, path: str) -> NamespaceContext:
+        return NamespaceContext(id=uuid4(), path=path)
+
 
 def client_backend(adapter):
     return ClientBackend(
@@ -45,6 +49,7 @@ def client_backend(adapter):
         writer=adapter,
         namespaces=adapter,
         namespace_writer=adapter,
+        context_resolver=adapter,
     )
 
 
@@ -60,10 +65,10 @@ def test_repeated_save_uses_latest_revision():
         step_templates={},
     )
     backend = RecordingBackend(existing)
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     builder = ProcessTemplateBuilder(
         backend=client_backend(backend),
-        namespace_id=uuid4(),
-        namespace_path="beamline/amx",
+        namespace_context=namespace_context,
         name=None,
         version=None,
         process_template_id=existing.id,
@@ -93,10 +98,10 @@ def test_clean_repeated_save_does_not_duplicate_command():
         step_templates={},
     )
     backend = RecordingBackend(existing)
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     builder = ProcessTemplateBuilder(
         backend=client_backend(backend),
-        namespace_id=uuid4(),
-        namespace_path="beamline/amx",
+        namespace_context=namespace_context,
         name=None,
         version=None,
         process_template_id=existing.id,

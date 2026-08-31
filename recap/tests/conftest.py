@@ -23,7 +23,9 @@ from recap.utils.general import Direction
 from recap.utils.migrations import apply_migrations as upgrade_database
 
 
-def _loopback_request(app_client: TestClient, request: httpx2.Request) -> httpx2.Response:
+def _loopback_request(
+    app_client: TestClient, request: httpx2.Request
+) -> httpx2.Response:
     response = app_client.request(
         request.method,
         str(request.url),
@@ -107,7 +109,7 @@ def rest_loopback_client(tmp_path):
             context_resolver=rest,
             permissions=rest,
         )
-        with RecapClient._from_backends(backend) as client:
+        with RecapClient._from_backends(backend, namespace="") as client:
             yield client
 
 
@@ -168,7 +170,9 @@ def _seed_query_namespace(client: RecapClient) -> str:
 
 def _seed_query_resource_tree(client: RecapClient) -> str:
     namespace_path = client.create_namespace("test/resource-tree").path
-    with client.build_resource_template(name="Parent", type_names=["container"]) as builder:
+    with client.build_resource_template(
+        name="Parent", type_names=["container"]
+    ) as builder:
         builder.close_child()
     with client.build_resource_template(name="Child", type_names=["sample"]) as builder:
         builder.close_child()
@@ -181,9 +185,9 @@ def _seed_query_resource_tree(client: RecapClient) -> str:
 
 
 def _seed_parity_graph(client: RecapClient) -> str:
-    namespace_path = client.create_namespace(
-        "test/mx-parity", metadata={"beamline": "AMX"}
-    ).path
+    namespace_path = "test/mx-parity"
+    client.create_namespace(namespace_path, metadata={"beamline": "AMX"})
+    client = client.namespace(namespace_path)
     with client.build_resource_template(
         name="Parity plate", type_names=["container", "plate"]
     ) as template:
@@ -275,7 +279,9 @@ def read_client_pair(integration_seed_path, copy_database, tmp_path):
             RecapClient.from_sqlite(db_path, namespace="test/mx-parity")
         )
         api_key = "parity-secret"
-        app_client = stack.enter_context(TestClient(create_app(db_path, api_key=api_key)))
+        app_client = stack.enter_context(
+            TestClient(create_app(db_path, api_key=api_key))
+        )
 
         transport = HTTPTransport(api_key)
         transport._client.close()

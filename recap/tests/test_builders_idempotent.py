@@ -18,7 +18,9 @@ from recap.utils.general import Direction
 
 def test_resource_builder_reuse_same_resource(client):
     # create once
-    with client.build_resource_template(name="RB-Template", type_names=["container"]) as rtb:
+    with client.build_resource_template(
+        name="RB-Template", type_names=["container"]
+    ) as rtb:
         rtb.prop_group("details").add_attribute(
             "serial", "str", "", "abc"
         ).close_group()
@@ -33,7 +35,9 @@ def test_resource_builder_reuse_same_resource(client):
     assert refreshed.properties.details.values.serial.value == "xyz2"
 
 
-def test_reused_resource_clean_exit_skips_update_and_mutation_updates(client, monkeypatch):
+def test_reused_resource_clean_exit_skips_update_and_mutation_updates(
+    client, monkeypatch
+):
     with client.build_resource_template(
         name="RB-Command-Template", type_names=["container"]
     ) as template:
@@ -42,13 +46,15 @@ def test_reused_resource_clean_exit_skips_update_and_mutation_updates(client, mo
         ).close_group()
     client.create_resource("RB-Command-1", "RB-Command-Template")
     commands = []
-    execute = client.backend.writer.execute
+    execute = client.connection_state.backend.writer.execute
 
     def recording_execute(command, context):
         commands.append(command)
         return execute(command, context)
 
-    monkeypatch.setattr(client.backend.writer, "execute", recording_execute)
+    monkeypatch.setattr(
+        client.connection_state.backend.writer, "execute", recording_execute
+    )
     with client.build_resource(
         "RB-Command-1", "RB-Command-Template", on_existing="silent"
     ):
@@ -81,22 +87,24 @@ def test_resource_template_builder_reuse_same_template(client):
 def test_reused_resource_template_clean_exit_skips_update_and_mutation_updates(
     client, monkeypatch
 ):
-    with client.build_resource_template(name="RTB-Command", type_names=["container"]) as created:
+    with client.build_resource_template(
+        name="RTB-Command", type_names=["container"]
+    ) as created:
         pass
     existing = created.template
     commands = []
-    execute = client.backend.writer.execute
+    execute = client.connection_state.backend.writer.execute
 
     def recording_execute(command, context):
         commands.append(command)
         return execute(command, context)
 
-    monkeypatch.setattr(client.backend.writer, "execute", recording_execute)
+    monkeypatch.setattr(
+        client.connection_state.backend.writer, "execute", recording_execute
+    )
     with client.build_resource_template(resource_template_id=existing.id):
         pass
-    assert not any(
-        isinstance(command, UpdateResourceTemplate) for command in commands
-    )
+    assert not any(isinstance(command, UpdateResourceTemplate) for command in commands)
 
     commands.clear()
     with client.build_resource_template(resource_template_id=existing.id) as builder:

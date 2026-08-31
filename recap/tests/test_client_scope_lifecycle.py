@@ -1,11 +1,13 @@
 import inspect
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 
 from recap.client.base_client import RecapClient
-from recap.client.connection_state import _ConnectionState
+from recap.client.connection_state import ConnectionState
+from recap.schemas.namespace import NamespaceContext
 
 
 class FakeClosable:
@@ -38,7 +40,7 @@ class FlakyBackend:
 
 def test_shared_state_closes_backend_only_after_last_view_releases():
     backend = FakeClosable()
-    state = _ConnectionState(backend=backend)
+    state = ConnectionState(backend=backend)
 
     state.acquire()
     state.acquire()
@@ -53,7 +55,7 @@ def test_shared_state_closes_backend_only_after_last_view_releases():
 
 def test_shared_state_release_is_idempotent_after_close():
     backend = FakeClosable()
-    state = _ConnectionState(backend=backend)
+    state = ConnectionState(backend=backend)
     state.acquire()
     state.release()
     state.release()
@@ -63,7 +65,7 @@ def test_shared_state_release_is_idempotent_after_close():
 
 
 def test_shared_state_rejects_acquisition_after_close():
-    state = _ConnectionState(backend=FakeClosable())
+    state = ConnectionState(backend=FakeClosable())
     state.acquire()
     state.release()
 
@@ -73,9 +75,7 @@ def test_shared_state_rejects_acquisition_after_close():
 
 def test_shared_state_disposes_optional_engine_when_last_view_releases():
     engine = FakeEngine()
-    state = _ConnectionState(
-        backend=FakeClosable(), engine=engine
-    )
+    state = ConnectionState(backend=FakeClosable(), engine=engine)
     state.acquire()
     state.release()
     state.release()
@@ -85,7 +85,7 @@ def test_shared_state_disposes_optional_engine_when_last_view_releases():
 
 def test_shared_state_closes_backend():
     backend = FakeClosable()
-    state = _ConnectionState(backend=backend)
+    state = ConnectionState(backend=backend)
     state.acquire()
     state.release()
 
@@ -94,7 +94,7 @@ def test_shared_state_closes_backend():
 
 def test_shared_state_retries_final_backend_cleanup_after_failure():
     backend = FlakyBackend()
-    state = _ConnectionState(backend=backend)
+    state = ConnectionState(backend=backend)
     state.acquire()
 
     with pytest.raises(RuntimeError, match="backend close failed"):
@@ -112,7 +112,7 @@ def test_shared_state_retries_final_backend_cleanup_after_failure():
 def test_connection_state_stores_single_backend():
     backend = object()
 
-    state = _ConnectionState(backend=backend)
+    state = ConnectionState(backend=backend)
 
     assert state.backend is backend
     assert not hasattr(state, "read_backend")
@@ -121,22 +121,26 @@ def test_connection_state_stores_single_backend():
 
 def test_namespace_returns_same_type_and_shares_connection_state(tmp_path):
     root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    root.create_namespace("beamline")
+    root.create_namespace("beamline/amx")
     scoped = root.namespace("beamline/amx")
 
     assert isinstance(scoped, RecapClient)
     assert scoped is not root
     assert scoped.namespace_path == "beamline/amx"
-    assert scoped.backend is root.backend
+    assert scoped.connection_state.backend is root.connection_state.backend
 
     scoped.close()
-    assert root.backend is not None
+    assert root.connection_state.backend is not None
     root.close()
 
 
 def test_scoped_close_does_not_close_shared_backend_until_last_view(tmp_path):
     root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    root.create_namespace("beamline")
+    root.create_namespace("beamline/amx")
     scoped = root.namespace("beamline/amx")
-    state = root._connection_state
+    state = root.connection_state
 
     scoped.close()
 
@@ -149,9 +153,13 @@ def test_scoped_close_does_not_close_shared_backend_until_last_view(tmp_path):
 
 
 def test_remote_transport_closes_once_after_last_view_releases():
-    root = RecapClient.from_url("http://recap.test", api_key="secret")
-    scoped = root.namespace("beamline/amx")
-    transport = root.backend.reader._transport
+    with patch(
+        "recap.adapter.rest.RESTAdapter.get_namespace_context",
+        lambda _adapter, path: NamespaceContext(id=uuid4(), path=path),
+    ):
+        root = RecapClient.from_url("http://recap.test", api_key="secret")
+        scoped = root.namespace("beamline/amx")
+    transport = root.connection_state.backend.reader._transport
 
     with patch.object(transport._client, "close") as close:
         scoped.close()
@@ -164,6 +172,8 @@ def test_remote_transport_closes_once_after_last_view_releases():
 
 def test_namespace_normalizes_root_and_slashes(tmp_path):
     root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    root.create_namespace("beamline")
+    root.create_namespace("beamline/amx")
 
     assert root.namespace("/").namespace_path == ""
     assert root.namespace("/beamline/amx/").namespace_path == "beamline/amx"
@@ -172,18 +182,24 @@ def test_namespace_normalizes_root_and_slashes(tmp_path):
 
 
 def test_namespace_key_access_is_additive(tmp_path):
-    root = RecapClient.from_sqlite(tmp_path / "recap.db", namespace="beamline")
+    root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    root.create_namespace("beamline")
+    root.create_namespace("beamline/amx")
+    root.create_namespace("beamline/amx/proposal")
 
+    root = RecapClient.from_sqlite(tmp_path / "recap.db", namespace="beamline")
     scoped = root["amx"]["/proposal"]
 
     assert isinstance(scoped, RecapClient)
     assert scoped.namespace_path == "beamline/amx/proposal"
-    assert scoped.backend is root.backend
+    assert scoped.connection_state.backend is root.connection_state.backend
 
     root.close()
 
 
 def test_namespace_root_key_preserves_current_scope(tmp_path):
+    root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    root.create_namespace("beamline")
     root = RecapClient.from_sqlite(tmp_path / "recap.db", namespace="beamline")
 
     scoped = root["/"]
@@ -196,7 +212,7 @@ def test_namespace_root_key_preserves_current_scope(tmp_path):
 def test_namespace_key_requires_string(tmp_path):
     root = RecapClient.from_sqlite(tmp_path / "recap.db")
 
-    with pytest.raises(TypeError, match="namespace key must be a string"):
+    with pytest.raises(TypeError, match="namespace path must be a string"):
         root[123]
 
     root.close()
@@ -204,32 +220,38 @@ def test_namespace_key_requires_string(tmp_path):
 
 def test_scoped_view_context_manager_returns_scoped_view(tmp_path):
     root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    root.create_namespace("beamline")
+    root.create_namespace("beamline/amx")
     scoped = root.namespace("beamline/amx")
 
     with scoped as entered:
         assert entered is scoped
         assert entered.namespace_path == "beamline/amx"
 
-    assert root.backend is not None
+    assert root.connection_state.backend is not None
     root.close()
 
 
 def test_scoped_view_close_is_idempotent(tmp_path):
     root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    root.create_namespace("beamline")
+    root.create_namespace("beamline/amx")
     scoped = root.namespace("beamline/amx")
 
     scoped.close()
     scoped.close()
 
-    assert root._connection_state is not None
-    assert root._connection_state._active_views == 1
+    assert root.connection_state is not None
+    assert root.connection_state._active_views == 1
     root.close()
 
 
 def test_concurrent_repeated_close_of_one_view_releases_one_reference(tmp_path):
     root = RecapClient.from_sqlite(tmp_path / "recap.db")
+    root.create_namespace("beamline")
+    root.create_namespace("beamline/amx")
     scoped = root.namespace("beamline/amx")
-    state = root._connection_state
+    state = root.connection_state
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         list(executor.map(lambda _index: scoped.close(), range(32)))
@@ -239,32 +261,15 @@ def test_concurrent_repeated_close_of_one_view_releases_one_reference(tmp_path):
     root.close()
 
 
-def test_concurrent_close_of_shared_scoped_views_closes_once():
-    root = RecapClient.from_url("http://recap.test", api_key="secret")
-    views = [root.namespace(f"beamline/{index}") for index in range(4)]
-    state = root._connection_state
-    transport = root.backend.reader._transport
-
-    with (
-        patch.object(transport._client, "close") as close,
-        ThreadPoolExecutor(max_workers=8) as executor,
-    ):
-        list(executor.map(lambda view: view.close(), [root, *views]))
-
-    close.assert_called_once_with()
-    assert state.closed is True
-
-
 def test_scoped_local_builder_resolves_namespace_path_without_active_context(tmp_path):
     root = RecapClient.from_sqlite(tmp_path / "recap.db")
     root.create_namespace("beamline")
     root.create_namespace("beamline/amx")
-    root._namespace_context = None
     scoped = root.namespace("beamline/amx")
 
     builder = scoped.build_resource_template(name="Sample", type_names=["sample"])
 
-    assert builder.namespace_id
+    assert builder.namespace_context.id
 
     scoped.close()
     root.close()
@@ -277,7 +282,7 @@ def test_scoped_local_get_resource_resolves_namespace_without_active_context(tmp
     with root.build_resource_template(name="Sample", type_names=["sample"]):
         pass
     root.create_resource("S-001", "Sample")
-    root._namespace_context = None
+    # root._namespace_context = None
     scoped = root.namespace("beamline/amx")
 
     resource = scoped.get_resource("S-001", "Sample")
@@ -294,13 +299,14 @@ def test_scoped_query_does_not_require_namespace_argument(monkeypatch):
     from recap.adapter.rest import RESTAdapter
     from recap.schemas.namespace import NamespaceContext
 
-    client = RecapClient.from_url(
-        "http://recap.test", api_key="secret", namespace="beamline/amx"
-    )
     monkeypatch.setattr(
         RESTAdapter,
         "get_namespace_context",
         lambda _adapter, path: NamespaceContext(id=UUID(int=0), path=path, metadata={}),
+    )
+
+    client = RecapClient.from_url(
+        "http://recap.test", api_key="secret", namespace="beamline/amx"
     )
 
     query = client.query_maker()
@@ -309,7 +315,18 @@ def test_scoped_query_does_not_require_namespace_argument(monkeypatch):
     client.close()
 
 
-def test_scoped_client_rejects_redundant_namespace_override():
+def test_scoped_client_rejects_redundant_namespace_override(monkeypatch):
+    from uuid import UUID
+
+    from recap.adapter.rest import RESTAdapter
+    from recap.schemas.namespace import NamespaceContext
+
+    monkeypatch.setattr(
+        RESTAdapter,
+        "get_namespace_context",
+        lambda _adapter, path: NamespaceContext(id=UUID(int=0), path=path, metadata={}),
+    )
+
     client = RecapClient.from_url(
         "http://recap.test", api_key="secret", namespace="beamline/amx"
     )

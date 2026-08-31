@@ -9,6 +9,7 @@ def test_process_run_builder_command_mode_submits_namespace_owned_command():
 
     from recap.client.backend import ClientBackend
     from recap.dsl.process_builder import ProcessRunBuilder
+    from recap.schemas.namespace import NamespaceContext
 
     class Backend:
         def query(self, schema, *args, **kwargs):
@@ -30,9 +31,19 @@ def test_process_run_builder_command_mode_submits_namespace_owned_command():
             return None
 
         def update_namespace(
-            self, namespace_id, expected_revision, metadata, status, context, *, etag=None
+            self,
+            namespace_id,
+            expected_revision,
+            metadata,
+            status,
+            context,
+            *,
+            etag=None,
         ):
             return None
+
+        def get_namespace_context(self, path):
+            return NamespaceContext(id=uuid4(), path=path)
 
     template_id = uuid4()
     adapter = Backend()
@@ -41,6 +52,7 @@ def test_process_run_builder_command_mode_submits_namespace_owned_command():
         writer=adapter,
         namespaces=adapter,
         namespace_writer=adapter,
+        context_resolver=adapter,
     )
     builder = ProcessRunBuilder(
         "run",
@@ -49,7 +61,7 @@ def test_process_run_builder_command_mode_submits_namespace_owned_command():
         uuid4(),
         template_id=template_id,
         backend=backend,
-        namespace_path="beamline/amx",
+        namespace_context=NamespaceContext(id=uuid4(), path="beamline/amx"),
         command_context=object(),
     )
     builder.save()

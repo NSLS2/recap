@@ -25,12 +25,16 @@ class ClientBackend:
     writer: WriteBackend
     namespaces: NamespaceCatalog
     namespace_writer: NamespaceWriter
-    context_resolver: NamespaceContextResolver | None = None
+    context_resolver: NamespaceContextResolver
     permissions: PermissionsBackend | None = None
     identity_map: IdentityMap = field(default_factory=IdentityMap)
-    _close_lock: RLock = field(default_factory=RLock, init=False, repr=False, compare=False)
+    _close_lock: RLock = field(
+        default_factory=RLock, init=False, repr=False, compare=False
+    )
     _closed: bool = field(default=False, init=False, repr=False, compare=False)
-    _identity_cleared: bool = field(default=False, init=False, repr=False, compare=False)
+    _identity_cleared: bool = field(
+        default=False, init=False, repr=False, compare=False
+    )
     _closed_capabilities: set[int] = field(
         default_factory=set, init=False, repr=False, compare=False
     )
@@ -41,7 +45,9 @@ class ClientBackend:
         require_capability(self.namespaces, NamespaceCatalog, "namespaces")
         require_capability(self.namespace_writer, NamespaceWriter, "namespace_writer")
         if self.context_resolver is not None:
-            require_capability(self.context_resolver, NamespaceContextResolver, "context_resolver")
+            require_capability(
+                self.context_resolver, NamespaceContextResolver, "context_resolver"
+            )
         if self.permissions is not None:
             require_capability(self.permissions, PermissionsBackend, "permissions")
 
@@ -54,7 +60,9 @@ class ClientBackend:
             result.append(self.identity_map.intern(item))
         return result
 
-    def count(self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str) -> int:
+    def count(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ) -> int:
         return self.reader.count(schema, spec, namespace_path=namespace_path)
 
     def list_child_namespaces(self, parent_path: str) -> list[str]:

@@ -9,6 +9,7 @@ from recap.commands.models import (
 )
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
+from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
 from recap.tests.transport_factories import minimal_resource, resource_template
 from recap.utils.general import Direction
@@ -46,11 +47,7 @@ class RecordingBackend:
             and args
             and args[0].filters.get("id") is not None
         ):
-            return [
-                SimpleNamespace(
-                    id=uuid4(), step_templates={}, resource_slots=[]
-                )
-            ]
+            return [SimpleNamespace(id=uuid4(), step_templates={}, resource_slots=[])]
         return []
 
     def execute(self, command, context):
@@ -120,15 +117,22 @@ class RecordingNamespaceWriter:
         return None
 
 
+class RecordingNamspaceContextResolver:
+    def get_namespace_context(self, path):
+        return NamespaceContext(id=uuid4(), path=path)
+
+
 def resource_backend():
     reader = RecordingReader()
     writer = RecordingWriter()
+    context_resolver = RecordingNamspaceContextResolver()
     return (
         ClientBackend(
             reader=reader,
             writer=writer,
             namespaces=RecordingNamespaces(),
             namespace_writer=RecordingNamespaceWriter(),
+            context_resolver=context_resolver,
         ),
         reader,
         writer,
@@ -137,12 +141,14 @@ def resource_backend():
 
 def process_backend(adapter=None):
     adapter = adapter or RecordingBackend()
+    context_resolver = RecordingNamspaceContextResolver()
     return (
         ClientBackend(
             reader=adapter,
             writer=adapter,
             namespaces=adapter,
             namespace_writer=adapter,
+            context_resolver=context_resolver,
         ),
         adapter,
     )
@@ -151,10 +157,10 @@ def process_backend(adapter=None):
 def test_process_template_body_has_no_backend_mutation():
     client_backend, backend = process_backend()
     context = object()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     builder = ProcessTemplateBuilder(
         backend=client_backend,
-        namespace_id=uuid4(),
-        namespace_path="beamline/amx",
+        namespace_context=namespace_context,
         name="draft-template",
         version="1.0",
         command_context=context,
@@ -169,14 +175,14 @@ def test_process_template_body_has_no_backend_mutation():
 
 def test_process_run_exception_discards_draft():
     client_backend, backend = process_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     builder = ProcessRunBuilder(
         name="run",
         description="desc",
         template_name="template",
         version="1.0",
-        namespace_id=uuid4(),
+        namespace_context=namespace_context,
         backend=client_backend,
-        namespace_path="beamline/amx",
         template_id=uuid4(),
         command_context=object(),
     )
@@ -193,13 +199,13 @@ def test_process_run_exception_discards_draft():
 
 def test_process_builders_submit_one_command_on_clean_exit():
     client_backend, backend = process_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     context = object()
     with ProcessTemplateBuilder(
         backend=client_backend,
-        namespace_id=uuid4(),
-        namespace_path="beamline/amx",
         name="template",
         version="1.0",
+        namespace_context=namespace_context,
         command_context=context,
     ) as builder:
         builder.add_step("measure")
@@ -210,14 +216,14 @@ def test_process_builders_submit_one_command_on_clean_exit():
 
 def test_process_run_builder_submits_one_aggregate_command():
     client_backend, backend = process_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     builder = ProcessRunBuilder(
         name="run",
         description="desc",
         template_name="template",
         version="1.0",
-        namespace_id=uuid4(),
         backend=client_backend,
-        namespace_path="beamline/amx",
+        namespace_context=namespace_context,
         template_id=uuid4(),
         command_context=object(),
     )
@@ -231,12 +237,12 @@ def test_process_run_builder_submits_one_aggregate_command():
 
 def test_resource_builder_has_no_construction_side_effect_and_submits_once():
     client_backend, reader, writer = resource_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     builder = ResourceBuilder(
         name="resource",
         template_name="template",
         backend=client_backend,
-        namespace_id=uuid4(),
-        namespace_path="beamline/amx",
+        namespace_context=namespace_context,
         command_context=object(),
     )
 
@@ -250,12 +256,12 @@ def test_resource_builder_has_no_construction_side_effect_and_submits_once():
 
 def test_resource_builder_serializes_property_values_into_create_command():
     client_backend, _, writer = resource_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     builder = ResourceBuilder(
         name="resource-with-values",
         template_name="template",
         backend=client_backend,
-        namespace_id=uuid4(),
-        namespace_path="beamline/amx",
+        namespace_context=namespace_context,
         command_context=object(),
     )
     builder._resource = SimpleNamespace(
@@ -286,13 +292,13 @@ def test_resource_builder_serializes_property_values_into_create_command():
 
 def test_resource_child_builder_reuses_client_backend():
     client_backend, _, _ = resource_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     builder = ResourceBuilder(
         name="parent",
         template_name="template",
         backend=client_backend,
-        namespace_id=uuid4(),
-        namespace_path="beamline/amx",
         command_context=object(),
+        namespace_context=namespace_context,
     )
 
     child = builder.add_child("child", "template")
@@ -303,7 +309,7 @@ def test_resource_child_builder_reuses_client_backend():
 def test_client_routes_local_builders_through_commands_without_begin(client):
     client.create_namespace("command")
     scoped = client.namespace("command")
-    backend = scoped.backend
+    backend = scoped.connection_state.backend
 
     with scoped.build_process_template("command-pt", "1.0"):
         pass
@@ -331,12 +337,12 @@ def test_client_routes_local_builders_through_commands_without_begin(client):
 
 def test_resource_template_command_draft_accepts_attribute_group_builder():
     client_backend, _, writer = resource_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     builder = ResourceTemplateBuilder(
         name="template",
         type_names=["container"],
         backend=client_backend,
-        namespace_id=uuid4(),
-        namespace_path="beamline/amx",
+        namespace_context=namespace_context,
         command_context=object(),
     )
 
@@ -350,16 +356,17 @@ def test_resource_template_command_draft_accepts_attribute_group_builder():
 
 def test_process_run_command_builder_rejects_missing_template_and_run_ids():
     import pytest
+
     client_backend, backend = process_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
 
     with pytest.raises(ValueError, match="template_id or process_run_id"):
         ProcessRunBuilder(
             "run",
             "description",
             "template",
-            uuid4(),
             backend=client_backend,
-            namespace_path="beamline/amx",
+            namespace_context=namespace_context,
             command_context=object(),
         )
 
@@ -376,13 +383,13 @@ def test_process_run_command_save_tolerates_none_or_partial_result():
 
     for result in (None, object()):
         client_backend, backend = process_backend(ResultBackend(result))
+        namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
         builder = ProcessRunBuilder(
             "run",
             "description",
             "template",
-            uuid4(),
             backend=client_backend,
-            namespace_path="beamline/amx",
+            namespace_context=namespace_context,
             template_id=uuid4(),
             command_context=object(),
         )
@@ -409,18 +416,21 @@ def test_resource_reload_preloads_guarded_relations():
         writer=writer,
         namespaces=RecordingNamespaces(),
         namespace_writer=RecordingNamespaceWriter(),
+        context_resolver=RecordingNamspaceContextResolver(),
     )
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     ResourceBuilder(
         name=None,
         template_name=None,
         backend=backend,
-        namespace_id=uuid4(),
         resource_id=uuid4(),
-        namespace_path="beamline/amx",
+        namespace_context=namespace_context,
         command_context=object(),
     )
 
-    resource_query = next(spec for schema, spec, _ in reader.queries if schema is ResourceSchema)
+    resource_query = next(
+        spec for schema, spec, _ in reader.queries if schema is ResourceSchema
+    )
     assert resource_query.preloads == ["template", "parent", "children", "properties"]
 
 
@@ -440,14 +450,14 @@ def test_process_run_builder_loads_template_without_client_lookup():
             return []
 
     client_backend, backend = process_backend(QueryBackend())
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     builder = ProcessRunBuilder(
         "run",
         "description",
         "template",
-        uuid4(),
         backend=client_backend,
+        namespace_context=namespace_context,
         version="1.0",
-        namespace_path="beamline/amx",
         command_context=object(),
     )
 
@@ -456,13 +466,13 @@ def test_process_run_builder_loads_template_without_client_lookup():
 
 def test_process_run_command_save_handles_missing_template_steps():
     client_backend, backend = process_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     builder = ProcessRunBuilder(
         "run",
         "description",
         "template",
-        uuid4(),
         backend=client_backend,
-        namespace_path="beamline/amx",
+        namespace_context=namespace_context,
         template_id=uuid4(),
         command_context=object(),
     )

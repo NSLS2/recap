@@ -1,17 +1,29 @@
 from uuid import uuid4
 
+from recap.adapter.rest import RESTAdapter
 from recap.client import RecapClient
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
 
 
+def fake_namespace_context(path=""):
+    return NamespaceContext(
+        id=uuid4(),
+        path=path,
+        status=LifecycleStatus.ACTIVE,
+        revision=1,
+    )
+
+
 def test_namespace_returns_scoped_client_with_shared_backend(tmp_path):
     with RecapClient.from_sqlite(tmp_path / "recap.db") as client:
+        client.create_namespace("beamline")
+        client.create_namespace("beamline/amx")
         scoped = client.namespace("beamline/amx")
 
         assert isinstance(scoped, RecapClient)
         assert scoped.namespace_path == "beamline/amx"
-        assert scoped.backend is client.backend
+        assert scoped.connection_state.backend is client.connection_state.backend
 
         scoped.close()
 
@@ -19,10 +31,13 @@ def test_namespace_returns_scoped_client_with_shared_backend(tmp_path):
 def test_scoped_client_uses_scope_for_queries_and_namespace_creation(tmp_path):
     with RecapClient.from_sqlite(tmp_path / "recap.db") as client:
         client.create_namespace("beamline")
+        client.create_namespace("beamline/amx")
         scoped = client.namespace("beamline/amx")
-        context = scoped.create_namespace(scoped.namespace_path, {"beamline": "amx"})
+        context = scoped.create_namespace(
+            "beamline/amx/detector", {"beamline": "amx"}, as_current=True
+        )
 
-        assert context.path == "beamline/amx"
+        assert context.path == "beamline/amx/detector"
         assert scoped.query_maker().resources()._context == context
 
         scoped.close()
@@ -31,7 +46,7 @@ def test_scoped_client_uses_scope_for_queries_and_namespace_creation(tmp_path):
 def test_namespace_context_tracks_metadata_revision_and_local_etag(tmp_path):
     with RecapClient.from_sqlite(tmp_path / "recap.db") as client:
         context = client.create_namespace(
-            "beamline", {"owner": "amx", "beamline": "x"}
+            "beamline", {"owner": "amx", "beamline": "x"}, as_current=True
         )
 
         assert context.metadata == {"owner": "amx", "beamline": "x"}
@@ -50,6 +65,11 @@ def test_namespace_context_tracks_metadata_revision_and_local_etag(tmp_path):
 
 
 def test_remote_namespace_context_preserves_response_etag(monkeypatch):
+    monkeypatch.setattr(
+        RESTAdapter,
+        "get_namespace_context",
+        lambda self, path: fake_namespace_context(path),
+    )
     client = RecapClient.from_url("http://recap.test", api_key="secret")
     namespace_id = uuid4()
 
@@ -68,12 +88,12 @@ def test_remote_namespace_context_preserves_response_etag(monkeypatch):
         )
 
     monkeypatch.setattr(
-        client.backend.writer,
+        client.connection_state.backend.writer,
         "execute",
         execute,
     )
 
-    context = client.create_namespace("beamline", {"owner": "amx"})
+    context = client.create_namespace("beamline", {"owner": "amx"}, as_current=True)
 
     assert context.id == namespace_id
     assert context.metadata == {"owner": "amx"}
@@ -84,6 +104,11 @@ def test_remote_namespace_context_preserves_response_etag(monkeypatch):
 
 
 def test_remote_namespace_update_forwards_active_server_etag(monkeypatch):
+    monkeypatch.setattr(
+        RESTAdapter,
+        "get_namespace_context",
+        lambda self, path: fake_namespace_context(path),
+    )
     client = RecapClient.from_url("http://recap.test", api_key="secret")
     namespace_id = uuid4()
     client._namespace_context = NamespaceContext(
@@ -104,7 +129,7 @@ def test_remote_namespace_update_forwards_active_server_etag(monkeypatch):
             etag='W/"server-8"',
         )
 
-    monkeypatch.setattr(client.backend.writer, "execute", execute)
+    monkeypatch.setattr(client.connection_state.backend.writer, "execute", execute)
 
     client.update_namespace(metadata={"owner": "fmx"})
 

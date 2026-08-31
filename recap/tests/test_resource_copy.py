@@ -22,7 +22,7 @@ def _create_source(client):
     destination_full_path = "/".join(filter(None, (namespace_prefix, destination_path)))
     sibling_full_path = "/".join(filter(None, (namespace_prefix, sibling_path)))
     prefix_full_path = "/".join(filter(None, (namespace_prefix, prefix_path)))
-    with client._sessionmaker.begin() as session:
+    with client.connection_state.sessionmaker.begin() as session:
         source_namespace = Namespace(
             path=source_full_path, status=LifecycleStatus.ACTIVE
         )
@@ -94,8 +94,10 @@ def _create_source(client):
 
 
 def _load_tree(client, root_id):
-    with client._sessionmaker.begin() as session:
-        resources = client.backend.writer._load_resource_subtrees(session, [root_id])
+    with client.connection_state.sessionmaker.begin() as session:
+        resources = client.connection_state.backend.writer._load_resource_subtrees(
+            session, [root_id]
+        )
         by_id = {resource.id: resource for resource in resources}
         root = by_id[root_id]
         # Snapshot while ORM relationships remain attached to active session.
@@ -156,11 +158,14 @@ def test_copy_resource_isolates_mutable_values_and_applies_root_overrides(client
         ),
     )
 
-    with client._sessionmaker.begin() as session:
+    with client.connection_state.sessionmaker.begin() as session:
         clone = session.get(Resource, copied.id)
         copied_value = clone.properties["details"]._values["value"]
         copied_value.value = [*copied_value.value, 10]
-        copied_value.metadata_json["tags"] = [*copied_value.metadata_json["tags"], "copy"]
+        copied_value.metadata_json["tags"] = [
+            *copied_value.metadata_json["tags"],
+            "copy",
+        ]
 
     source = _load_tree(client, setup["source_id"])
     clone = _load_tree(client, copied.id)
@@ -173,7 +178,7 @@ def test_copy_resource_isolates_mutable_values_and_applies_root_overrides(client
 
 def test_builder_copy_on_write_preserves_value_metadata(client):
     setup = _create_source(client)
-    with client._sessionmaker.begin() as session:
+    with client.connection_state.sessionmaker.begin() as session:
         session.get(Resource, setup["source_id"]).activate()
     client = client.namespace(setup["source_namespace_path"])
 
@@ -239,7 +244,7 @@ def test_invalid_copy_changes_roll_back_source_activation_and_clone(client):
             ),
         )
 
-    with client._sessionmaker.begin() as session:
+    with client.connection_state.sessionmaker.begin() as session:
         source = session.get(Resource, setup["source_id"])
         clone_count = session.scalar(
             select(func.count())

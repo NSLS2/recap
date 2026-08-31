@@ -1,6 +1,11 @@
+from uuid import uuid4
+
 import pytest
 
+from recap.adapter.rest import RESTAdapter
 from recap.client import RecapClient
+from recap.lifecycle import LifecycleStatus
+from recap.schemas.namespace import NamespaceContext
 
 
 @pytest.fixture
@@ -22,14 +27,18 @@ def client_with_namespaces(tmp_path):
         pytest.param("beamline/amx", [], id="leaf"),
     ],
 )
-def test_list_namespaces_returns_direct_children(client_with_namespaces, scope, expected):
+def test_list_namespaces_returns_direct_children(
+    client_with_namespaces, scope, expected
+):
     client = client_with_namespaces if not scope else client_with_namespaces[scope]
     assert sorted(client.list_namespaces()) == expected
 
 
 def test_list_namespaces_nonexistent_returns_empty(tmp_path):
     with RecapClient.from_sqlite(tmp_path / "recap.db") as client:
-        result = client["nonexistent"].list_namespaces()
+        result = client.connection_state.backend.namespaces.list_child_namespaces(
+            "nonexistent"
+        )
         assert result == []
 
 
@@ -43,21 +52,45 @@ def test_list_namespaces_only_direct_children_not_grandchildren(client_with_name
 def test_local_backend_lists_full_direct_child_paths(client_with_namespaces):
     client = client_with_namespaces
 
-    assert sorted(client.backend.namespaces.list_child_namespace_paths("")) == [
+    assert sorted(
+        client.connection_state.backend.namespaces.list_child_namespace_paths("")
+    ) == [
         "beamline",
         "staff",
     ]
-    assert sorted(client.backend.namespaces.list_child_namespace_paths("beamline")) == [
+    assert sorted(
+        client.connection_state.backend.namespaces.list_child_namespace_paths(
+            "beamline"
+        )
+    ) == [
         "beamline/amx",
         "beamline/fmx",
     ]
-    assert client.backend.namespaces.list_child_namespace_paths("beamline/amx") == []
-    assert client.backend.namespaces.list_child_namespace_paths("missing") == []
+    assert (
+        client.connection_state.backend.namespaces.list_child_namespace_paths(
+            "beamline/amx"
+        )
+        == []
+    )
+    assert (
+        client.connection_state.backend.namespaces.list_child_namespace_paths("missing")
+        == []
+    )
 
 
-def test_list_namespaces_remote_calls_scoped_rest_children_endpoint():
+def test_list_namespaces_remote_calls_scoped_rest_children_endpoint(monkeypatch):
     from recap.adapter.rest import RESTResult
 
+    monkeypatch.setattr(
+        RESTAdapter,
+        "get_namespace_context",
+        lambda self, path: NamespaceContext(
+            id=uuid4(),
+            path=path,
+            status=LifecycleStatus.ACTIVE,
+            revision=1,
+        ),
+    )
     client = RecapClient.from_url("http://recap.test", api_key="secret")
     calls = []
 
@@ -65,7 +98,7 @@ def test_list_namespaces_remote_calls_scoped_rest_children_endpoint():
         calls.append((method, path))
         return RESTResult(entity=["amx", "fmx"], etag=None, request_id=None)
 
-    client.backend.namespaces._request = fake_request
+    client.connection_state.backend.namespaces._request = fake_request
 
     result = client["beamline"].list_namespaces()
 
@@ -74,9 +107,19 @@ def test_list_namespaces_remote_calls_scoped_rest_children_endpoint():
     client.close()
 
 
-def test_list_namespaces_remote_root_calls_correct_url():
+def test_list_namespaces_remote_root_calls_correct_url(monkeypatch):
     from recap.adapter.rest import RESTResult
 
+    monkeypatch.setattr(
+        RESTAdapter,
+        "get_namespace_context",
+        lambda self, path: NamespaceContext(
+            id=uuid4(),
+            path=path,
+            status=LifecycleStatus.ACTIVE,
+            revision=1,
+        ),
+    )
     client = RecapClient.from_url("http://recap.test", api_key="secret")
     calls = []
 
@@ -84,7 +127,7 @@ def test_list_namespaces_remote_root_calls_correct_url():
         calls.append((method, path))
         return RESTResult(entity=["beamline", "staff"], etag=None, request_id=None)
 
-    client.backend.namespaces._request = fake_request
+    client.connection_state.backend.namespaces._request = fake_request
 
     result = client.list_namespaces()
 

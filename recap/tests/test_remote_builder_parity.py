@@ -1,6 +1,7 @@
 """Remote command writes and REST read parity."""
 
 from unittest.mock import patch
+from uuid import uuid4
 
 import httpx2
 import pytest
@@ -13,6 +14,7 @@ from recap.exceptions import (
     RecapConflictError,
     RecapNotFoundError,
 )
+from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceCopyOptions
 from recap.server.app import create_app
 
@@ -30,14 +32,16 @@ def command_client(request, tmp_path, rest_loopback_client):
 
 def seed_command_namespace(client):
     client.create_namespace("beamline")
+    client.create_namespace("beamline/amx")
     scoped = client.namespace("beamline/amx")
-    scoped.create_namespace("beamline/amx")
     return scoped
 
 
 def test_resource_template_lifecycle_has_local_remote_parity(command_client):
     scoped = seed_command_namespace(command_client)
-    with scoped.build_resource_template(name="Sample", type_names=["sample"]) as builder:
+    with scoped.build_resource_template(
+        name="Sample", type_names=["sample"]
+    ) as builder:
         pass
 
     builder.activate()
@@ -57,22 +61,35 @@ def test_namespace_update_has_local_remote_parity(command_client):
 
 def test_resource_template_load_update_has_local_remote_parity(command_client):
     scoped = seed_command_namespace(command_client)
-    with scoped.build_resource_template(name="Sample", type_names=["sample"]) as created:
+    with scoped.build_resource_template(
+        name="Sample", type_names=["sample"]
+    ) as created:
         pass
 
     with scoped.build_resource_template(
         resource_template_id=created.template.id
     ) as loaded:
-        loaded.prop_group("details").add_attribute("batch", "str", "", "B-1").close_group()
+        loaded.prop_group("details").add_attribute(
+            "batch", "str", "", "B-1"
+        ).close_group()
 
-    assert loaded.template.attribute_group_templates[0].attribute_templates[0].default_value == "B-1"
+    assert (
+        loaded.template.attribute_group_templates[0]
+        .attribute_templates[0]
+        .default_value
+        == "B-1"
+    )
     assert loaded.template.revision == 2
 
 
 def test_resource_update_has_local_remote_parity(command_client):
     scoped = seed_command_namespace(command_client)
-    with scoped.build_resource_template(name="Sample", type_names=["sample"]) as template:
-        template.prop_group("details").add_attribute("serial", "str", "", "old").close_group()
+    with scoped.build_resource_template(
+        name="Sample", type_names=["sample"]
+    ) as template:
+        template.prop_group("details").add_attribute(
+            "serial", "str", "", "old"
+        ).close_group()
     resource = scoped.create_resource("sample-1", "Sample")
 
     with scoped.build_resource(resource_id=resource.id) as builder:
@@ -204,15 +221,11 @@ def test_remote_writes_are_visible_to_rest_queries(tmp_path):
         patch.object(httpx2.Client, "request", request),
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
     ):
-        namespace = remote.namespace("beamline/amx")
         remote.create_namespace("beamline")
-        namespace_result = namespace.create_namespace(
-            namespace.namespace_path, metadata={"beamline": "amx"}
-        )
+        remote.create_namespace("beamline/amx", metadata={"beamline": "amx"})
+        namespace = remote.namespace("beamline/amx")
 
-        with namespace.build_resource_template(
-            name="Sample", type_names=["sample"]
-        ):
+        with namespace.build_resource_template(name="Sample", type_names=["sample"]):
             pass
         with namespace.build_process_template("Measure", "1.0"):
             pass
@@ -232,13 +245,10 @@ def test_remote_writes_are_visible_to_rest_queries(tmp_path):
             process_run = process_run_builder.process_run
         process_run_builder.finalize()
 
-        assert namespace_result.path == namespace.namespace_path
+        assert namespace.namespace_path == "beamline/amx"
         assert copied.name == "S-001-copy"
         assert process_run.name == "run-001"
-        assert [
-            item.name
-            for item in namespace.query_maker().resources().all()
-        ] == [
+        assert [item.name for item in namespace.query_maker().resources().all()] == [
             "S-001",
             "S-001-copy",
         ]
@@ -248,21 +258,19 @@ def test_remote_writes_are_visible_to_rest_queries(tmp_path):
         assert "Measure" in [
             item.name for item in namespace.query_maker().process_templates().all()
         ]
-        assert [
-            item.name
-            for item in namespace.query_maker().process_runs().all()
-        ] == ["run-001"]
+        assert [item.name for item in namespace.query_maker().process_runs().all()] == [
+            "run-001"
+        ]
 
 
 def test_scoped_remote_query_uses_view_namespace():
-    client = RecapClient.from_url("http://recap.test", api_key="secret")
-    scoped = client.namespace("beamline/amx")
-
     with patch.object(
         RESTAdapter,
         "get_namespace_context",
-        return_value=type("Context", (), {"path": "beamline/amx"})(),
+        return_value=NamespaceContext(id=uuid4(), path="beamline/amx"),
     ):
+        client = RecapClient.from_url("http://recap.test", api_key="secret")
+        scoped = client.namespace("beamline/amx")
         query = scoped.query_maker().resources()
 
     assert query._context.path == "beamline/amx"
@@ -290,9 +298,9 @@ def test_scoped_remote_public_builders_use_namespace_routes(tmp_path):
         patch.object(httpx2.Client, "request", request),
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
     ):
-        namespace = remote.namespace("beamline/amx")
         remote.create_namespace("beamline")
-        namespace.create_namespace(namespace.namespace_path)
+        remote.create_namespace("beamline/amx")
+        namespace = remote.namespace("beamline/amx")
 
         with namespace.build_resource_template(name="Sample", type_names=["sample"]):
             pass
@@ -327,9 +335,9 @@ def test_scoped_remote_create_resource_uses_namespace_route(tmp_path):
         patch.object(httpx2.Client, "request", request),
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
     ):
-        namespace = remote.namespace("beamline/amx")
         remote.create_namespace("beamline")
-        namespace.create_namespace(namespace.namespace_path)
+        remote.create_namespace("beamline/amx")
+        namespace = remote.namespace("beamline/amx")
         with namespace.build_resource_template(name="Sample", type_names=["sample"]):
             pass
 
@@ -340,9 +348,10 @@ def test_scoped_remote_create_resource_uses_namespace_route(tmp_path):
             query_paths.append(namespace_path)
             return [resource]
 
-        with patch.object(RESTAdapter, "query", query), namespace.build_resource(
-            resource_id=resource.id
-        ) as builder:
+        with (
+            patch.object(RESTAdapter, "query", query),
+            namespace.build_resource(resource_id=resource.id) as builder,
+        ):
             assert builder.resource.id == resource.id
         assert query_paths == ["beamline/amx"]
 
@@ -365,9 +374,9 @@ def test_remote_resource_builder_reports_missing_template_without_lookup(tmp_pat
         patch.object(RESTAdapter, "query", return_value=[]),
         RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
     ):
-        namespace = remote.namespace("beamline/amx")
         remote.create_namespace("beamline")
-        namespace.create_namespace(namespace.namespace_path)
+        remote.create_namespace("beamline/amx")
+        namespace = remote.namespace("beamline/amx")
 
         with pytest.raises(
             RecapNotFoundError,
@@ -379,7 +388,10 @@ def test_remote_resource_builder_reports_missing_template_without_lookup(tmp_pat
 
 
 def test_remote_namespace_write_rejects_invalid_api_key(tmp_path, monkeypatch):
-    with TestClient(create_app(tmp_path / "auth.db", api_key="correct-key")) as app_client:
+    with TestClient(
+        create_app(tmp_path / "auth.db", api_key="correct-key")
+    ) as app_client:
+
         def request(_client, method, url, **kwargs):
             response = app_client.request(
                 method, url.removeprefix("http://recap.test"), **kwargs
@@ -397,9 +409,15 @@ def test_remote_namespace_write_rejects_invalid_api_key(tmp_path, monkeypatch):
             "request",
             request,
         )
-        with RecapClient.from_url(
-            "http://recap.test", api_key="wrong-key"
-        ) as client, pytest.raises(RecapAuthenticationError) as caught:
+        with (
+            patch.object(
+                RESTAdapter,
+                "get_namespace_context",
+                return_value=NamespaceContext(id=uuid4(), path=""),
+            ),
+            RecapClient.from_url("http://recap.test", api_key="wrong-key") as client,
+            pytest.raises(RecapAuthenticationError) as caught,
+        ):
             client.create_namespace("beamline")
 
     assert caught.value.status_code == 401

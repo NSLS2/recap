@@ -45,6 +45,10 @@ class CreateNamespace(CommandModel):
     metadata: dict[str, Any] | None = None
 
 
+class GetNamespace(CommandModel):
+    path: str
+
+
 class UpdateNamespace(CommandModel):
     namespace_id: UUID
     expected_revision: int

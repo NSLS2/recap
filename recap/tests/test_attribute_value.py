@@ -110,11 +110,8 @@ def test_enum_attribute_value_rejects_invalid_choice(db_session):
 
 
 def test_resource_template_builder_reuses_existing_group(client):
-    context = client.create_namespace("attribute-group")
-    scoped = client.namespace(context.path)
-    with scoped.build_resource_template(
-        name="RT", type_names=["sample"]
-    ) as builder:
+    scoped = client.namespace("")
+    with scoped.build_resource_template(name="RT", type_names=["sample"]) as builder:
         builder.add_properties(
             {"content": [{"name": "serial", "type": "str", "default": ""}]}
         )
@@ -125,6 +122,6 @@ def test_resource_template_builder_reuses_existing_group(client):
             "serial", "str", "", ""
         ).close_group()
 
-    assert [
-        group.name for group in update.template.attribute_group_templates
-    ].count("content") == 1
+    assert [group.name for group in update.template.attribute_group_templates].count(
+        "content"
+    ) == 1
