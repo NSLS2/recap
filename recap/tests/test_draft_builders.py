@@ -1,14 +1,18 @@
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from recap.client.backend import ClientBackend
 from recap.commands.models import (
     CreateProcessRun,
     CreateProcessTemplate,
     CreateResource,
 )
+from recap.dsl.builder_state import BuilderChanges, BuilderTransactionState
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
+from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
 from recap.tests.transport_factories import minimal_resource, resource_template
@@ -137,6 +141,35 @@ def resource_backend():
         reader,
         writer,
     )
+
+
+def test_transaction_state_flushes_only_on_clean_outermost_exit():
+    state = BuilderTransactionState()
+    state.enter()
+    state.enter()
+    assert not state.exit(None)
+    assert state.exit(None)
+
+
+def test_transaction_state_preserves_pending_lifecycle_after_exception():
+    state = BuilderTransactionState()
+    state.enter()
+    state.request_lifecycle(LifecycleStatus.ACTIVE)
+    assert not state.exit(RuntimeError)
+    assert state.pending_lifecycle is LifecycleStatus.ACTIVE
+
+
+def test_transaction_state_rejects_conflicting_lifecycle_requests():
+    state = BuilderTransactionState()
+    state.request_lifecycle(LifecycleStatus.ACTIVE)
+    with pytest.raises(ValueError, match="Conflicting lifecycle requests"):
+        state.request_lifecycle(LifecycleStatus.ARCHIVED)
+
+
+def test_builder_changes_defaults_to_empty_fields_and_no_lifecycle():
+    changes = BuilderChanges()
+    assert changes.fields == {}
+    assert changes.lifecycle is None
 
 
 def process_backend(adapter=None):
