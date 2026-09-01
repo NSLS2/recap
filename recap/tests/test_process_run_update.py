@@ -1,3 +1,6 @@
+import pytest
+
+
 def test_process_run_update_persists_param_changes(client):
     client.create_namespace("process-run-update")
 
@@ -89,3 +92,63 @@ def test_resource_builder_persists_property_changes(client):
         refreshed = builder.get_model(update=True)
     assert refreshed is not None
     assert refreshed.properties.details.values.serial.value == "xyz"
+
+
+def _assignment_fixture(client, suffix):
+    client.create_namespace(suffix)
+    scoped = client.namespace(suffix)
+    with scoped.build_resource_template(
+        name=f"Dataset-{suffix}", type_names=["dataset"]
+    ):
+        pass
+    unchanged = scoped.create_resource(f"unchanged-{suffix}", f"Dataset-{suffix}")
+    changed = scoped.create_resource(f"changed-{suffix}", f"Dataset-{suffix}")
+    with scoped.build_process_template(f"Pandda-{suffix}", "1.0") as template:
+        template.add_resource_slot("unchanged_dataset", "dataset", "input")
+        template.add_resource_slot("changed_dataset", "dataset", "input")
+    return scoped, unchanged, changed
+
+
+def test_deferred_process_run_finalization_keeps_all_assignments_without_duplicate(
+    client,
+):
+    scoped, unchanged, changed = _assignment_fixture(client, "deferred-finalize")
+    builder = scoped.build_process_run(
+        "Pandda analysis 1", "First pandda analysis", "Pandda-deferred-finalize", "1.0"
+    )
+    with builder:
+        builder.assign_resource("unchanged_dataset", unchanged)
+    with builder:
+        builder.assign_resource("changed_dataset", changed)
+        builder.finalize()
+
+    assert builder.process_run.status.value == "ACTIVE"
+    assert {
+        name: assignment.resource.id
+        for name, assignment in builder.process_run.assigned_resources.items()
+    } == {
+        "unchanged_dataset": unchanged.id,
+        "changed_dataset": changed.id,
+    }
+
+
+def test_process_run_exception_retains_assignment_and_finalize_request(client):
+    scoped, unchanged, _ = _assignment_fixture(client, "exception-retain")
+    builder = scoped.build_process_run("run", "desc", "Pandda-exception-retain", "1.0")
+    with pytest.raises(RuntimeError):
+        with builder:
+            builder.assign_resource("unchanged_dataset", unchanged)
+            builder.finalize()
+            raise RuntimeError("stop")
+
+    assert builder.changes().fields["assignments"]["unchanged_dataset"] == unchanged.id
+    assert builder.changes().lifecycle.value == "ACTIVE"
+
+
+def test_process_run_changes_are_empty_after_successful_commit(client):
+    scoped, unchanged, _ = _assignment_fixture(client, "changes-empty")
+    with scoped.build_process_run(
+        "run", "desc", "Pandda-changes-empty", "1.0"
+    ) as builder:
+        builder.assign_resource("unchanged_dataset", unchanged)
+    assert builder.changes().fields == {}

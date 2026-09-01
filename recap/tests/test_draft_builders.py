@@ -220,7 +220,7 @@ def test_process_template_body_has_no_backend_mutation():
     assert step.parent.backend is client_backend
 
 
-def test_process_run_exception_discards_draft():
+def test_process_run_exception_retains_draft_without_submitting():
     client_backend, backend = process_backend()
     namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
     builder = ProcessRunBuilder(
@@ -242,6 +242,7 @@ def test_process_run_exception_discards_draft():
         pass
 
     assert backend.commands == []
+    assert builder.changes().fields["assignments"]
 
 
 def test_process_builders_submit_one_command_on_clean_exit():

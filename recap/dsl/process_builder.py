@@ -43,7 +43,7 @@ from recap.schemas.process import (
     ProcessTemplateRef,
     ProcessTemplateSchema,
 )
-from recap.schemas.resource import ResourceSchema
+from recap.schemas.resource import ResourceAssignmentSchema, ResourceSchema
 from recap.schemas.step import StepSchema, StepTemplateRef
 from recap.utils.dsl import lock_instance_fields
 from recap.utils.general import Direction
@@ -541,6 +541,8 @@ class ProcessRunBuilder:
         self._template_id = template_id
         self._process_template = None
         self._submitted = False
+        self._save_called = False
+        self._transaction = BuilderTransactionState()
         self._draft_assignments: dict[str, UUID] = {}
         self._draft_steps: dict[str, dict[str, dict[str, object]]] = {}
         if (
@@ -557,6 +559,11 @@ class ProcessRunBuilder:
             else None
         )
         self._draft_process_run = (
+            self._process_run.model_copy(deep=True)
+            if self._process_run is not None
+            else None
+        )
+        self._baseline_process_run = (
             self._process_run.model_copy(deep=True)
             if self._process_run is not None
             else None
@@ -638,20 +645,38 @@ class ProcessRunBuilder:
         if self._process_run is not None:
             self._draft_process_run = self._process_run.model_copy(deep=True)
             self._submitted = True
+        self._baseline_process_run = (
+            self._process_run.model_copy(deep=True)
+            if self._process_run is not None
+            else None
+        )
+        self._draft_assignments = self._assignment_ids(self._draft_process_run)
+        self._draft_steps = self._model_steps_payload(self._draft_process_run)
         self._resources = {}
 
     def __enter__(self):
+        self._transaction.enter()
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        if exc_type is None and (not self._submitted or self._dirty):
+        if self._transaction.exit(exc_type) and not self._save_called:
             self.save()
 
     def save(self):
         """Validate and persist current process-run changes."""
-        if self._submitted and not self._dirty:
+        if self._submitted and not self._dirty and self._pending_lifecycle() is None:
             return self
-        if self._process_run is None:
+        assignments = self._assignment_changes()
+        steps = self._step_changes()
+        description = self._description_change()
+        needs_data = (
+            not self._submitted
+            or bool(assignments)
+            or bool(steps)
+            or description is not None
+        )
+        result = self._process_run
+        if needs_data and self._process_run is None:
             command = CreateProcessRun(
                 namespace_path=self.namespace_context.path,
                 draft=ProcessRunDraft(
@@ -659,70 +684,101 @@ class ProcessRunBuilder:
                     name=self.name,
                     description=self.description,
                     template_id=self._template_id,
-                    assignments=self._draft_assignments,
+                    assignments=assignments,
                     steps={
-                        step.name: ProcessRunStepDraft()
-                        for step in (
-                            getattr(self._process_template, "step_templates", None)
-                            or {}
-                        ).values()
+                        name: ProcessRunStepDraft(parameters=value)
+                        for name, value in self._draft_steps.items()
                     },
                 ),
             )
-        elif self._process_run.status is not LifecycleStatus.MUTABLE:
+        elif needs_data and self._process_run.status is not LifecycleStatus.MUTABLE:
             command = CopyProcessRun(
                 source_process_run_id=self._process_run.id,
                 destination_namespace_path=self.namespace_context.path,
                 options={
                     "changes": {
-                        "description": self.description,
-                        "assignments": self._draft_assignments or None,
-                        "steps": self._draft_steps or None,
+                        "description": description,
+                        "assignments": assignments or None,
+                        "steps": steps or None,
                     }
                 },
             )
-        else:
+        elif needs_data:
             command = UpdateProcessRun(
                 process_run_id=self._process_run.id,
                 expected_revision=self._process_run.revision,
-                description=self.description,
-                assignments=self._draft_assignments or None,
-                steps=self._draft_steps or None,
+                description=description,
+                assignments=assignments or None,
+                steps=steps or None,
             )
-        result = self.backend._execute(command, self._command_context)
-        if not isinstance(result, ProcessRunSchema):
-            return self
-        self._process_run = result
-        self._draft_process_run = result.model_copy(deep=True)
-        self._steps = list(result.steps.values())
-        self._dirty = False
-        self._submitted = True
-        return self
-
-    def update_status(self, status: LifecycleStatus):
-        self._ensure_command_saved()
-        result = self.backend._execute(
-            UpdateProcessRun(
-                process_run_id=self._process_run.id,
-                expected_revision=self._process_run.revision,
-                status=status.value,
-            ),
-            self._command_context,
-        )
-        if isinstance(result, ProcessRunSchema):
+        if needs_data:
+            result = self.backend._execute(command, self._command_context)
+            self._save_called = True
+            if not isinstance(result, ProcessRunSchema):
+                return self
             self._process_run = result
             self._draft_process_run = result.model_copy(deep=True)
-        elif result is not None:
-            return self
+            self._baseline_process_run = result.model_copy(deep=True)
+            self._draft_assignments = self._assignment_ids(result)
+            self._draft_steps = self._model_steps_payload(result)
+            self.name = result.name
+            self.description = result.description
+            self._steps = list(result.steps.values())
+            self._dirty = False
+            self._submitted = True
+
+        pending = self._pending_lifecycle()
+        if pending is not None:
+            if self._process_run is None:
+                return self
+            result = self.backend._execute(
+                SetLifecycleStatus(
+                    object_type="process_run",
+                    object_id=self._process_run.id,
+                    expected_revision=self._process_run.revision,
+                    status=pending.value,
+                ),
+                self._command_context,
+            )
+            if isinstance(result, ProcessRunSchema):
+                self._process_run = result
+                self._draft_process_run = result.model_copy(deep=True)
+                self._baseline_process_run = result.model_copy(deep=True)
+                self._draft_assignments = self._assignment_ids(result)
+                self._draft_steps = self._model_steps_payload(result)
+                self._steps = list(result.steps.values())
+                self._transaction.clear_lifecycle(owner=self)
         return self
 
     def finalize(self):
         """Transition process run to ACTIVE/finalized state."""
-        self.update_status(LifecycleStatus.ACTIVE)
+        self._transaction.request_lifecycle(LifecycleStatus.ACTIVE, owner=self)
+        if not self._transaction.in_context:
+            self.save()
+        return self
 
     def archive(self):
         """Transition process run to ARCHIVED."""
-        self.update_status(LifecycleStatus.ARCHIVED)
+        self._transaction.request_lifecycle(LifecycleStatus.ARCHIVED, owner=self)
+        if not self._transaction.in_context:
+            self.save()
+        return self
+
+    def changes(self) -> BuilderChanges:
+        fields = {}
+        assignments = self._assignment_changes()
+        steps = self._step_changes()
+        description = self._description_change()
+        if assignments:
+            fields["assignments"] = assignments
+        if steps:
+            fields["steps"] = steps
+        if description is not None:
+            fields["description"] = description
+        return BuilderChanges(
+            fields=fields,
+            lifecycle=self._pending_lifecycle(),
+        )
 
     @property
     def process_run(self) -> ProcessRunSchema:
@@ -737,12 +793,11 @@ class ProcessRunBuilder:
         self._draft_process_run = detached_model(model)
         self.name = model.name
         self.description = model.description
-        self._draft_assignments = {
-            slot_name: assignment.resource.id
-            for slot_name, assignment in model.assigned_resources.items()
-        }
+        self._draft_assignments = self._assignment_ids(model)
         self._draft_steps = self._model_steps_payload(model)
+        self._draft_process_run = detached_model(model)
         self._dirty = True
+        self._save_called = False
 
     def assign_resource(
         # self, resource_slot_name: str, resource_name: str, resource_template_name: str
@@ -752,7 +807,20 @@ class ProcessRunBuilder:
     ) -> "ProcessRunBuilder":
         """Assign resource to named process slot."""
         self._draft_assignments[resource_slot_name] = resource.id
+        slot = next(
+            (
+                slot
+                for slot in self._process_template.resource_slots
+                if slot.name == resource_slot_name
+            ),
+            None,
+        )
+        if slot is not None:
+            self._draft_process_run.assigned_resources[resource_slot_name] = (
+                ResourceAssignmentSchema(slot=slot, resource=resource)
+            )
         self._dirty = True
+        self._save_called = False
         return self
 
     @property
@@ -837,6 +905,7 @@ class ProcessRunBuilder:
             step_data[field_info.alias or field_name] = values
         self._draft_steps[filled_params.step_name] = step_data
         self._dirty = True
+        self._save_called = False
         return self
 
     @staticmethod
@@ -877,6 +946,47 @@ class ProcessRunBuilder:
     def _ensure_command_saved(self):
         if not self._submitted:
             self.save()
+
+    def _pending_lifecycle(self):
+        return self._transaction.pending_lifecycle_for(self)
+
+    @staticmethod
+    def _assignment_ids(model: ProcessRunSchema | None) -> dict[str, UUID]:
+        if model is None:
+            return {}
+        return {
+            name: assignment.resource.id
+            for name, assignment in model.assigned_resources.items()
+        }
+
+    def _assignment_changes(self) -> dict[str, UUID]:
+        current = self._draft_assignments
+        baseline = self._assignment_ids(self._baseline_process_run)
+        if self._baseline_process_run is None:
+            return dict(current)
+        return {
+            name: resource_id
+            for name, resource_id in current.items()
+            if baseline.get(name) != resource_id
+        }
+
+    def _step_changes(self):
+        if self._baseline_process_run is None:
+            return dict(self._draft_steps)
+        baseline = self._model_steps_payload(self._baseline_process_run)
+        return {
+            name: value
+            for name, value in self._draft_steps.items()
+            if baseline.get(name) != value
+        }
+
+    def _description_change(self):
+        if (
+            self._baseline_process_run is None
+            or self.description != self._baseline_process_run.description
+        ):
+            return self.description
+        return None
 
     def _reload_process_run(self, process_run_id: UUID) -> ProcessRunSchema:
         runs = self.backend.query(
