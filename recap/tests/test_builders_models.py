@@ -248,6 +248,31 @@ def test_resource_builder_add_child_copies_resource_schema_source(client):
     assert refreshed.children[source.name].copied_from_id == source.id
 
 
+def test_resource_copy_child_keeps_existing_and_provisional_children(client):
+    with client.build_resource_template(name="Merge-Group", type_names=["group"]):
+        pass
+    with client.build_resource_template(name="Merge-Leaf", type_names=["leaf"]):
+        pass
+
+    group = client.create_resource("Merge-group", "Merge-Group")
+    with client.build_resource(resource_id=group.id) as builder:
+        existing_builder = builder.add_child("Merge-existing", "Merge-Leaf")
+    existing = existing_builder.resource
+    source = client.create_resource("Merge-source", "Merge-Leaf")
+    with client.build_resource(resource_id=source.id) as source_builder:
+        source_child_builder = source_builder.add_child(
+            "Merge-descendant", "Merge-Leaf"
+        )
+    source_child = source_child_builder.resource
+
+    with client.build_resource(resource_id=group.id) as builder:
+        copied = builder.add_child(source)
+
+    assert builder.resource.children[existing.name].id == existing.id
+    assert builder.resource.children[copied.resource.name].id == copied.resource.id
+    assert copied.resource.children[source_child.name].id != source_child.id
+
+
 def test_new_process_run_keeps_provisional_id_after_context_commit(client):
     with client.build_process_template("ID PT", "1.0"):
         pass

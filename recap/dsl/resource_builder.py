@@ -300,6 +300,7 @@ class ResourceBuilder:
         if unchanged and self._transaction.pending_lifecycle is None:
             for child in self._children:
                 child._flush(flush_lifecycle=False)
+                self._draft.children[child.resource.name] = child.resource
             return self
         if unchanged:
             result = self.backend._execute(
@@ -318,16 +319,13 @@ class ResourceBuilder:
                 self._last_properties_payload = self._resource_properties_payload(result)
                 self._transaction.clear_lifecycle()
             return self
-            pending = self._transaction.pending_lifecycle
-            if pending is None:
-                return self
         if self._is_new_resource:
             if self._copy_source_id is not None:
                 command = CopyResource(
                     source_resource_id=self._copy_source_id,
                     destination_namespace_path=self.namespace_context.path,
                     options=ResourceCopyOptions(
-                        parent_id=self.parent.resource.id if self.parent else None
+                        parent_id=self._parent_id(),
                     ),
                 )
             else:
@@ -338,7 +336,7 @@ class ResourceBuilder:
                     namespace_path=self.namespace_context.path,
                     name=self.name,
                     template_id=self._template_id,
-                    parent_id=(self.parent.resource.id if self.parent else None),
+                    parent_id=self._parent_id(),
                     properties=properties,
                 )
         elif self._resource.status is not LifecycleStatus.MUTABLE:
@@ -368,21 +366,22 @@ class ResourceBuilder:
                 self._draft or self._resource
             )
             return self
-        if self._copy_source_id is not None and not result.children:
-            result = self._reload_resource(result.id)
         previous_children = self._provisional_children or (
             self._draft.children if self._draft is not None else {}
         )
+        if self._copy_source_id is not None and not result.children:
+            result = self._reload_resource(result.id)
+        if previous_children:
+            result.children = {**previous_children, **result.children}
         self._resource = result
         self._draft = result.model_copy(deep=True)
-        if previous_children and not self._draft.children:
-            self._draft.children = previous_children
         self._expected_revision = result.revision
         self._is_new_resource = False
         self._last_properties_payload = self._resource_properties_payload(result)
         self._submitted = True
         for child in self._children:
             child._flush(flush_lifecycle=False)
+            self._draft.children[child.resource.name] = child.resource
         if not flush_lifecycle:
             return self
         pending = self._transaction.pending_lifecycle
@@ -433,6 +432,13 @@ class ResourceBuilder:
                 for value_name in value_names
             }
         return payload
+
+    def _parent_id(self) -> UUID | None:
+        if self.parent is None:
+            return None
+        if self.parent._resource is None:
+            raise RuntimeError("Child builder requires initialized parent resource")
+        return self.parent.resource.id
 
     def finalize(self):
         self._transaction.request_lifecycle(LifecycleStatus.ACTIVE)

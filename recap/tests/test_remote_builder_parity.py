@@ -221,14 +221,18 @@ def test_resource_copy_as_child_has_local_remote_parity(command_client):
         pass
     group = scoped.create_resource("group-1", "Group")
     source = scoped.create_resource("sample-1", "Sample")
-    source_child = scoped.create_resource("sample-child", "Sample", parent=source)
+    with scoped.build_resource(resource_id=source.id) as source_builder:
+        source_child_builder = source_builder.add_child("sample-child", "Sample")
+    source_child = source_child_builder.resource
 
     with scoped.build_resource(resource_id=group.id) as builder:
         copied = builder.add_child(source)
 
     assert copied.resource.id != source.id
     assert copied.resource.copied_from_id == source.id
-    assert copied.resource.children == {}
+    copied_descendant = copied.resource.children["sample-child"]
+    assert copied_descendant.id != source_child.id
+    assert copied_descendant.copied_from_id is None
     with scoped.build_resource(resource_id=group.id) as loader:
         refreshed = loader.get_model(update=True)
     assert refreshed.children["sample-1"].id == copied.resource.id
@@ -328,6 +332,9 @@ def test_stale_resource_write_preserves_first_mutation(command_client):
     with pytest.raises(RecapConflictError):
         with second:
             second.save()
+
+    assert second.resource.name == "second"
+    assert second.changes().fields["name"] == "second"
 
     with scoped.build_resource(resource_id=resource.id) as persisted:
         assert persisted.resource.name == "first"
