@@ -16,6 +16,7 @@ from recap.commands.models import (
     UpdateProcessTemplate,
 )
 from recap.dsl.attribute_builder import AttributeGroupBuilder
+from recap.dsl.builder_state import BuilderChanges, BuilderTransactionState
 from recap.dsl.drafts import (
     AttributeDraft,
     AttributeGroupDraft,
@@ -72,6 +73,7 @@ class ProcessTemplateBuilder:
         self._command_context = command_context
         self._submitted = False
         self._last_draft = None
+        self._transaction = BuilderTransactionState()
         self._expected_revision = 1
         self._draft_labels: list[str] = []
         self._draft_resource_slots: list[ResourceSlotDraft] = []
@@ -129,71 +131,76 @@ class ProcessTemplateBuilder:
                 self._initialize_command_update(existing[0].id)
 
     def __enter__(self):
+        self._transaction.enter()
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        if exc_type is None and not self._submitted:
-            self.save()
+        if self._transaction.exit(exc_type):
+            self._flush()
 
     def save(self):
-        """Validate and persist current process-template draft."""
-        draft = self._build_draft()
-        if self._submitted and draft == self._last_draft:
-            return self
-        command = (
-            CreateProcessTemplate(
-                namespace_path=self.namespace_context.path, draft=draft
-            )
-            if self._is_new_template
-            else UpdateProcessTemplate(
-                template_id=self._template.id,
-                expected_revision=self._expected_revision,
-                draft=draft,
-            )
-        )
-        result = self.backend._execute(command, self._command_context)
-        if result is None:
-            return self
-        self._template = result
-        self._expected_revision = result.revision
-        self._last_draft = draft
-        self._submitted = True
-        return self
+        if not self._transaction.in_context:
+            raise RuntimeError("Builder changes require a context manager")
+        return self._flush()
 
-    def activate(self):
-        """Transition process template to ACTIVE."""
+    def changes(self) -> BuilderChanges:
+        draft = self._build_draft()
+        return BuilderChanges(
+            fields={"draft": draft.model_dump(mode="json")}
+            if draft != self._last_draft
+            else {},
+            lifecycle=self._transaction.pending_lifecycle,
+        )
+
+    def _flush(self):
+        draft = self._build_draft()
+        if draft != self._last_draft:
+            command = (
+                CreateProcessTemplate(
+                    namespace_path=self.namespace_context.path, draft=draft
+                )
+                if self._is_new_template
+                else UpdateProcessTemplate(
+                    template_id=self._template.id,
+                    expected_revision=self._expected_revision,
+                    draft=draft,
+                )
+            )
+            result = self.backend._execute(command, self._command_context)
+            if result is None:
+                return self
+            self._template = result
+            self._expected_revision = result.revision
+            self._last_draft = draft
+            self._submitted = True
+        elif self._template is not None:
+            self._last_draft = draft
+
+        pending = self._transaction.pending_lifecycle
+        if pending is None:
+            return self
         self._ensure_template()
-        if self._template is None:
-            self.save()
         result = self.backend._execute(
             SetLifecycleStatus(
                 object_type="process_template",
                 object_id=self.template.id,
                 expected_revision=self._template.revision,
-                status=LifecycleStatus.ACTIVE.value,
+                status=pending.value,
             ),
             self._command_context,
         )
         if isinstance(result, ProcessTemplateSchema):
             self._template = result
+            self._expected_revision = result.revision
+            self._transaction.clear_lifecycle()
+        return self
+
+    def finalize(self):
+        self._transaction.request_lifecycle(LifecycleStatus.ACTIVE)
         return self
 
     def archive(self):
-        """Transition process template to ARCHIVED."""
-        self._ensure_template()
-        if self._template is None:
-            self.save()
-        result = self.backend._execute(
-            SetLifecycleStatus(
-                object_type="process_template",
-                object_id=self.template.id,
-                expected_revision=self._template.revision,
-                status=LifecycleStatus.ARCHIVED.value,
-            ),
-            self._command_context,
-        )
-        if isinstance(result, ProcessTemplateSchema):
-            self._template = result
+        self._transaction.request_lifecycle(LifecycleStatus.ARCHIVED)
         return self
 
     @property
@@ -260,7 +267,9 @@ class ProcessTemplateBuilder:
         Return a pydantic model for the process template, optionally reloading
         from the backend first. Critical fields are locked against mutation.
         """
-        if update or self._template is None:
+        if (update and self._transaction.in_context) or (
+            self._template is None and self._transaction.in_context
+        ):
             self.save()
         if not isinstance(self._template, ProcessTemplateSchema):
             raise RuntimeError("Command backend did not return process template")
@@ -384,6 +393,8 @@ class ProcessTemplateBuilder:
                 )
                 step_builder._draft_parameter_groups.append(group_builder)
             self._draft_steps.append(step_builder)
+        self._last_draft = self._build_draft()
+        self._submitted = True
 
 
 class StepTemplateBuilder:

@@ -335,7 +335,7 @@ def test_builder_submits_nothing_when_context_body_raises(command_setup):
     assert backend.commands == []
 
 
-def test_builder_serializes_existing_template_into_one_update(command_setup):
+def test_builder_does_not_update_unchanged_existing_template(command_setup):
     service, _, context, namespace, _ = command_setup
     existing = service.create_process_template(
         context, namespace_path=namespace.path, draft=process_draft()
@@ -353,9 +353,4 @@ def test_builder_serializes_existing_template_into_one_update(command_setup):
     ):
         pass
 
-    assert len(backend.commands) == 1
-    command, _ = backend.commands[0]
-    assert isinstance(command, UpdateProcessTemplate)
-    assert command.expected_revision == 1
-    assert command.draft.labels == ("mx",)
-    assert command.draft.steps[0].parameter_groups[0].attributes[0].name == "duration"
+    assert backend.commands == []

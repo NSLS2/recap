@@ -53,7 +53,7 @@ def client_backend(adapter):
     )
 
 
-def test_repeated_save_uses_latest_revision():
+def test_repeated_save_flushes_latest_draft_once():
     context = object()
     existing = SimpleNamespace(
         id=uuid4(),
@@ -75,16 +75,16 @@ def test_repeated_save_uses_latest_revision():
         command_context=context,
     )
 
-    builder.save()
-    builder.add_resource_slot("input", "container", "input")
-    builder.save()
+    with builder:
+        builder.save()
+        builder.add_resource_slot("input", "container", "input")
+        builder.save()
 
-    assert len(backend.commands) == 2
+    assert len(backend.commands) == 1
     assert all(
         isinstance(command, UpdateProcessTemplate) for command in backend.commands
     )
     assert backend.commands[0].expected_revision == 3
-    assert backend.commands[1].expected_revision == 4
 
 
 def test_clean_repeated_save_does_not_duplicate_command():
@@ -108,7 +108,8 @@ def test_clean_repeated_save_does_not_duplicate_command():
         command_context=object(),
     )
 
-    builder.save()
-    builder.save()
+    with builder:
+        builder.save()
+        builder.save()
 
-    assert len(backend.commands) == 1
+    assert len(backend.commands) == 0

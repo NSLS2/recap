@@ -17,6 +17,9 @@ from recap.exceptions import (
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceCopyOptions
 from recap.server.app import create_app
+from recap.dsl.query import QuerySpec
+from recap.schemas.process import ProcessTemplateSchema
+from recap.schemas.resource import ResourceTemplateSchema
 
 
 @pytest.fixture(params=["local", "remote"], ids=["local", "remote"])
@@ -37,6 +40,31 @@ def seed_command_namespace(client):
     return scoped
 
 
+def make_template_builder(client, kind, name="Deferred"):
+    scoped = seed_command_namespace(client)
+    if kind == "process":
+        return scoped.build_process_template(name, "1.0")
+    return scoped.build_resource_template(name=name, type_names=["sample"])
+
+
+def make_persisted_template_builder(client, kind):
+    builder = make_template_builder(client, kind, name=f"Persisted-{kind}")
+    with builder:
+        pass
+    return builder
+
+
+def template_exists(client, kind, template_id):
+    schema = ProcessTemplateSchema if kind == "process" else ResourceTemplateSchema
+    return bool(
+        client.connection_state.backend.query(
+            schema,
+            QuerySpec(filters={"id": template_id}, include_mutable=True),
+            namespace_path="beamline/amx",
+        )
+    )
+
+
 def test_resource_template_lifecycle_has_local_remote_parity(command_client):
     scoped = seed_command_namespace(command_client)
     with scoped.build_resource_template(
@@ -44,10 +72,58 @@ def test_resource_template_lifecycle_has_local_remote_parity(command_client):
     ) as builder:
         pass
 
-    builder.activate()
+    with builder:
+        builder.finalize()
     assert builder.template.status.value == "ACTIVE"
-    builder.archive()
+    with builder:
+        builder.archive()
     assert builder.template.status.value == "ARCHIVED"
+
+
+@pytest.mark.parametrize("kind", ["process", "resource"])
+def test_template_changes_are_local_until_clean_context_exit(command_client, kind):
+    builder = make_template_builder(command_client, kind)
+    if kind == "process":
+        builder.add_step("Collect")
+    else:
+        builder.prop_group("meta").add_attribute("code", "str", "", "").close_group()
+    assert builder.changes().fields
+    assert not template_exists(command_client, kind, builder.template.id)
+    with builder:
+        pass
+    assert template_exists(command_client, kind, builder.template.id)
+
+
+@pytest.mark.parametrize("kind", ["process", "resource"])
+def test_template_finalization_is_deferred_until_clean_exit(command_client, kind):
+    builder = make_persisted_template_builder(command_client, kind)
+    with builder:
+        builder.finalize()
+        assert builder.changes().lifecycle.value == "ACTIVE"
+        assert builder.template.status.value == "MUTABLE"
+    assert builder.template.status.value == "ACTIVE"
+
+
+@pytest.mark.parametrize("kind", ["process", "resource"])
+def test_template_nested_context_commits_once_and_exception_can_retry(command_client, kind):
+    builder = make_template_builder(client=command_client, kind=kind, name=f"Nested-{kind}")
+    if kind == "process":
+        builder.add_step("Collect")
+    else:
+        builder.prop_group("meta").add_attribute("code", "str", "", "").close_group()
+    with builder:
+        with builder:
+            pass
+    revision = builder.template.revision
+    with pytest.raises(RuntimeError):
+        with builder:
+            builder.finalize()
+            raise RuntimeError("retry")
+    assert builder.template.status.value == "MUTABLE"
+    with builder:
+        pass
+    assert builder.template.status.value == "ACTIVE"
+    assert builder.template.revision == revision + 1
 
 
 def test_new_builders_keep_provisional_ids_after_commit(command_client):
@@ -194,9 +270,11 @@ def test_process_template_create_load_update_lifecycle_has_local_remote_parity(
         "Collect",
         "Analyze",
     }
-    loaded.activate()
+    with loaded:
+        loaded.finalize()
     assert loaded.template.status.value == "ACTIVE"
-    loaded.archive()
+    with loaded:
+        loaded.archive()
     assert loaded.template.status.value == "ARCHIVED"
 
 

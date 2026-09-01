@@ -382,7 +382,8 @@ def test_resource_template_command_draft_accepts_attribute_group_builder():
     builder.prop_group("properties").add_attribute(
         "serial", "str", "", ""
     ).close_group()
-    builder.save()
+    with builder:
+        builder.save()
 
     assert writer.commands[0][0].draft.property_groups[0].attributes[0].name == "serial"
 
