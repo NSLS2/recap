@@ -26,6 +26,7 @@ class CommandModel(BaseModel):
 
 
 class CreateResource(CommandModel):
+    id: UUID | None = None
     namespace_path: str
     name: str
     template_id: UUID

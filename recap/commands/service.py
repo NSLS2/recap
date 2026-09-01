@@ -249,6 +249,7 @@ class CommandService:
         context: CommandContext,
         *,
         namespace_path: str,
+        id: UUID | None = None,
         name: str,
         template_id: UUID,
         parent_id: UUID | None = None,
@@ -298,6 +299,7 @@ class CommandService:
                     assert decision.response is not None
                     return ResourceSchema.model_validate(decision.response)
                 resource = Resource(
+                    id=id or uuid4(),
                     namespace=namespace,
                     name=name,
                     template=template,
@@ -801,6 +803,7 @@ class CommandService:
                     return ProcessTemplateSchema.model_validate(decision.response)
 
                 template = ProcessTemplate(
+                    id=draft.id or uuid4(),
                     namespace=namespace,
                     name=draft.name,
                     version=draft.version,
@@ -1155,6 +1158,7 @@ class CommandService:
                 if decision is not None and decision.replayed:
                     return ProcessRunSchema.model_validate(decision.response)
                 run = ProcessRun(
+                    id=draft.id or uuid4(),
                     namespace=namespace,
                     name=draft.name,
                     description=draft.description,
@@ -1557,6 +1561,7 @@ class CommandService:
     @staticmethod
     def _materialize_resource_template(session, namespace, draft):
         template = ResourceTemplate(
+            id=draft.id or uuid4(),
             namespace=namespace,
             name=draft.name,
             version=draft.version,
@@ -1598,6 +1603,7 @@ class CommandService:
                 )
         for child_draft in draft.children:
             child = ResourceTemplate(
+                id=child_draft.id or uuid4(),
                 namespace=template.namespace,
                 name=child_draft.name,
                 version=child_draft.version,

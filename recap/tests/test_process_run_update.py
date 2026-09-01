@@ -17,9 +17,9 @@ def test_process_run_update_persists_param_changes(client):
         version="1.0",
     ) as prb:
         run_id = prb.process_run.id
-        canonical_run = prb._process_run
 
         params = prb.get_params("Mix")
+        canonical_run = prb._process_run
         params.inputs.values.voltage.value = 42
         assert params.inputs.values.voltage.value == 42
         prb.set_params(params)

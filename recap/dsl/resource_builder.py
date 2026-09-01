@@ -2,7 +2,7 @@ import json
 import warnings
 from datetime import UTC, datetime
 from typing import Any, Literal, Optional, overload
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, create_model
 
@@ -194,7 +194,7 @@ class ResourceBuilder:
                 "values": properties[group.name],
             }
         return ResourceSchema.model_construct(
-            id=UUID(int=0),
+            id=uuid4(),
             name=self.name,
             template=template,
             children={},
@@ -272,6 +272,7 @@ class ResourceBuilder:
             if properties == self._initial_properties_payload:
                 properties = None
             command = CreateResource(
+                id=getattr(self._resource, "id", None),
                 namespace_path=self.namespace_context.path,
                 name=self.name,
                 template_id=self._template_id,
@@ -557,6 +558,7 @@ class ResourceTemplateBuilder:
             raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
         self.on_existing = on_existing
         self._template: ResourceTemplateRef | ResourceTemplateSchema | None = None
+        self._is_new_template = resource_template_id is None
         self._draft_model: ResourceTemplateSchema | None = None
         if resource_template_id is not None:
             self._initialize_command_update(resource_template_id)
@@ -565,6 +567,19 @@ class ResourceTemplateBuilder:
                 "name and type_names are required to create a resource template"
             )
         else:
+            self._template = ResourceTemplateRef.model_construct(
+                id=uuid4(),
+                create_date=None,
+                modified_date=None,
+                namespace_id=self.namespace_context.id,
+                status=LifecycleStatus.MUTABLE,
+                revision=1,
+                name=name,
+                slug=None,
+                version=version,
+                labels=[],
+                types=[],
+            )
             existing = self.backend.query(
                 ResourceTemplateSchema,
                 QuerySpec(
@@ -598,7 +613,7 @@ class ResourceTemplateBuilder:
         draft = self._build_draft()
         if self._submitted and draft == self._last_draft:
             return self
-        if self._template is None:
+        if self._is_new_template:
             command = CreateResourceTemplate(
                 namespace_path=self.namespace_context.path, draft=draft
             )
@@ -764,6 +779,7 @@ class ResourceTemplateBuilder:
         if self._draft_model is not None:
             model = self._draft_model
             return ResourceTemplateDraft(
+                id=model.id,
                 name=model.name,
                 version=model.version,
                 labels=model.labels,
@@ -790,6 +806,7 @@ class ResourceTemplateBuilder:
                 ],
             )
         return ResourceTemplateDraft(
+            id=self._template.id,
             name=self.name,
             version=self.version,
             type_names=self.type_names or (),
@@ -800,6 +817,7 @@ class ResourceTemplateBuilder:
     @staticmethod
     def _draft_from_model(model: ResourceTemplateSchema) -> ResourceTemplateDraft:
         return ResourceTemplateDraft(
+            id=model.id,
             name=model.name,
             version=model.version,
             labels=model.labels,
@@ -827,6 +845,7 @@ class ResourceTemplateBuilder:
         )
 
     def _initialize_command_update(self, resource_template_id: UUID) -> None:
+        self._is_new_template = False
         templates = self.backend.query(
             ResourceTemplateSchema,
             QuerySpec(

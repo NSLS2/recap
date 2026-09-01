@@ -63,6 +63,7 @@ class StepTemplateDraft(DraftModel):
 
 
 class ProcessTemplateDraft(DraftModel):
+    id: UUID | None = None
     name: str = Field(min_length=1)
     version: str = Field(min_length=1)
     labels: tuple[str, ...] = ()
@@ -85,6 +86,7 @@ class ProcessTemplateDraft(DraftModel):
 
 
 class ResourceTemplateDraft(DraftModel):
+    id: UUID | None = None
     name: str = Field(min_length=1)
     version: str = Field(min_length=1)
     labels: tuple[str, ...] = ()
@@ -104,6 +106,7 @@ class ProcessRunStepDraft(DraftModel):
 
 
 class ProcessRunDraft(DraftModel):
+    id: UUID | None = None
     name: str = Field(min_length=1)
     description: str
     template_id: UUID

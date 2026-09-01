@@ -50,6 +50,29 @@ def test_resource_template_lifecycle_has_local_remote_parity(command_client):
     assert builder.template.status.value == "ARCHIVED"
 
 
+def test_new_builders_keep_provisional_ids_after_commit(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_process_template("ID PT", "1.0") as process_template:
+        process_template_id = process_template.template.id
+    assert process_template.template.id == process_template_id
+
+    with scoped.build_resource_template(name="ID RT", type_names=["sample"]) as resource_template:
+        resource_template_id = resource_template.template.id
+    assert resource_template.template.id == resource_template_id
+
+    process_run = scoped.build_process_run("ID run", "", "ID PT", "1.0")
+    process_run_id = process_run.process_run.id
+    with process_run:
+        pass
+    assert process_run.process_run.id == process_run_id
+
+    resource = scoped.build_resource("ID resource", "ID RT")
+    resource_id = resource.resource.id
+    with resource:
+        pass
+    assert resource.resource.id == resource_id
+
+
 def test_namespace_update_has_local_remote_parity(command_client):
     scoped = seed_command_namespace(command_client)
 

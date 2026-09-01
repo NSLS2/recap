@@ -192,6 +192,8 @@ def _encode_create_resource(command: CommandModel) -> EncodedRequest:
     assert isinstance(command, CreateResource)
     data = command.model_dump(mode="json")
     data.pop("namespace_path")
+    if data["id"] is None:
+        data.pop("id")
     return EncodedRequest(
         method="POST",
         path=f"/api/v1/resources/{command.namespace_path.strip('/')}",

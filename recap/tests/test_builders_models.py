@@ -216,3 +216,36 @@ def test_resource_builder_add_child_copies_resource_schema_source(client):
         refreshed = builder.get_model(update=True)
     assert refreshed.children[source.name].id == child_builder.resource.id
     assert refreshed.children[source.name].copied_from_id == source.id
+
+
+def test_new_process_run_keeps_provisional_id_after_context_commit(client):
+    with client.build_process_template("ID PT", "1.0"):
+        pass
+    builder = client.build_process_run("ID run", "", "ID PT", "1.0")
+    provisional_id = builder.process_run.id
+    with builder:
+        pass
+    assert builder.process_run.id == provisional_id
+
+
+def test_new_resource_keeps_provisional_id_after_context_commit(client):
+    with client.build_resource_template(name="ID RT", type_names=["sample"]):
+        pass
+    builder = client.build_resource("ID resource", "ID RT")
+    provisional_id = builder.resource.id
+    with builder:
+        pass
+    assert builder.resource.id == provisional_id
+
+
+@pytest.mark.parametrize("kind", ["process", "resource"])
+def test_new_template_keeps_provisional_id_after_context_commit(client, kind):
+    builder = (
+        client.build_process_template("ID PT", "1.0")
+        if kind == "process"
+        else client.build_resource_template(name="ID RT", type_names=["sample"])
+    )
+    provisional_id = builder.template.id
+    with builder:
+        pass
+    assert builder.template.id == provisional_id

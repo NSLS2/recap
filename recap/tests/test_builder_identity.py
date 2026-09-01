@@ -63,6 +63,6 @@ def test_new_resource_get_model_is_copy_on_write(client):
     builder = scoped.build_resource("copy-resource", "CopyRT")
     draft = builder.get_model()
     builder.save()
-    assert draft.id != builder.resource.id
+    assert draft.id == builder.resource.id
     draft.name = "changed"
     assert builder.resource.name == "copy-resource"

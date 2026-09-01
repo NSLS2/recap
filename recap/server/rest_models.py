@@ -30,6 +30,7 @@ class UpdateNamespaceRequest(RestModel):
 
 
 class CreateResourceRequest(RestModel):
+    id: UUID | None = None
     name: str
     template_id: str
     parent_id: str | None = None

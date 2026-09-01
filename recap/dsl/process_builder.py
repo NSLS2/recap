@@ -1,6 +1,6 @@
 import warnings
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, create_model
 from sqlalchemy.exc import NoResultFound
@@ -82,6 +82,7 @@ class ProcessTemplateBuilder:
         self.name = name
         self.version = version
         self._template: ProcessTemplateRef | None = None
+        self._is_new_template = process_template_id is None
         self._draft_model: ProcessTemplateSchema | None = None
         self._resource_slots = {}
         self._current_step_builder = None
@@ -92,6 +93,17 @@ class ProcessTemplateBuilder:
                 "name and version are required to create a process template"
             )
         else:
+            self._template = ProcessTemplateRef.model_construct(
+                id=uuid4(),
+                create_date=None,
+                modified_date=None,
+                namespace_id=self.namespace_context.id,
+                status=LifecycleStatus.MUTABLE,
+                revision=1,
+                name=name,
+                version=version,
+                labels=[],
+            )
             existing = self.backend.query(
                 ProcessTemplateSchema,
                 QuerySpec(
@@ -132,7 +144,7 @@ class ProcessTemplateBuilder:
             CreateProcessTemplate(
                 namespace_path=self.namespace_context.path, draft=draft
             )
-            if self._template is None
+            if self._is_new_template
             else UpdateProcessTemplate(
                 template_id=self._template.id,
                 expected_revision=self._expected_revision,
@@ -274,6 +286,7 @@ class ProcessTemplateBuilder:
         if self._draft_model is not None:
             model = self._draft_model
             return ProcessTemplateDraft(
+                id=model.id,
                 name=model.name,
                 version=model.version,
                 labels=model.labels,
@@ -314,6 +327,7 @@ class ProcessTemplateBuilder:
                 ],
             )
         return ProcessTemplateDraft(
+            id=self._template.id,
             name=self.name,
             version=self.version,
             labels=self._draft_labels,
@@ -322,6 +336,7 @@ class ProcessTemplateBuilder:
         )
 
     def _initialize_command_update(self, process_template_id: UUID) -> None:
+        self._is_new_template = False
         templates = self.backend.query(
             ProcessTemplateSchema,
             QuerySpec(
@@ -562,6 +577,20 @@ class ProcessRunBuilder:
         self._process_template = templates[0]
         self._template_id = self._process_template.id
         if self._process_run is None:
+            self._draft_process_run = ProcessRunSchema.model_construct(
+                id=uuid4(),
+                create_date=None,
+                modified_date=None,
+                namespace_id=self.namespace_context.id,
+                status=LifecycleStatus.MUTABLE,
+                revision=1,
+                name=self.name,
+                description=self.description,
+                template=self._process_template,
+                steps={},
+                assigned_resources={},
+            )
+        if self._process_run is None:
             existing_runs = self.backend.query(
                 ProcessRunSchema,
                 QuerySpec(
@@ -614,6 +643,7 @@ class ProcessRunBuilder:
             command = CreateProcessRun(
                 namespace_path=self.namespace_context.path,
                 draft=ProcessRunDraft(
+                    id=self._draft_process_run.id,
                     name=self.name,
                     description=self.description,
                     template_id=self._template_id,
@@ -684,8 +714,6 @@ class ProcessRunBuilder:
 
     @property
     def process_run(self) -> ProcessRunSchema:
-        if self._process_run is None:
-            self.save()
         return self._draft_process_run
 
     def set_model(self, model: ProcessRunSchema):
@@ -729,6 +757,8 @@ class ProcessRunBuilder:
         step_schema: StepSchema | None = None,
     ) -> type[BaseModel]:
         """Return typed parameter model for selected process step."""
+        if self._process_run is None:
+            self.save()
         if not self._steps:
             self._steps = list(
                 self._reload_process_run(self.process_run.id).steps.values()
