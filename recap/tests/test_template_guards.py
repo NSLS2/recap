@@ -57,7 +57,7 @@ def test_process_template_guard_prevents_updates_when_runs_exist(client):
 
     with client.build_process_run("RunGuard", "desc", "PT Guard", "1.0") as prb:
         prb.assign_resource("slot1", resource)
-    prb.finalize()
+        prb.finalize()
 
     with client.connection_state.sessionmaker.begin() as session:
         pt_model = (

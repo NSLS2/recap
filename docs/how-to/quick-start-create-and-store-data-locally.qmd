@@ -43,10 +43,12 @@ typed attributes, defaults, and child templates.
 ## Create a resource
 
 ```python
-resource = namespace.build_resource(
+with namespace.build_resource(
     name="Sample Plate 001",
     template_name="Sample Plate",
-).save()
+) as builder:
+    pass
+resource = builder.resource
 ```
 
 Resources receive identity, namespace ownership, metadata, and lifecycle state.

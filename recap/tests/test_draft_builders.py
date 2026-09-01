@@ -186,6 +186,42 @@ def test_builder_changes_defaults_to_empty_fields_and_no_lifecycle():
     assert changes.lifecycle is None
 
 
+def test_all_builders_require_context_for_save_and_expose_serializable_empty_changes(client):
+    client.create_namespace("builder-contracts")
+    scoped = client.namespace("builder-contracts")
+    with scoped.build_resource_template(
+        name="contract-resource-template", type_names=["sample"]
+    ):
+        pass
+    with scoped.build_process_template("contract-process-template", "1.0"):
+        pass
+
+    builders = [
+        scoped.build_resource_template(
+            name="contract-resource-template-2", type_names=["sample"]
+        ),
+        scoped.build_process_template("contract-process-template-2", "1.0"),
+        scoped.build_resource("contract-resource", "contract-resource-template"),
+        scoped.build_process_run(
+            "contract-process-run",
+            "",
+            "contract-process-template",
+            "1.0",
+        ),
+    ]
+
+    for builder in builders:
+        assert not hasattr(builder, "activate")
+        with pytest.raises(RuntimeError, match="require a context manager"):
+            builder.save()
+        with builder:
+            pass
+        assert builder.changes().model_dump(mode="json") == {
+            "fields": {},
+            "lifecycle": None,
+        }
+
+
 def process_backend(adapter=None):
     adapter = adapter or RecordingBackend()
     context_resolver = RecordingNamspaceContextResolver()
@@ -278,7 +314,7 @@ def test_process_run_builder_submits_one_aggregate_command():
 
     builder.assign_resource("input", type("Resource", (), {"id": uuid4()})())
     with builder:
-        builder.save()
+        pass
 
     assert len(backend.commands) == 1
     assert isinstance(backend.commands[0][0], CreateProcessRun)
@@ -297,7 +333,7 @@ def test_resource_builder_has_no_construction_side_effect_and_submits_once():
 
     assert writer.commands == []
     with builder:
-        builder.save()
+        pass
 
     assert reader.queries
     assert len(writer.commands) == 1
@@ -328,7 +364,7 @@ def test_resource_builder_serializes_property_values_into_create_command():
         }
     )
     with builder:
-        builder.save()
+        pass
 
     assert writer.commands[0][0].properties == {
         "measurements": {
@@ -401,7 +437,7 @@ def test_resource_template_command_draft_accepts_attribute_group_builder():
         "serial", "str", "", ""
     ).close_group()
     with builder:
-        builder.save()
+        pass
 
     assert writer.commands[0][0].draft.property_groups[0].attributes[0].name == "serial"
 
@@ -446,7 +482,8 @@ def test_process_run_command_save_tolerates_none_or_partial_result():
             command_context=object(),
         )
         builder.assign_resource("input", type("Resource", (), {"id": uuid4()})())
-        builder.save()
+        with builder:
+            pass
 
         assert len(backend.commands) == 1
         assert builder._dirty
@@ -530,7 +567,8 @@ def test_process_run_command_save_handles_missing_template_steps():
     )
     builder._process_template = SimpleNamespace(step_templates=None)
 
-    builder.save()
+    with builder:
+        pass
 
     assert len(backend.commands) == 1
 

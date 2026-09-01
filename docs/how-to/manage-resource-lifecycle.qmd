@@ -14,7 +14,8 @@ Resources move through three states:
 
 ```python
 with namespace.build_resource(resource_id=plate.id) as builder:
-    builder.activate()
+    with builder:
+        builder.finalize()
 ```
 
 Activation and preceding edits commit when builder exits normally.

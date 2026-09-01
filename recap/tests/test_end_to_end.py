@@ -22,8 +22,8 @@ def test_complete_recap_workflow(end_to_end_client):
     """Create, execute, and query a complete provenance workflow."""
     client = end_to_end_client
     client.create_namespace("facility")
+    client.create_namespace("facility/beamline")
     scoped = client.namespace("facility/beamline")
-    scoped.create_namespace("facility/beamline")
 
     namespace = scoped.update_namespace(
         metadata={"beamline": "AMX", "proposal": "E2E-001"}
@@ -36,14 +36,14 @@ def test_complete_recap_workflow(end_to_end_client):
         resource_template.add_properties(
             {"metrics": [{"name": "rating", "type": "int", "default": 1}]}
         )
-    resource_template.activate()
+        resource_template.finalize()
 
     plate = scoped.create_resource("plate-001", "E2E plate")
     with scoped.build_resource(resource_id=plate.id) as resource_builder:
         resource = resource_builder.get_model()
         resource.properties.metrics.rating = 12
         resource_builder.set_model(resource)
-    resource_builder.finalize()
+        resource_builder.finalize()
 
     with scoped.build_process_template("E2E workflow", "1.0") as process_template:
         process_template.add_resource_slot("plate", "container", Direction.input)
@@ -55,7 +55,7 @@ def test_complete_recap_workflow(end_to_end_client):
             .bind_slot("source", "plate")
             .close_step()
         )
-    process_template.activate()
+        process_template.finalize()
 
     with scoped.build_process_run(
         "run-001", "End-to-end collection", "E2E workflow", "1.0"
@@ -64,7 +64,7 @@ def test_complete_recap_workflow(end_to_end_client):
         parameters = process_run.get_params("Collect")
         parameters.exposure.dwell = 15
         process_run.set_params(parameters)
-    process_run.finalize()
+        process_run.finalize()
 
     query = scoped.query_maker()
     loaded_plate = query.resources(load="eager").filter(name="plate-001").first()

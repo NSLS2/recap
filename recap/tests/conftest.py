@@ -182,8 +182,10 @@ def _seed_query_resource_tree(client: RecapClient) -> str:
     with client.build_resource("root", "Parent") as builder:
         nested = builder.add_child("nested", "Child").resource
     root = client.get_resource("root", "Parent")
-    client.build_resource(resource_id=nested.id).activate()
-    client.build_resource(resource_id=root.id).activate()
+    with client.build_resource(resource_id=nested.id) as builder:
+        builder.finalize()
+    with client.build_resource(resource_id=root.id) as builder:
+        builder.finalize()
     return namespace_path
 
 
@@ -204,7 +206,7 @@ def _seed_parity_graph(client: RecapClient) -> str:
             )
             .close_child()
         )
-    template.activate()
+        template.finalize()
 
     first_plate = client.create_resource("plate-1", "Parity plate")
     second_plate = client.create_resource("plate-2", "Parity plate")
@@ -214,9 +216,12 @@ def _seed_parity_graph(client: RecapClient) -> str:
             model.properties.metrics.rating = rating
             builder.set_model(model)
     sample = client.create_resource("sample-1", "sample", parent=first_plate)
-    client.build_resource(resource_id=sample.id).activate()
-    client.build_resource(resource_id=first_plate.id).activate()
-    client.build_resource(resource_id=second_plate.id).activate()
+    with client.build_resource(resource_id=sample.id) as builder:
+        builder.finalize()
+    with client.build_resource(resource_id=first_plate.id) as builder:
+        builder.finalize()
+    with client.build_resource(resource_id=second_plate.id) as builder:
+        builder.finalize()
 
     with client.build_process_template("Parity workflow", "1.0") as template:
         template.add_resource_slot("plate", "container", Direction.input)
@@ -228,7 +233,7 @@ def _seed_parity_graph(client: RecapClient) -> str:
             .bind_slot("source", "plate")
             .close_step()
         )
-    template.activate()
+        template.finalize()
 
     for name, plate, dwell in (
         ("run-high", first_plate, 15),
@@ -241,7 +246,7 @@ def _seed_parity_graph(client: RecapClient) -> str:
             parameters = run.get_params("Collect")
             parameters.exposure.dwell = dwell
             run.set_params(parameters)
-        run.finalize()
+            run.finalize()
 
     return namespace_path
 

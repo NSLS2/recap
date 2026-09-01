@@ -37,7 +37,8 @@ def _make_chain(client, depth, *, template, prefix):
             parent=parent,
             on_existing="create",
         )
-    client.build_resource(resource_id=root.id).activate()
+    with client.build_resource(resource_id=root.id) as builder:
+        builder.finalize()
     return root
 
 

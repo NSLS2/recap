@@ -306,9 +306,11 @@ def test_process_run_create_load_update_lifecycle_has_local_remote_parity(
 
     assert loaded.process_run.description == "updated"
     assert loaded.process_run.revision == 2
-    loaded.finalize()
+    with loaded:
+        loaded.finalize()
     assert loaded.process_run.status.value == "ACTIVE"
-    loaded.archive()
+    with loaded:
+        loaded.archive()
     assert loaded.process_run.status.value == "ARCHIVED"
 
 
@@ -324,14 +326,14 @@ def test_stale_resource_write_preserves_first_mutation(command_client):
     first_model.name = "first"
     first.set_model(first_model)
     with first:
-        first.save()
+        pass
 
     second_model = second.get_model()
     second_model.name = "second"
     second.set_model(second_model)
     with pytest.raises(RecapConflictError):
         with second:
-            second.save()
+            pass
 
     assert second.resource.name == "second"
     assert second.changes().fields["name"] == "second"
@@ -376,7 +378,7 @@ def test_remote_writes_are_visible_to_rest_queries(tmp_path):
             version="1.0",
         ) as process_run_builder:
             process_run = process_run_builder.process_run
-        process_run_builder.finalize()
+            process_run_builder.finalize()
 
         assert namespace.namespace_path == "beamline/amx"
         assert copied.name == "S-001-copy"

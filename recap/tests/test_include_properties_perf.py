@@ -37,7 +37,8 @@ def test_build_property_model_after_include_properties_no_lazy_loads(client):
     first = client.create_resource("incprop-a", "IncPropT", on_existing="create")
     second = client.create_resource("incprop-b", "IncPropT", on_existing="create")
     for resource in (first, second):
-        client.build_resource(resource_id=resource.id).activate()
+        with client.build_resource(resource_id=resource.id) as builder:
+            builder.finalize()
 
     qm = client.query_maker()
     resources = qm.resources().include(["properties"]).filter(name="incprop-a").all()
@@ -74,7 +75,8 @@ def test_include_properties_matches_load_eager_statement_count(client):
     resource = client.create_resource(
         "parity-res", "IncPropParity", on_existing="create"
     )
-    client.build_resource(resource_id=resource.id).activate()
+    with client.build_resource(resource_id=resource.id) as builder:
+        builder.finalize()
 
     qm = client.query_maker()
 

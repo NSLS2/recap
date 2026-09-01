@@ -64,5 +64,6 @@ def test_process_run_builder_command_mode_submits_namespace_owned_command():
         namespace_context=NamespaceContext(id=uuid4(), path="beamline/amx"),
         command_context=object(),
     )
-    builder.save()
+    with builder:
+        pass
     assert adapter.command.draft.name == "run"

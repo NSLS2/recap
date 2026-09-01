@@ -65,9 +65,7 @@ with client.build_resource(
     namespace_path=namespace.path,
 ) as builder:
     builder.resource.properties["identity"].values.sample_id.value = "A-001"
-
-builder.activate()
-builder.save()
+    builder.finalize()
 ```
 
 The builder persists `Sample A` when the context exits. Retrieve the saved
@@ -131,9 +129,7 @@ with namespace.build_process_run(
     params.conditions.temperature = 22.5
     params.conditions.duration = 12.0
     run.set_params(params)
-
-run.finalize()
-run.save()
+    run.finalize()
 ```
 
 When the context exits, the run records its template, resource assignment, step,

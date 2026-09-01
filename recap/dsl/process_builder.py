@@ -36,6 +36,7 @@ from recap.exceptions import (
     RecapNotFoundError,
 )
 from recap.lifecycle import LifecycleStatus
+from recap.utils.dsl import build_step_parameters_model
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.process import (
@@ -654,11 +655,16 @@ class ProcessRunBuilder:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        if self._transaction.exit(exc_type) and not self._save_called:
-            self.save()
+        if self._transaction.exit(exc_type):
+            self._save()
 
     def save(self):
         """Validate and persist current process-run changes."""
+        if not self._transaction.in_context:
+            raise RuntimeError("Builder changes require a context manager")
+        return self._save()
+
+    def _save(self):
         if self._submitted and not self._dirty and self._pending_lifecycle() is None:
             return self
         assignments = self._assignment_changes()
@@ -847,6 +853,11 @@ class ProcessRunBuilder:
 
         if step_schema is None:
             raise NoResultFound("Step not found with name: {step_name} ")
+        if isinstance(step_schema.parameters, dict) and not step_schema.parameters:
+            self._steps = list(self._reload_process_run(self.process_run.id).steps.values())
+            step_schema = next(
+                (step for step in self._steps if step.name == step_name), step_schema
+            )
         required_slots = {
             slot.name for slot in self._process_template.resource_slots if slot.required
         }
@@ -860,8 +871,20 @@ class ProcessRunBuilder:
                 + ", ".join(sorted(missing_slots))
             )
         parameters = step_schema.parameters
+        if isinstance(parameters, dict):
+            parameter_fields = tuple(
+                (
+                    getattr(parameter.template, "slug", None)
+                    or parameter.template.name,
+                    parameter.template.name,
+                )
+                for parameter in parameters.values()
+            )
+            parameters = build_step_parameters_model(
+                step_schema.name, parameter_fields
+            ).model_validate(parameters)
         model = create_model(
-            step_schema.name,
+            f"{step_schema.name}Parameters",
             __base__=type(parameters),
             step_name=(Literal[step_schema.name], step_schema.name),
             step_id=(UUID, step_schema.id),

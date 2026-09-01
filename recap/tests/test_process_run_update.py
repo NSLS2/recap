@@ -171,7 +171,6 @@ def test_process_run_set_model_then_mutation_preserves_persisted_baseline(client
             "assignments": {"unchanged_dataset": unchanged.id},
             "description": "edited draft",
         }
-        builder.save()
 
     with scoped.build_process_run(process_run_id=run_id) as builder:
         assert builder.process_run.description == "edited draft"

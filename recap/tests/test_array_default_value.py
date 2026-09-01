@@ -21,7 +21,7 @@ class TestArrayDefaultViaLocalBackend:
             name="ArrayTest-T1", type_names=["sample"]
         ) as rtb:
             rtb.prop_group("data").add_attribute("tags", "array", "", []).close_group()
-        rtb.activate()
+            rtb.finalize()
 
         # Verify template was persisted and is queryable
         tmpl = (
@@ -40,7 +40,7 @@ class TestArrayDefaultViaLocalBackend:
             rtb.prop_group("meta").add_attribute(
                 "labels", "array", "", ["a", "b", "c"]
             ).close_group()
-        rtb.activate()
+            rtb.finalize()
 
         tmpl = (
             client.query_maker()
@@ -59,9 +59,10 @@ class TestArrayDefaultViaLocalBackend:
                 rtb.prop_group("info").add_attribute(
                     "items", "array", "", []
                 ).close_group()
-        client.build_resource_template(
+        with client.build_resource_template(
             name="ArrayTest-T3", type_names=["container"]
-        ).activate()
+        ) as rtb:
+            rtb.finalize()
         # Should still have exactly one attribute template named "items"
         tmpl = (
             client.query_maker()

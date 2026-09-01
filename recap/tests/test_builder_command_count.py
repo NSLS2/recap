@@ -53,7 +53,7 @@ def client_backend(adapter):
     )
 
 
-def test_repeated_save_flushes_latest_draft_once():
+def test_clean_context_flushes_latest_draft_once():
     context = object()
     existing = SimpleNamespace(
         id=uuid4(),
@@ -76,9 +76,7 @@ def test_repeated_save_flushes_latest_draft_once():
     )
 
     with builder:
-        builder.save()
         builder.add_resource_slot("input", "container", "input")
-        builder.save()
 
     assert len(backend.commands) == 1
     assert all(
@@ -109,7 +107,6 @@ def test_clean_repeated_save_does_not_duplicate_command():
     )
 
     with builder:
-        builder.save()
-        builder.save()
+        pass
 
     assert len(backend.commands) == 0

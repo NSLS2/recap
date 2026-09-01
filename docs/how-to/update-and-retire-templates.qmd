@@ -61,7 +61,8 @@ through the model.
 After checking a definition, mark it active:
 
 ```python
-builder.activate()
+with builder:
+    builder.finalize()
 ```
 
 Activation changes lifecycle status; it does not change template structure.

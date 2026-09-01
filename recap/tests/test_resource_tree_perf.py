@@ -40,7 +40,8 @@ def _make_chain(client, depth, *, prefix):
             parent=parent,
             on_existing="create",
         )
-    client.build_resource(resource_id=root.id).activate()
+    with client.build_resource(resource_id=root.id) as builder:
+        builder.finalize()
     return root
 
 
@@ -96,7 +97,8 @@ def test_load_eager_resource_tree_bounded_count(client):
             parent=parent,
             on_existing="create",
         )
-    client.build_resource(resource_id=root.id).activate()
+    with client.build_resource(resource_id=root.id) as builder:
+        builder.finalize()
 
     qm = client.query_maker()
     with count_statements(client) as counter:
@@ -126,7 +128,8 @@ def test_load_eager_resource_tree_is_multi_root_bounded(client):
                 parent=parent,
                 on_existing="create",
             )
-        client.build_resource(resource_id=root.id).activate()
+        with client.build_resource(resource_id=root.id) as builder:
+            builder.finalize()
         roots.append(root)
 
     with count_statements(client) as counter:
