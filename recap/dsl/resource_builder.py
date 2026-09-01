@@ -281,9 +281,55 @@ class ResourceBuilder:
                 fields["properties"] = properties
             if self._resource is not None and source.name != self._resource.name:
                 fields["name"] = source.name
-        return BuilderChanges(fields=fields, lifecycle=self._transaction.pending_lifecycle)
+        return BuilderChanges(
+            fields=fields,
+            lifecycle=self._transaction.pending_lifecycle_for(self),
+        )
 
-    def _flush(self, *, flush_lifecycle: bool = True):
+    def _pending_lifecycle(self):
+        return self._transaction.pending_lifecycle_for(self)
+
+    def _flush_lifecycle(self):
+        pending = self._pending_lifecycle()
+        if pending is None:
+            return
+        result = self.backend._execute(
+            SetLifecycleStatus(
+                object_type="resource",
+                object_id=self.resource.id,
+                expected_revision=self._resource.revision,
+                status=pending.value,
+            ),
+            self._command_context,
+        )
+        if isinstance(result, ResourceSchema):
+            self._resource = result
+            self._draft = result.model_copy(deep=True)
+            self._expected_revision = result.revision
+            self._last_properties_payload = self._resource_properties_payload(result)
+            self._transaction.clear_lifecycle(owner=self)
+
+    def _flush_children(self):
+        for child in self._children:
+            child._flush(flush_lifecycle=False)
+            self._register_child(child)
+            child._flush_lifecycle_tree()
+
+    def _flush_lifecycle_tree(self):
+        self._flush_lifecycle()
+        for child in self._children:
+            child._flush_lifecycle_tree()
+
+    def _register_child(self, child: "ResourceBuilder"):
+        if self._draft is None:
+            if self._resource is None:
+                raise RuntimeError("Parent builder has no provisional resource")
+            self._draft = self._resource.model_copy(deep=True)
+        if not isinstance(self._draft.children, dict):
+            raise ValueError("Parent resource has invalid children schema")
+        self._draft.children[child.resource.name] = child.resource
+
+    def _flush(self, *, flush_lifecycle: bool = True):  # noqa: C901
         if self._draft is not None and self._resource is not None:
             source = (
                 self._draft
@@ -302,27 +348,12 @@ class ResourceBuilder:
                 or getattr(self._draft, "name", None) == getattr(self._resource, "name", None)
             )
         )
-        if unchanged and self._transaction.pending_lifecycle is None:
-            for child in self._children:
-                child._flush(flush_lifecycle=False)
-                self._draft.children[child.resource.name] = child.resource
+        if unchanged and self._pending_lifecycle() is None:
+            self._flush_children()
             return self
         if unchanged:
-            result = self.backend._execute(
-                SetLifecycleStatus(
-                    object_type="resource",
-                    object_id=self.resource.id,
-                    expected_revision=self._resource.revision,
-                    status=self._transaction.pending_lifecycle.value,
-                ),
-                self._command_context,
-            )
-            if isinstance(result, ResourceSchema):
-                self._resource = result
-                self._draft = result.model_copy(deep=True)
-                self._expected_revision = result.revision
-                self._last_properties_payload = self._resource_properties_payload(result)
-                self._transaction.clear_lifecycle()
+            self._flush_lifecycle()
+            self._flush_children()
             return self
         if self._is_new_resource:
             if self._copy_source_id is not None:
@@ -384,29 +415,12 @@ class ResourceBuilder:
         self._is_new_resource = False
         self._last_properties_payload = self._resource_properties_payload(result)
         self._submitted = True
-        for child in self._children:
-            child._flush(flush_lifecycle=False)
-            self._draft.children[child.resource.name] = child.resource
+        self._flush_children()
         if not flush_lifecycle:
             return self
-        pending = self._transaction.pending_lifecycle
-        if pending is None:
-            return self
-        result = self.backend._execute(
-            SetLifecycleStatus(
-                object_type="resource",
-                object_id=self.resource.id,
-                expected_revision=self._resource.revision,
-                status=pending.value,
-            ),
-            self._command_context,
-        )
-        if isinstance(result, ResourceSchema):
-            self._resource = result
-            self._draft = result.model_copy(deep=True)
-            self._expected_revision = result.revision
-            self._last_properties_payload = self._resource_properties_payload(result)
-            self._transaction.clear_lifecycle()
+        self._flush_lifecycle()
+        for child in self._children:
+            child._flush_lifecycle_tree()
         return self
 
     def _resource_properties_payload(self, resource=None):
@@ -439,18 +453,23 @@ class ResourceBuilder:
         return payload
 
     def _parent_id(self) -> UUID | None:
-        if self.parent is None:
+        if self.parent is None and self.parent_resource is None:
             return None
-        if self.parent._resource is None:
+        parent = (
+            self.parent._draft or self.parent._resource
+            if self.parent
+            else self.parent_resource
+        )
+        if parent is None:
             raise RuntimeError("Child builder requires initialized parent resource")
-        return self.parent.resource.id
+        return parent.id
 
     def finalize(self):
-        self._transaction.request_lifecycle(LifecycleStatus.ACTIVE)
+        self._transaction.request_lifecycle(LifecycleStatus.ACTIVE, owner=self)
         return self
 
     def archive(self):
-        self._transaction.request_lifecycle(LifecycleStatus.ARCHIVED)
+        self._transaction.request_lifecycle(LifecycleStatus.ARCHIVED, owner=self)
         return self
 
     def _reload_resource(self, resource_id: UUID) -> ResourceSchema:
@@ -519,13 +538,16 @@ class ResourceBuilder:
                 if isinstance(name_or_source, ResourceSchema)
                 else name_or_source
             )
-            copied = self._reload_resource(source_id).model_copy(deep=True)
+            source = self._reload_resource(source_id)
+            if not isinstance(source, ResourceSchema) or not isinstance(
+                source.template, ResourceTemplateSchema
+            ):
+                raise ValueError("Copied child requires valid resource schema")
+            copied = source.model_copy(deep=True)
             copied.id = uuid4()
             copied.parent = self.resource
             copied.copied_from_id = source_id
             if not copied.children:
-                source = self._reload_resource(source_id)
-
                 def clone_children(parent, children):
                     result = {}
                     for child_name, child in children.items():
@@ -559,7 +581,7 @@ class ResourceBuilder:
             child_builder.template_name = copied.template.name
             child_builder.template_version = copied.template.version
             child_builder._initial_properties_payload = child_builder._resource_properties_payload(copied)
-            self._draft.children[copied.name] = child_builder.resource
+            self._register_child(child_builder)
             self._children.append(child_builder)
             return child_builder
         if template_name is None:
@@ -574,7 +596,7 @@ class ResourceBuilder:
             parent=self,
             transaction=self._transaction,
         )
-        self._draft.children[name_or_source] = child_builder.resource
+        self._register_child(child_builder)
         self._children.append(child_builder)
         return child_builder
 

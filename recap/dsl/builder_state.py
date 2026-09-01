@@ -14,6 +14,7 @@ class BuilderTransactionState:
     def __init__(self) -> None:
         self._depth = 0
         self._pending_lifecycle: LifecycleStatus | None = None
+        self._owned_lifecycle: dict[object, LifecycleStatus] = {}
 
     @property
     def in_context(self) -> bool:
@@ -22,6 +23,9 @@ class BuilderTransactionState:
     @property
     def pending_lifecycle(self) -> LifecycleStatus | None:
         return self._pending_lifecycle
+
+    def pending_lifecycle_for(self, owner: object) -> LifecycleStatus | None:
+        return self._owned_lifecycle.get(owner)
 
     def enter(self) -> None:
         self._depth += 1
@@ -32,10 +36,21 @@ class BuilderTransactionState:
             raise RuntimeError("Builder context depth underflow")
         return self._depth == 0 and exc_type is None
 
-    def request_lifecycle(self, status: LifecycleStatus) -> None:
+    def request_lifecycle(
+        self, status: LifecycleStatus, *, owner: object | None = None
+    ) -> None:
+        if owner is not None:
+            pending = self._owned_lifecycle.get(owner)
+            if pending not in (None, status):
+                raise ValueError("Conflicting lifecycle requests")
+            self._owned_lifecycle[owner] = status
+            return
         if self._pending_lifecycle not in (None, status):
             raise ValueError("Conflicting lifecycle requests")
         self._pending_lifecycle = status
 
-    def clear_lifecycle(self) -> None:
+    def clear_lifecycle(self, *, owner: object | None = None) -> None:
+        if owner is not None:
+            self._owned_lifecycle.pop(owner, None)
+            return
         self._pending_lifecycle = None

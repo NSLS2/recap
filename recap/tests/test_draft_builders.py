@@ -166,6 +166,20 @@ def test_transaction_state_rejects_conflicting_lifecycle_requests():
         state.request_lifecycle(LifecycleStatus.ARCHIVED)
 
 
+def test_transaction_state_tracks_lifecycle_by_builder_owner():
+    state = BuilderTransactionState()
+    parent = object()
+    child = object()
+    state.request_lifecycle(LifecycleStatus.ACTIVE, owner=parent)
+    state.request_lifecycle(LifecycleStatus.ACTIVE, owner=child)
+
+    assert state.pending_lifecycle_for(parent) is LifecycleStatus.ACTIVE
+    assert state.pending_lifecycle_for(child) is LifecycleStatus.ACTIVE
+    state.clear_lifecycle(owner=child)
+    assert state.pending_lifecycle_for(parent) is LifecycleStatus.ACTIVE
+    assert state.pending_lifecycle_for(child) is None
+
+
 def test_builder_changes_defaults_to_empty_fields_and_no_lifecycle():
     changes = BuilderChanges()
     assert changes.fields == {}

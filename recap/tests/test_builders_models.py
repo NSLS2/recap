@@ -273,6 +273,32 @@ def test_resource_copy_child_keeps_existing_and_provisional_children(client):
     assert copied.resource.children[source_child.name].id != source_child.id
 
 
+def test_resource_child_lifecycle_is_flushed_with_parent(client):
+    with client.build_resource_template(name="Lifecycle-Group", type_names=["group"]):
+        pass
+    with client.build_resource_template(name="Lifecycle-Leaf", type_names=["leaf"]):
+        pass
+
+    with client.build_resource("Lifecycle-group", "Lifecycle-Group") as builder:
+        child = builder.add_child("Lifecycle-leaf", "Lifecycle-Leaf")
+        child.finalize()
+
+    with client.build_resource(resource_id=builder.resource.id) as loader:
+        refreshed = loader.get_model(update=True)
+    assert refreshed.children[child.resource.name].status.value == "ACTIVE"
+
+
+def test_resource_copy_child_rejects_missing_source_schema(client, monkeypatch):
+    with client.build_resource_template(name="Invalid-Group", type_names=["group"]):
+        pass
+    group = client.create_resource("Invalid-group", "Invalid-Group")
+
+    with client.build_resource(resource_id=group.id) as builder:
+        monkeypatch.setattr(builder, "_reload_resource", lambda resource_id: None)
+        with pytest.raises(ValueError, match="valid resource schema"):
+            builder.add_child(group.id)
+
+
 def test_new_process_run_keeps_provisional_id_after_context_commit(client):
     with client.build_process_template("ID PT", "1.0"):
         pass
