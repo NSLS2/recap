@@ -159,6 +159,17 @@ def test_transaction_state_preserves_pending_lifecycle_after_exception():
     assert state.pending_lifecycle is LifecycleStatus.ACTIVE
 
 
+def test_transaction_state_remembers_swallowed_nested_exception():
+    state = BuilderTransactionState()
+    state.enter()
+    state.enter()
+    assert not state.exit(RuntimeError)
+    assert not state.exit(None)
+
+    state.enter()
+    assert state.exit(None)
+
+
 def test_transaction_state_rejects_conflicting_lifecycle_requests():
     state = BuilderTransactionState()
     state.request_lifecycle(LifecycleStatus.ACTIVE)

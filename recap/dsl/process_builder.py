@@ -36,7 +36,6 @@ from recap.exceptions import (
     RecapNotFoundError,
 )
 from recap.lifecycle import LifecycleStatus
-from recap.utils.dsl import build_step_parameters_model
 from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.process import (
@@ -46,7 +45,7 @@ from recap.schemas.process import (
 )
 from recap.schemas.resource import ResourceAssignmentSchema, ResourceSchema
 from recap.schemas.step import StepSchema, StepTemplateRef
-from recap.utils.dsl import lock_instance_fields
+from recap.utils.dsl import build_step_parameters_model, lock_instance_fields
 from recap.utils.general import Direction
 
 
@@ -754,15 +753,11 @@ class ProcessRunBuilder:
     def finalize(self):
         """Transition process run to ACTIVE/finalized state."""
         self._transaction.request_lifecycle(LifecycleStatus.ACTIVE, owner=self)
-        if not self._transaction.in_context:
-            self.save()
         return self
 
     def archive(self):
         """Transition process run to ARCHIVED."""
         self._transaction.request_lifecycle(LifecycleStatus.ARCHIVED, owner=self)
-        if not self._transaction.in_context:
-            self.save()
         return self
 
     def changes(self) -> BuilderChanges:

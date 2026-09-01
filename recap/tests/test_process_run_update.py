@@ -94,6 +94,39 @@ def test_resource_builder_persists_property_changes(client):
     assert refreshed.properties.details.values.serial.value == "xyz"
 
 
+def test_resource_parent_lifecycle_waits_for_child_data(client, monkeypatch):
+    client.create_namespace("resource-lifecycle-order")
+    scoped = client.namespace("resource-lifecycle-order")
+    with scoped.build_resource_template(name="ParentRT", type_names=["container"]):
+        pass
+    with scoped.build_resource_template(name="ChildRT", type_names=["sample"]):
+        pass
+
+    parent = scoped.build_resource("parent", "ParentRT")
+    child = parent.add_child("child", "ChildRT")
+    child.finalize()
+    parent.finalize()
+    events = []
+    backend = client.connection_state.backend
+    writer = backend.writer
+    execute = writer.execute
+
+    def recording_execute(command, context):
+        events.append(type(command).__name__)
+        return execute(command, context)
+
+    monkeypatch.setattr(writer, "execute", recording_execute)
+    with parent:
+        child.finalize()
+        parent.finalize()
+
+    first_lifecycle = events.index("SetLifecycleStatus")
+    last_resource_write = max(
+        index for index, event in enumerate(events) if event == "CreateResource"
+    )
+    assert last_resource_write < first_lifecycle
+
+
 def _assignment_fixture(client, suffix):
     client.create_namespace(suffix)
     scoped = client.namespace(suffix)
@@ -135,14 +168,28 @@ def test_deferred_process_run_finalization_keeps_all_assignments_without_duplica
 def test_process_run_exception_retains_assignment_and_finalize_request(client):
     scoped, unchanged, _ = _assignment_fixture(client, "exception-retain")
     builder = scoped.build_process_run("run", "desc", "Pandda-exception-retain", "1.0")
-    with pytest.raises(RuntimeError):
-        with builder:
-            builder.assign_resource("unchanged_dataset", unchanged)
-            builder.finalize()
-            raise RuntimeError("stop")
+    with pytest.raises(RuntimeError), builder:
+        builder.assign_resource("unchanged_dataset", unchanged)
+        builder.finalize()
+        raise RuntimeError("stop")
 
     assert builder.changes().fields["assignments"]["unchanged_dataset"] == unchanged.id
     assert builder.changes().lifecycle.value == "ACTIVE"
+
+
+def test_process_run_lifecycle_request_outside_context_is_deferred(client):
+    scoped, _, _ = _assignment_fixture(client, "outside-context-lifecycle")
+    builder = scoped.build_process_run(
+        "run", "desc", "Pandda-outside-context-lifecycle", "1.0"
+    )
+
+    builder.finalize()
+
+    assert builder.process_run.status.value == "MUTABLE"
+    assert builder.changes().lifecycle.value == "ACTIVE"
+    with builder:
+        pass
+    assert builder.process_run.status.value == "ACTIVE"
 
 
 def test_process_run_changes_are_empty_after_successful_commit(client):

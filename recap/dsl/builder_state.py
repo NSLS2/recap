@@ -15,6 +15,7 @@ class BuilderTransactionState:
         self._depth = 0
         self._pending_lifecycle: LifecycleStatus | None = None
         self._owned_lifecycle: dict[object, LifecycleStatus] = {}
+        self._failed = False
 
     @property
     def in_context(self) -> bool:
@@ -28,13 +29,17 @@ class BuilderTransactionState:
         return self._owned_lifecycle.get(owner)
 
     def enter(self) -> None:
+        if self._depth == 0:
+            self._failed = False
         self._depth += 1
 
     def exit(self, exc_type: type[BaseException] | None) -> bool:
+        if exc_type is not None:
+            self._failed = True
         self._depth -= 1
         if self._depth < 0:
             raise RuntimeError("Builder context depth underflow")
-        return self._depth == 0 and exc_type is None
+        return self._depth == 0 and not self._failed
 
     def request_lifecycle(
         self, status: LifecycleStatus, *, owner: object | None = None

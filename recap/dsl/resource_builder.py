@@ -313,12 +313,11 @@ class ResourceBuilder:
         for child in self._children:
             child._flush(flush_lifecycle=False)
             self._register_child(child)
-            child._flush_lifecycle_tree()
 
     def _flush_lifecycle_tree(self):
-        self._flush_lifecycle()
         for child in self._children:
             child._flush_lifecycle_tree()
+        self._flush_lifecycle()
 
     def _register_child(self, child: "ResourceBuilder"):
         if self._draft is None:
@@ -352,8 +351,9 @@ class ResourceBuilder:
             self._flush_children()
             return self
         if unchanged:
-            self._flush_lifecycle()
             self._flush_children()
+            if flush_lifecycle:
+                self._flush_lifecycle_tree()
             return self
         if self._is_new_resource:
             if self._copy_source_id is not None:
@@ -418,9 +418,7 @@ class ResourceBuilder:
         self._flush_children()
         if not flush_lifecycle:
             return self
-        self._flush_lifecycle()
-        for child in self._children:
-            child._flush_lifecycle_tree()
+        self._flush_lifecycle_tree()
         return self
 
     def _resource_properties_payload(self, resource=None):
