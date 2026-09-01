@@ -157,7 +157,12 @@ class ResourceBuilder:
                 match
                 for match in matches
                 if match.template.id == template.id
-                and (match.parent.id if match.parent else None) == parent_id
+                and (
+                    match.parent.id
+                    if match.is_loaded("parent") and match.parent
+                    else getattr(match, "parent_id", None)
+                )
+                == parent_id
             ]
             if matches:
                 if self.on_existing == "raise":

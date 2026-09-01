@@ -13,6 +13,7 @@ from recap.exceptions import (
     ExistingResourceTemplateWarning,
     ExistingResourceWarning,
 )
+from recap.schemas.resource import ResourceSchema
 from recap.utils.general import Direction
 
 
@@ -265,6 +266,36 @@ def test_resource_builder_reuses_existing_with_warning(client):
     ):
         assert rb.resource.id == first.id
         assert rb._draft.id == first.id
+
+
+def test_resource_builder_reuse_handles_unloaded_root_parent(client, monkeypatch):
+    _make_simple_template(client, name="UnloadedParentTemplate")
+    first = client.create_resource("UnloadedParent", "UnloadedParentTemplate")
+    backend = client.connection_state.backend
+    backend.identity_map.clear()
+    query = backend.query
+
+    def query_with_unloaded_parent(schema, spec, *, namespace_path):
+        matches = query(schema, spec, namespace_path=namespace_path)
+        if schema is ResourceSchema:
+            for match in matches:
+                loaded = {
+                    relation: match.is_loaded(relation)
+                    for relation in ("template", "parent", "children", "properties")
+                }
+                loaded["parent"] = False
+                match.set_loaded_relations(loaded, on_unloaded="raise")
+        return matches
+
+    monkeypatch.setattr(
+        type(backend),
+        "query",
+        lambda self, *args, **kwargs: query_with_unloaded_parent(*args, **kwargs),
+    )
+    with client.build_resource(
+        "UnloadedParent", "UnloadedParentTemplate", on_existing="silent"
+    ) as reused:
+        assert reused.resource.id == first.id
 
 
 def test_resource_builder_on_existing_raise_raises(client):
