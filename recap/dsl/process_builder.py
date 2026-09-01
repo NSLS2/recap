@@ -563,11 +563,6 @@ class ProcessRunBuilder:
             if self._process_run is not None
             else None
         )
-        self._baseline_process_run = (
-            self._process_run.model_copy(deep=True)
-            if self._process_run is not None
-            else None
-        )
         self._dirty = False
         if self._process_run is not None:
             self.name = self._process_run.name
@@ -795,7 +790,6 @@ class ProcessRunBuilder:
         self.description = model.description
         self._draft_assignments = self._assignment_ids(model)
         self._draft_steps = self._model_steps_payload(model)
-        self._draft_process_run = detached_model(model)
         self._dirty = True
         self._save_called = False
 

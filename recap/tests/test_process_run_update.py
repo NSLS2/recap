@@ -152,3 +152,30 @@ def test_process_run_changes_are_empty_after_successful_commit(client):
     ) as builder:
         builder.assign_resource("unchanged_dataset", unchanged)
     assert builder.changes().fields == {}
+
+
+def test_process_run_set_model_then_mutation_preserves_persisted_baseline(client):
+    scoped, unchanged, _ = _assignment_fixture(client, "set-model-baseline")
+    with scoped.build_process_run(
+        "run", "original", "Pandda-set-model-baseline", "1.0"
+    ) as builder:
+        run_id = builder.process_run.id
+
+    with scoped.build_process_run(process_run_id=run_id) as builder:
+        model = builder.get_model()
+        model.description = "edited draft"
+        builder.set_model(model)
+        builder.assign_resource("unchanged_dataset", unchanged)
+
+        assert builder.changes().fields == {
+            "assignments": {"unchanged_dataset": unchanged.id},
+            "description": "edited draft",
+        }
+        builder.save()
+
+    with scoped.build_process_run(process_run_id=run_id) as builder:
+        assert builder.process_run.description == "edited draft"
+        assert (
+            builder.process_run.assigned_resources["unchanged_dataset"].resource.id
+            == unchanged.id
+        )
