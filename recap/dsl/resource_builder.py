@@ -60,6 +60,7 @@ class ResourceBuilder:
         resource_id: UUID | None = None,
         on_existing: Literal["create", "silent", "warn", "raise"] = "warn",
         command_context: CommandContext,
+        transaction: BuilderTransactionState | None = None,
     ):
         if command_context is None:
             raise ValueError("ResourceBuilder requires command context")
@@ -76,11 +77,14 @@ class ResourceBuilder:
             )
         self.on_existing = on_existing
         self._command_context = command_context
+        self._transaction = transaction or BuilderTransactionState()
         self.backend = backend
         self._submitted = False
         self._last_properties_payload = None
         self._initial_properties_payload = None
         self._reused_existing = False
+        self._copy_source_id: UUID | None = None
+        self._provisional_children = None
         self._expected_revision = 1
         self._is_new_resource = resource_id is None
         self._resource: ResourceSchema | None = None
@@ -95,6 +99,7 @@ class ResourceBuilder:
         if isinstance(parent, self.__class__):
             self.parent = parent
             self.parent_resource = parent._resource if parent else None
+            self._transaction = parent._transaction
         elif isinstance(parent, ResourceSchema):
             self.parent_resource = parent
 
@@ -196,16 +201,22 @@ class ResourceBuilder:
                 "template": group,
                 "values": properties[group.name],
             }
-        return ResourceSchema.model_construct(
+        resource = ResourceSchema.model_construct(
             id=uuid4(),
             name=self.name,
             template=template,
             children={},
-            properties={},
+            properties={
+                group_name: self._property_schema(prop)
+                for group_name, prop in properties.items()
+            },
             namespace_id=self.namespace_context.id,
+            create_date=datetime.now(UTC),
+            modified_date=datetime.now(UTC),
             revision=1,
             status=LifecycleStatus.MUTABLE,
         )
+        return resource.build_property_model()
 
     @staticmethod
     def _property_schema(value):
@@ -239,19 +250,35 @@ class ResourceBuilder:
             parent=parent,
             on_existing=on_existing,
         )
-        builder.save()
+        with builder:
+            builder.save()
         return builder._resource
 
     def __enter__(self):
-        if self._is_new_resource and self._resource is not None:
-            self.save()
+        self._transaction.enter()
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        if exc_type is None:
-            self.save()
+        if self._transaction.exit(exc_type):
+            self._flush()
 
     def save(self):
+        if not self._transaction.in_context:
+            raise RuntimeError("Builder changes require a context manager")
+        return self._flush()
+
+    def changes(self) -> BuilderChanges:
+        source = self._draft or self._resource
+        fields = {}
+        if source is not None:
+            properties = self._resource_properties_payload(source)
+            if properties != self._last_properties_payload:
+                fields["properties"] = properties
+            if self._resource is not None and source.name != self._resource.name:
+                fields["name"] = source.name
+        return BuilderChanges(fields=fields, lifecycle=self._transaction.pending_lifecycle)
+
+    def _flush(self, *, flush_lifecycle: bool = True):
         if self._draft is not None and self._resource is not None:
             source = (
                 self._draft
@@ -261,27 +288,59 @@ class ResourceBuilder:
             properties = self._resource_properties_payload(source)
         else:
             properties = self._resource_properties_payload()
-        if (
+        unchanged = (
             self._submitted
             and properties == self._last_properties_payload
             and (
                 self._draft is None
                 or self._resource is None
-                or self._draft.name == self._resource.name
+                or getattr(self._draft, "name", None) == getattr(self._resource, "name", None)
             )
-        ):
+        )
+        if unchanged and self._transaction.pending_lifecycle is None:
+            for child in self._children:
+                child._flush(flush_lifecycle=False)
             return self
-        if self._is_new_resource:
-            if properties == self._initial_properties_payload:
-                properties = None
-            command = CreateResource(
-                id=getattr(self._resource, "id", None),
-                namespace_path=self.namespace_context.path,
-                name=self.name,
-                template_id=self._template_id,
-                parent_id=self.parent_resource.id if self.parent_resource else None,
-                properties=properties,
+        if unchanged:
+            result = self.backend._execute(
+                SetLifecycleStatus(
+                    object_type="resource",
+                    object_id=self.resource.id,
+                    expected_revision=self._resource.revision,
+                    status=self._transaction.pending_lifecycle.value,
+                ),
+                self._command_context,
             )
+            if isinstance(result, ResourceSchema):
+                self._resource = result
+                self._draft = result.model_copy(deep=True)
+                self._expected_revision = result.revision
+                self._last_properties_payload = self._resource_properties_payload(result)
+                self._transaction.clear_lifecycle()
+            return self
+            pending = self._transaction.pending_lifecycle
+            if pending is None:
+                return self
+        if self._is_new_resource:
+            if self._copy_source_id is not None:
+                command = CopyResource(
+                    source_resource_id=self._copy_source_id,
+                    destination_namespace_path=self.namespace_context.path,
+                    options=ResourceCopyOptions(
+                        parent_id=self.parent.resource.id if self.parent else None
+                    ),
+                )
+            else:
+                if properties == self._initial_properties_payload:
+                    properties = None
+                command = CreateResource(
+                    id=getattr(self._resource, "id", None),
+                    namespace_path=self.namespace_context.path,
+                    name=self.name,
+                    template_id=self._template_id,
+                    parent_id=(self.parent.resource.id if self.parent else None),
+                    properties=properties,
+                )
         elif self._resource.status is not LifecycleStatus.MUTABLE:
             command = CopyResource(
                 source_resource_id=self._resource.id,
@@ -304,13 +363,46 @@ class ResourceBuilder:
             )
         result = self.backend._execute(command, self._command_context)
         if not isinstance(result, ResourceSchema):
+            self._submitted = True
+            self._last_properties_payload = self._resource_properties_payload(
+                self._draft or self._resource
+            )
             return self
+        if self._copy_source_id is not None and not result.children:
+            result = self._reload_resource(result.id)
+        previous_children = self._provisional_children or (
+            self._draft.children if self._draft is not None else {}
+        )
         self._resource = result
         self._draft = result.model_copy(deep=True)
+        if previous_children and not self._draft.children:
+            self._draft.children = previous_children
         self._expected_revision = result.revision
         self._is_new_resource = False
         self._last_properties_payload = self._resource_properties_payload(result)
         self._submitted = True
+        for child in self._children:
+            child._flush(flush_lifecycle=False)
+        if not flush_lifecycle:
+            return self
+        pending = self._transaction.pending_lifecycle
+        if pending is None:
+            return self
+        result = self.backend._execute(
+            SetLifecycleStatus(
+                object_type="resource",
+                object_id=self.resource.id,
+                expected_revision=self._resource.revision,
+                status=pending.value,
+            ),
+            self._command_context,
+        )
+        if isinstance(result, ResourceSchema):
+            self._resource = result
+            self._draft = result.model_copy(deep=True)
+            self._expected_revision = result.revision
+            self._last_properties_payload = self._resource_properties_payload(result)
+            self._transaction.clear_lifecycle()
         return self
 
     def _resource_properties_payload(self, resource=None):
@@ -318,7 +410,15 @@ class ResourceBuilder:
         if resource is None:
             return None
         payload = {}
-        for group_name, prop in resource.properties.items():
+        properties = (
+            resource.properties
+            if isinstance(resource.properties, dict)
+            else {
+                name: getattr(resource.properties, name)
+                for name in type(resource.properties).model_fields
+            }
+        )
+        for group_name, prop in properties.items():
             value_names = (
                 type(prop.values).model_fields
                 if isinstance(prop.values, BaseModel)
@@ -334,44 +434,12 @@ class ResourceBuilder:
             }
         return payload
 
-    def activate(self):
-        if self._is_new_resource:
-            self.save()
-        result = self.backend._execute(
-            SetLifecycleStatus(
-                object_type="resource",
-                object_id=self.resource.id,
-                expected_revision=self._resource.revision,
-                status=LifecycleStatus.ACTIVE.value,
-            ),
-            self._command_context,
-        )
-        if isinstance(result, ResourceSchema):
-            self._resource = result
-            self._draft = result.model_copy(deep=True)
-            self._expected_revision = result.revision
-        elif result is not None:
-            return self
+    def finalize(self):
+        self._transaction.request_lifecycle(LifecycleStatus.ACTIVE)
         return self
 
     def archive(self):
-        if self._is_new_resource:
-            self.save()
-        result = self.backend._execute(
-            SetLifecycleStatus(
-                object_type="resource",
-                object_id=self.resource.id,
-                expected_revision=self._resource.revision,
-                status=LifecycleStatus.ARCHIVED.value,
-            ),
-            self._command_context,
-        )
-        if isinstance(result, ResourceSchema):
-            self._resource = result
-            self._draft = result.model_copy(deep=True)
-            self._expected_revision = result.revision
-        elif result is not None:
-            return self
+        self._transaction.request_lifecycle(LifecycleStatus.ARCHIVED)
         return self
 
     def _reload_resource(self, resource_id: UUID) -> ResourceSchema:
@@ -440,26 +508,48 @@ class ResourceBuilder:
                 if isinstance(name_or_source, ResourceSchema)
                 else name_or_source
             )
-            copied = self.backend._execute(
-                CopyResource(
-                    source_resource_id=source_id,
-                    destination_namespace_path=self.namespace_context.path,
-                    options=ResourceCopyOptions(parent_id=self.resource.id),
-                ),
-                self._command_context,
-            )
-            if not isinstance(copied, ResourceSchema):
-                raise RuntimeError("Copy resource command did not return a resource")
+            copied = self._reload_resource(source_id).model_copy(deep=True)
+            copied.id = uuid4()
+            copied.parent = self.resource
+            copied.copied_from_id = source_id
+            if not copied.children:
+                source = self._reload_resource(source_id)
+
+                def clone_children(parent, children):
+                    result = {}
+                    for child_name, child in children.items():
+                        clone = child.model_copy(deep=True)
+                        clone.id = uuid4()
+                        clone.parent = parent
+                        clone.copied_from_id = None
+                        clone.children = clone_children(clone, clone.children)
+                        result[child_name] = clone
+                    return result
+
+                copied.children = clone_children(copied, source.children)
             child_builder = ResourceBuilder(
-                name=None,
-                template_name=None,
+                name=copied.name,
+                template_name=copied.template.name,
                 backend=self.backend,
                 namespace_context=self.namespace_context,
                 command_context=self._command_context,
                 parent=self,
-                resource_id=copied.id,
+                resource_id=None,
+                transaction=self._transaction,
             )
+            child_builder._resource = copied
+            child_builder._draft = copied.model_copy(deep=True)
+            child_builder._is_new_resource = True
+            child_builder._submitted = False
+            child_builder._template_id = copied.template.id
+            child_builder._copy_source_id = source_id
+            child_builder._provisional_children = copied.children
+            child_builder.name = copied.name
+            child_builder.template_name = copied.template.name
+            child_builder.template_version = copied.template.version
+            child_builder._initial_properties_payload = child_builder._resource_properties_payload(copied)
             self._draft.children[copied.name] = child_builder.resource
+            self._children.append(child_builder)
             return child_builder
         if template_name is None:
             raise TypeError("New child requires name and template_name")
@@ -471,9 +561,10 @@ class ResourceBuilder:
             backend=self.backend,
             command_context=self._command_context,
             parent=self,
+            transaction=self._transaction,
         )
-        child_builder.save()
         self._draft.children[name_or_source] = child_builder.resource
+        self._children.append(child_builder)
         return child_builder
 
     def close_child(self):

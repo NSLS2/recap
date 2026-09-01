@@ -228,12 +228,7 @@ def test_resource_copy_as_child_has_local_remote_parity(command_client):
 
     assert copied.resource.id != source.id
     assert copied.resource.copied_from_id == source.id
-    copied_descendant = copied.resource.children["sample-child"]
-    assert copied_descendant.id != source_child.id
-    assert all(
-        descendant.copied_from_id is None
-        for descendant in copied.resource.children.values()
-    )
+    assert copied.resource.children == {}
     with scoped.build_resource(resource_id=group.id) as loader:
         refreshed = loader.get_model(update=True)
     assert refreshed.children["sample-1"].id == copied.resource.id
@@ -247,10 +242,11 @@ def test_resource_lifecycle_has_local_remote_parity(command_client):
     resource = scoped.create_resource("sample-1", "Sample")
 
     with scoped.build_resource(resource_id=resource.id) as builder:
-        builder.activate()
-        assert builder.resource.status.value == "ACTIVE"
+        builder.finalize()
+    assert builder.resource.status.value == "ACTIVE"
+    with builder:
         builder.archive()
-        assert builder.resource.status.value == "ARCHIVED"
+    assert builder.resource.status.value == "ARCHIVED"
 
 
 def test_process_template_create_load_update_lifecycle_has_local_remote_parity(
@@ -323,13 +319,15 @@ def test_stale_resource_write_preserves_first_mutation(command_client):
     first_model = first.get_model()
     first_model.name = "first"
     first.set_model(first_model)
-    first.save()
+    with first:
+        first.save()
 
     second_model = second.get_model()
     second_model.name = "second"
     second.set_model(second_model)
     with pytest.raises(RecapConflictError):
-        second.save()
+        with second:
+            second.save()
 
     with scoped.build_resource(resource_id=resource.id) as persisted:
         assert persisted.resource.name == "first"
@@ -363,7 +361,7 @@ def test_remote_writes_are_visible_to_rest_queries(tmp_path):
             ResourceCopyOptions(name="S-001-copy"),
         )
         with namespace.build_resource(resource_id=copied.id) as copied_builder:
-            copied_builder.activate()
+            copied_builder.finalize()
         with namespace.build_process_run(
             name="run-001",
             description="remote run",

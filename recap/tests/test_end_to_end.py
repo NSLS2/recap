@@ -43,7 +43,7 @@ def test_complete_recap_workflow(end_to_end_client):
         resource = resource_builder.get_model()
         resource.properties.metrics.rating = 12
         resource_builder.set_model(resource)
-    resource_builder.activate()
+    resource_builder.finalize()
 
     with scoped.build_process_template("E2E workflow", "1.0") as process_template:
         process_template.add_resource_slot("plate", "container", Direction.input)

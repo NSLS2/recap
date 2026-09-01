@@ -1,5 +1,35 @@
 import pytest
 
+from recap.lifecycle import LifecycleStatus
+
+
+def test_resource_context_exception_keeps_property_draft_for_retry(client):
+    with client.build_resource_template(name="RBM-retry-T", type_names=["container"]) as template:
+        template.prop_group("details").add_attribute("serial", "str", "", "initial").close_group()
+    builder = client.build_resource("RBM-retry-R", "RBM-retry-T")
+    with pytest.raises(RuntimeError):
+        with builder:
+            builder.resource.properties.details.values.serial.value = "retry"
+            builder.finalize()
+            raise RuntimeError("stop")
+
+    assert builder.changes().fields["properties"]["details"]["serial"]["value"] == "retry"
+    assert builder.changes().lifecycle is LifecycleStatus.ACTIVE
+    with builder:
+        pass
+    assert builder.resource.status is LifecycleStatus.ACTIVE
+    assert builder.resource.properties.details.values.serial.value == "retry"
+
+
+def test_resource_finalization_saves_draft_before_copy(client):
+    with client.build_resource_template(name="RBM-finalize-T", type_names=["container"]) as template:
+        template.prop_group("details").add_attribute("serial", "str", "", "initial").close_group()
+    with client.build_resource("RBM-finalize-R", "RBM-finalize-T") as builder:
+        builder.resource.properties.details.values.serial.value = "new"
+        builder.finalize()
+    assert builder.resource.status is LifecycleStatus.ACTIVE
+    assert builder.resource.properties.details.values.serial.value == "new"
+
 
 def test_resource_builder_set_model_updates_persisted(client):
     with client.build_resource_template(name="RBM-T", type_names=["container"]) as rtb:
@@ -191,7 +221,7 @@ def test_resource_builder_add_child_copies_uuid_source(client):
 
     with client.build_resource(resource_id=group.id) as builder:
         refreshed = builder.get_model(update=True)
-    assert refreshed.children[source.name].id == copied_id
+    assert refreshed.children[source.name].id == child_builder.resource.id
     assert refreshed.children[source.name].copied_from_id == source.id
 
 

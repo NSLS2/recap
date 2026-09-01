@@ -262,7 +262,8 @@ def test_process_run_builder_submits_one_aggregate_command():
     )
 
     builder.assign_resource("input", type("Resource", (), {"id": uuid4()})())
-    builder.save()
+    with builder:
+        builder.save()
 
     assert len(backend.commands) == 1
     assert isinstance(backend.commands[0][0], CreateProcessRun)
@@ -280,7 +281,8 @@ def test_resource_builder_has_no_construction_side_effect_and_submits_once():
     )
 
     assert writer.commands == []
-    builder.save()
+    with builder:
+        builder.save()
 
     assert reader.queries
     assert len(writer.commands) == 1
@@ -310,7 +312,8 @@ def test_resource_builder_serializes_property_values_into_create_command():
             )
         }
     )
-    builder.save()
+    with builder:
+        builder.save()
 
     assert writer.commands[0][0].properties == {
         "measurements": {
