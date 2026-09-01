@@ -616,6 +616,7 @@ class ProcessRunBuilder:
                     raise TypeError(
                         "Process-run builder requires ProcessRunSchema result"
                     )
+                self._draft_process_run = self._process_run.model_copy(deep=True)
                 self.name = self._process_run.name
                 self.description = self._process_run.description
         self._steps = (

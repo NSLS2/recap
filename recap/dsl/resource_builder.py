@@ -166,7 +166,9 @@ class ResourceBuilder:
                         stacklevel=2,
                     )
                 self._resource = ResourceSchema.model_validate(matches[0])
-                self._draft = self._resource.model_copy(deep=True)
+                self._draft = self._resource.model_copy(
+                    deep=True, update={"id": self._resource.id}
+                )
                 self._expected_revision = self._resource.revision
                 self._is_new_resource = False
                 self._reused_existing = True

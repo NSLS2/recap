@@ -204,9 +204,9 @@ def test_namespace_commands_have_registrations_and_complete_expected_set():
             CreateProcessTemplate,
             CreateProcessRun,
             UpdateResourceTemplate,
-            UpdateProcessTemplate,
-            UpdateProcessRun,
-            CreateNamespace,
+        UpdateProcessTemplate,
+        UpdateProcessRun,
+        CreateNamespace,
         UpdateNamespace,
         SetLifecycleStatus,
         }
@@ -363,7 +363,7 @@ def test_resource_template_codecs_unwrap_draft_and_use_if_match():
     draft = ResourceTemplateDraft(name="sample", version="1", type_names=[])
     create = CreateResourceTemplate(namespace_path="beamline", draft=draft)
     encoded = COMMAND_REGISTRY.by_command(create).encode_request(create)
-    assert encoded.body == draft.model_dump(mode="json")
+    assert encoded.body == {"name": "sample", "version": "1", "labels": [], "type_names": [], "property_groups": [], "children": []}
     assert encoded.path == "/api/v1/resource-templates/beamline"
 
     template_id = uuid4()
@@ -421,7 +421,7 @@ def test_process_template_codecs_unwrap_draft_and_use_if_match():
     draft = ProcessTemplateDraft(name="screen", version="1")
     create = CreateProcessTemplate(namespace_path="beamline/amx", draft=draft)
     encoded = COMMAND_REGISTRY.by_command(create).encode_request(create)
-    assert encoded.body == draft.model_dump(mode="json")
+    assert encoded.body == {"name": "screen", "version": "1", "labels": [], "resource_slots": [], "steps": []}
     assert encoded.path == "/api/v1/process-templates/beamline/amx"
 
     update = UpdateProcessTemplate(template_id=uuid4(), expected_revision=3, draft=draft)
@@ -438,7 +438,13 @@ def test_process_run_codecs_keep_revision_in_if_match_only():
     )
     create = CreateProcessRun(namespace_path="beamline/amx", draft=draft)
     encoded = COMMAND_REGISTRY.by_command(create).encode_request(create)
-    assert encoded.body == draft.model_dump(mode="json")
+    assert encoded.body == {
+        "name": "run-1",
+        "description": "first",
+        "template_id": str(template_id),
+        "assignments": {},
+        "steps": {},
+    }
     assert encoded.path == "/api/v1/process-runs/beamline/amx"
 
     update = UpdateProcessRun(
@@ -453,6 +459,38 @@ def test_process_run_codecs_keep_revision_in_if_match_only():
     }
     assert encoded.etag == '"4"'
     assert "expected_revision" not in encoded.body
+
+
+def test_create_codecs_preserve_supplied_ids():
+    process_template_id = uuid4()
+    resource_template_id = uuid4()
+    process_run_id = uuid4()
+    process_template = CreateProcessTemplate(
+        namespace_path="beamline",
+        draft=ProcessTemplateDraft(id=process_template_id, name="pt", version="1"),
+    )
+    resource_template = CreateResourceTemplate(
+        namespace_path="beamline",
+        draft=ResourceTemplateDraft(
+            id=resource_template_id, name="rt", version="1", type_names=[]
+        ),
+    )
+    process_run = CreateProcessRun(
+        namespace_path="beamline",
+        draft=ProcessRunDraft(
+            id=process_run_id, name="run", description="", template_id=uuid4()
+        ),
+    )
+
+    assert COMMAND_REGISTRY.by_command(process_template).encode_request(
+        process_template
+    ).body["id"] == str(process_template_id)
+    assert COMMAND_REGISTRY.by_command(resource_template).encode_request(
+        resource_template
+    ).body["id"] == str(resource_template_id)
+    assert COMMAND_REGISTRY.by_command(process_run).encode_request(process_run).body[
+        "id"
+    ] == str(process_run_id)
 
 
 def test_process_run_route_decoder_reads_if_match_and_forbids_unknown_body_fields():

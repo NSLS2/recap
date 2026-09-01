@@ -264,6 +264,7 @@ def test_resource_builder_reuses_existing_with_warning(client):
         client.build_resource("ReuseRes", "ReuseResTemplate") as rb,
     ):
         assert rb.resource.id == first.id
+        assert rb._draft.id == first.id
 
 
 def test_resource_builder_on_existing_raise_raises(client):
@@ -302,6 +303,8 @@ def test_process_run_builder_reuses_existing_with_warning(client):
         client.build_process_run("ReuseRun", "desc", "ReuseRunPT", "1.0") as prb,
     ):
         assert prb.process_run.name == "ReuseRun"
+        assert prb.process_run.id == prb._process_run.id
+        assert prb._draft_process_run.id == prb._process_run.id
         assert [step.name for step in prb._steps] == ["S1"]
 
 

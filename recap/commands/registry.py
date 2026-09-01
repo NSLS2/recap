@@ -265,10 +265,13 @@ def _decode_copy_process_run(
 
 def _encode_create_resource_template(command: CommandModel) -> EncodedRequest:
     assert isinstance(command, CreateResourceTemplate)
+    body = command.draft.model_dump(mode="json")
+    if body["id"] is None:
+        body.pop("id")
     return EncodedRequest(
         method="POST",
         path=f"/api/v1/resource-templates/{command.namespace_path.strip('/')}",
-        body=command.draft.model_dump(mode="json"),
+        body=body,
         etag=None,
     )
 
@@ -309,10 +312,13 @@ def _decode_resource_template_response(entity: Any, etag: str | None = None, **_
 
 def _encode_create_process_template(command: CommandModel) -> EncodedRequest:
     assert isinstance(command, CreateProcessTemplate)
+    body = command.draft.model_dump(mode="json")
+    if body["id"] is None:
+        body.pop("id")
     return EncodedRequest(
         method="POST",
         path=f"/api/v1/process-templates/{command.namespace_path.strip('/')}",
-        body=command.draft.model_dump(mode="json"),
+        body=body,
         etag=None,
     )
 
@@ -347,10 +353,13 @@ def _decode_update_process_template(
 
 def _encode_create_process_run(command: CommandModel) -> EncodedRequest:
     assert isinstance(command, CreateProcessRun)
+    body = command.draft.model_dump(mode="json")
+    if body["id"] is None:
+        body.pop("id")
     return EncodedRequest(
         method="POST",
         path=f"/api/v1/process-runs/{command.namespace_path.strip('/')}",
-        body=command.draft.model_dump(mode="json"),
+        body=body,
         etag=None,
     )
 
