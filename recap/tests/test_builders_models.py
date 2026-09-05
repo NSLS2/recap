@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 
 from recap.lifecycle import LifecycleStatus
@@ -197,6 +199,64 @@ def test_resource_builder_add_child_persists_and_links(client, recwarn):
     assert "AC-Leaf" in parent.children
     assert parent.children["AC-Leaf"].id == child.id
     assert not [warning for warning in recwarn if warning.category.__name__ == "SAWarning"]
+
+
+def test_resource_builder_add_child_accepts_keyword_name(client):
+    with client.build_resource_template(
+        name="AC-Keyword-Parent", type_names=["container"]
+    ):
+        pass
+    with client.build_resource_template(
+        name="AC-Keyword-Child", type_names=["sample"]
+    ):
+        pass
+
+    with client.build_resource("AC-Keyword-Root", "AC-Keyword-Parent") as builder:
+        child = builder.add_child(
+            name="AC-Keyword-Leaf", template_name="AC-Keyword-Child"
+        )
+
+    assert child.resource.name == "AC-Keyword-Leaf"
+
+
+def test_resource_builder_add_child_accepts_keyword_source(client):
+    with client.build_resource_template(
+        name="AC-Source-Parent", type_names=["container"]
+    ):
+        pass
+    with client.build_resource_template(
+        name="AC-Source-Child", type_names=["sample"]
+    ):
+        pass
+    source = client.create_resource("AC-Source-Leaf", "AC-Source-Child")
+    with client.build_resource(resource_id=source.id) as source_builder:
+        source_model = source_builder.get_model(update=True)
+    with client.build_resource("AC-Source-Root", "AC-Source-Parent") as parent_builder:
+        copied = parent_builder.add_child(source=source_model)
+
+    assert copied.resource.copied_from_id == source.id
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"name": "child", "source": uuid4()},
+        {"source": uuid4(), "template_name": "Child"},
+        {"name": "child"},
+    ],
+)
+def test_resource_builder_add_child_rejects_invalid_keyword_combinations(
+    client, kwargs
+):
+    with client.build_resource_template(
+        name="AC-Invalid-Parent", type_names=["container"]
+    ):
+        pass
+
+    with client.build_resource("AC-Invalid-Root", "AC-Invalid-Parent") as builder:
+        with pytest.raises(TypeError):
+            builder.add_child(**kwargs)
 
 
 def test_resource_builder_add_child_copies_uuid_source(client):

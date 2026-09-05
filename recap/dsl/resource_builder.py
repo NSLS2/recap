@@ -522,19 +522,33 @@ class ResourceBuilder:
     @overload
     def add_child(self, source: UUID | ResourceSchema) -> "ResourceBuilder": ...
 
+    @overload
     def add_child(
         self,
-        name_or_source: str | UUID | ResourceSchema,
+        *,
+        source: UUID | ResourceSchema,
+    ) -> "ResourceBuilder": ...
+
+    def add_child(
+        self,
+        name: str | UUID | ResourceSchema | None = None,
         template_name: str | None = None,
         template_version: str = "1.0",
+        *,
+        source: UUID | ResourceSchema | None = None,
     ) -> "ResourceBuilder":
-        if isinstance(name_or_source, (UUID, ResourceSchema)):
+        if isinstance(name, (UUID, ResourceSchema)):
+            if source is not None:
+                raise TypeError("Provide either positional source or source=, not both")
+            source = name
+            name = None
+        if source is not None:
+            if name is not None:
+                raise TypeError("Copied child cannot include name")
             if template_name is not None or template_version != "1.0":
                 raise TypeError("Copied child accepts exactly one source argument")
             source_id = (
-                name_or_source.id
-                if isinstance(name_or_source, ResourceSchema)
-                else name_or_source
+                source.id if isinstance(source, ResourceSchema) else source
             )
             source = self._reload_resource(source_id)
             if not isinstance(source, ResourceSchema) or not isinstance(
@@ -582,10 +596,10 @@ class ResourceBuilder:
             self._register_child(child_builder)
             self._children.append(child_builder)
             return child_builder
-        if template_name is None:
+        if name is None or template_name is None:
             raise TypeError("New child requires name and template_name")
         child_builder = ResourceBuilder(
-            name=name_or_source,
+            name=name,
             template_name=template_name,
             template_version=template_version,
             namespace_context=self.namespace_context,
