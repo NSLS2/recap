@@ -120,7 +120,7 @@ httpx2 = ">=2.0"
 [tool.pixi.environments]
 default = { solve-group = "default" }
 dev = { features = ["lint", "test", "server"], solve-group = "default" }
-docs = { features = ["docs"], solve-group = "docs" }
+docs = { features = ["docs", "default", "server"], solve-group = "docs" }
 build = { features = [ "build" ], solve-group = "default"}
 
 [tool.pixi.feature.server.pypi-dependencies]
@@ -148,6 +148,7 @@ check-build = { cmd = ["twine", "check", "dist/*"] }
 
 [tool.pytest.ini_options]
 markers = [
+    "integration: end-to-end public API workflows across deployment modes",
     "performance: SQL statement-budget regression tests; run with test-performance",
 ]
 
@@ -168,6 +169,7 @@ docs-check-links = { cmd = ["great-docs", "check-links", "--ignore", "recap\\.te
 
 [tool.pixi.feature.test.tasks]
 test = { cmd = ["pytest", "-ra", "-m", "not performance", "recap/tests"] }
+test-integration = { cmd = ["pytest", "-ra", "-m", "integration", "recap/tests"] }
 test-performance = { cmd = ["pytest", "-ra", "-m", "performance", "recap/tests"] }
 test-all = { cmd = ["pytest", "-ra", "recap/tests"] }
 
