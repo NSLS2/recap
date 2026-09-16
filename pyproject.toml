@@ -11,8 +11,10 @@ requires-python = ">=3.10"
 readme = "README.md"
 license = { text = "BSD-3-Clause" }
 dependencies = [
+    "alembic>=1.17.2,<2",
     "sqlalchemy>=2.0",
     "pydantic>=2.0",
+    "pyyaml>=6.0",
     "python-slugify",
     "mcp[cli]>=1.26.0,<2",
     "httpx2>=2.0",
@@ -41,14 +43,17 @@ dev = [
     "pytest"
 ]
 server = [
-    "strawberry-graphql[fastapi]>=0.220",
+    "psycopg[binary]>=3.2,<4",
+    "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pydantic-settings>=2.0",
     "pyyaml>=6.0",
+    "json-merge-patch>=0.3.0"
 ]
 
 [project.scripts]
 recap-server = "recap.server.__main__:main"
+recap-authz-compile = "recap.authorization.compiler:main"
 
 [tool.hatch.version]
 source = "vcs"
@@ -115,11 +120,12 @@ httpx2 = ">=2.0"
 [tool.pixi.environments]
 default = { solve-group = "default" }
 dev = { features = ["lint", "test", "server"], solve-group = "default" }
-docs = { features = ["docs"], solve-group = "default" }
+docs = { features = ["docs", "default", "server"], solve-group = "docs" }
 build = { features = [ "build" ], solve-group = "default"}
 
 [tool.pixi.feature.server.pypi-dependencies]
-"strawberry-graphql" = {version = ">=0.220", extras = ["fastapi"]}
+psycopg = {version = ">=3.2,<4", extras = ["binary"]}
+fastapi = ">=0.115"
 uvicorn = {version = ">=0.30", extras = ["standard"]}
 pydantic-settings = ">=2.0"
 
@@ -130,6 +136,9 @@ pytest = ">=8.4.2,<9"
 hatch = "*"
 twine = "*"
 
+[tool.pixi.feature.lint.dependencies]
+pre-commit = ">=4.0.1"
+
 [tool.pixi.feature.build.tasks]
 build = { cmd = ["hatch", "build"] }
 publish = { cmd = ["hatch", "publish"]}
@@ -137,20 +146,32 @@ check-build = { cmd = ["twine", "check", "dist/*"] }
 
 [tool]
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: end-to-end public API workflows across deployment modes",
+    "performance: SQL statement-budget regression tests; run with test-performance",
+]
+
 [tool.pixi.feature.lint.tasks]
 lint = { cmd = ["pre-commit", "run", "--all-files"] }
 
 [tool.pixi.feature.docs.dependencies]
-mkdocs-material = "*"
-mkdocstrings = "*"
-pymdown-extensions = "*"
+python = "3.11.*"
+quarto = "*"
+
+[tool.pixi.feature.docs.pypi-dependencies]
+great-docs = "*"
 
 [tool.pixi.feature.docs.tasks]
-docs-build = { cmd = ["mkdocs", "build", "--strict"] }
-docs-deploy = { cmd = ["mkdocs", "gh-deploy", "--force"] }
+docs-build = { cmd = ["great-docs", "build"] }
+docs-preview = { cmd = ["great-docs", "preview"] }
+docs-check-links = { cmd = ["great-docs", "check-links", "--ignore", "recap\\.test"] }
 
 [tool.pixi.feature.test.tasks]
-test = { cmd = ["pytest", "-s", "-ra", "recap/tests"] }
+test = { cmd = ["pytest", "-ra", "-m", "not performance", "recap/tests"] }
+test-integration = { cmd = ["pytest", "-ra", "-m", "integration", "recap/tests"] }
+test-performance = { cmd = ["pytest", "-ra", "-m", "performance", "recap/tests"] }
+test-all = { cmd = ["pytest", "-ra", "recap/tests"] }
 
 [tool.pixi.tasks]
 

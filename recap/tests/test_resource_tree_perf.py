@@ -13,16 +13,14 @@ The key assertion is *depth-independence*: a 3-level and a 4-level chain must
 issue the **same** number of statements.
 """
 
-from recap.dsl.resource_builder import ResourceTemplateBuilder
+import pytest
 
 from .conftest import count_statements
 
 
 def _make_template(client, name="TreePerfT"):
     """A minimal single-type template with one property group."""
-    with ResourceTemplateBuilder(
-        name=name, type_names=["container"], backend=client.backend
-    ) as rtb:
+    with client.build_resource_template(name=name, type_names=["container"]) as rtb:
         rtb.prop_group("details").add_attribute(
             "serial", "str", "", "abc"
         ).close_group()
@@ -42,6 +40,8 @@ def _make_chain(client, depth, *, prefix):
             parent=parent,
             on_existing="create",
         )
+    with client.build_resource(resource_id=root.id) as builder:
+        builder.finalize()
     return root
 
 
@@ -55,6 +55,7 @@ def _walk_depth(resource):
     return n
 
 
+@pytest.mark.performance
 def test_load_eager_resource_tree_is_depth_independent(client):
     """A ``load="eager"`` resource query must issue a bounded, depth-independent
     number of SQL statements regardless of tree depth."""
@@ -62,7 +63,7 @@ def test_load_eager_resource_tree_is_depth_independent(client):
     _make_chain(client, depth=3, prefix="three")
     _make_chain(client, depth=4, prefix="four")
 
-    qm = client.query_maker(unscoped=True)
+    qm = client.query_maker()
 
     with count_statements(client) as counter_3:
         tree_3 = qm.resources(load="eager").filter(name="three-0").first()
@@ -83,6 +84,7 @@ def test_load_eager_resource_tree_is_depth_independent(client):
     )
 
 
+@pytest.mark.performance
 def test_load_eager_resource_tree_bounded_count(client):
     """The absolute statement count for a deep tree must be a small constant."""
     _make_template(client, name="TreePerfBounded")
@@ -95,8 +97,10 @@ def test_load_eager_resource_tree_bounded_count(client):
             parent=parent,
             on_existing="create",
         )
+    with client.build_resource(resource_id=root.id) as builder:
+        builder.finalize()
 
-    qm = client.query_maker(unscoped=True)
+    qm = client.query_maker()
     with count_statements(client) as counter:
         tree = qm.resources(load="eager").filter(name="bounded-0").first()
 
@@ -105,3 +109,33 @@ def test_load_eager_resource_tree_bounded_count(client):
     # template/attribute-group, not per resource). The pre-fix path issued one
     # lazy load per node; this asserts a depth-independent constant instead.
     assert counter["n"] <= 18, f"expected bounded count, got {counter['n']}"
+
+
+@pytest.mark.performance
+def test_load_eager_resource_tree_is_multi_root_bounded(client):
+    """Several roots must share one recursive subtree load."""
+    _make_template(client, name="TreePerfRoots")
+    roots = []
+    for index in range(4):
+        root = client.create_resource(
+            f"root-{index}", "TreePerfRoots", on_existing="create"
+        )
+        parent = root
+        for level in range(1, 3):
+            parent = client.create_resource(
+                f"root-{index}-{level}",
+                "TreePerfRoots",
+                parent=parent,
+                on_existing="create",
+            )
+        with client.build_resource(resource_id=root.id) as builder:
+            builder.finalize()
+        roots.append(root)
+
+    with count_statements(client) as counter:
+        trees = client.query_maker().resources(load="eager").all()
+
+    by_name = {tree.name: tree for tree in trees}
+    assert {tree.name for tree in trees} == {root.name for root in roots}
+    assert all(_walk_depth(by_name[root.name]) == 3 for root in roots)
+    assert counter["n"] <= 19, f"multi-root hydration exceeded batch bound: {counter['n']}"

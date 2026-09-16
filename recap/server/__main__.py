@@ -1,4 +1,4 @@
-"""CLI entrypoint for the recap GraphQL server.
+"""CLI entrypoint for the recap REST server.
 
 Usage:
     python -m recap.server --db /path/to/recap.db
@@ -15,7 +15,7 @@ import sys
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="recap-server",
-        description="recap GraphQL read API server",
+        description="recap REST query and command API server",
     )
     parser.add_argument("--db", metavar="PATH", help="Path to SQLite database file")
     parser.add_argument("--config", metavar="PATH", help="Path to YAML config file")
@@ -56,7 +56,11 @@ def main() -> None:
 
     from recap.server.app import create_app
 
-    app = create_app(cfg.db_path)
+    app = create_app(
+        db_path=cfg.db_path,
+        database_uri=cfg.database_uri,
+        api_key=cfg.api_key,
+    )
     uvicorn.run(app, host=cfg.host, port=cfg.port, log_level=cfg.log_level)
 
 

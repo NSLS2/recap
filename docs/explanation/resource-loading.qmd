@@ -1,0 +1,59 @@
+---
+title: Resource Models and Loading
+---
+
+# Resource Models and Loading
+
+RECAP exposes canonical, load-aware resource models. Callers choose relationship
+hydration without choosing a separate wire or model shape.
+
+## Model identity and loading
+
+Full models contain stable identity and schema fields. `load="none"` leaves
+relationships unloaded; targeted includes and `load="eager"` hydrate them.
+The old `shape="ref"` spelling is deprecated and normalizes to `shape="full"`.
+Specify `load="none"` explicitly for unloaded relationships.
+
+```python
+plates = (
+    namespace.query_maker()
+    .resources(load="none")
+    .filter(name="Sample Plate 001")
+    .include(["template", "properties"])
+    .all()
+)
+```
+
+Use `load="eager"` when the complete relationship tree is required. Resource
+and process-run eager loading uses a bounded, depth-independent number of SQL
+statements, but can materialize more data than needed. Targeted descendant
+queries are preferable when only one level or template is relevant.
+
+## Property model access
+
+Resources created through builders expose property access models directly. A
+resource loaded with `include(["properties"])` may require
+`build_property_model()` before accessing nested values. Process-run queries
+using `include_resources()` hydrate assigned resources and their children for
+property access.
+
+```python
+for resource in plates:
+    resource.build_property_model()
+    print(resource.properties.dimensions.rows.value)
+```
+
+## Child resources
+
+```python
+plate = namespace.query_maker().resources(load="eager").first()
+well = plate.children["A01"]
+
+for name, child in plate.children.items():
+    print(name, child.id)
+```
+
+Child hierarchies can be defined in a template or extended at runtime through a
+resource builder. Child identity remains scoped by its parent while the root
+resource retains its own UUID. Repeated references to the same root or child are
+canonicalized within client lifetime.

@@ -1,0 +1,97 @@
+---
+title: Trace Provenance
+---
+
+# Trace Provenance
+
+Process runs and resources form a graph. Query both sides of that graph to
+answer where a resource came from and which workflows used it.
+
+## Find runs that used a resource
+
+```python
+runs = (
+    namespace.query_maker()
+    .process_runs()
+    .filter(resources__id=resource.id)
+    .include_steps()
+    .all()
+)
+```
+
+The reverse traversal starts from a process run and loads assigned resources.
+This is useful for finding outputs and inputs of one workflow execution.
+
+## Find copied-resource lineage
+
+Copied resources retain provenance links to their source. Query the copied
+resource and include its provenance relationship when inspecting lineage.
+
+```python
+copies = (
+    namespace.query_maker()
+    .resources()
+    .filter(copied_from_id=source.id)
+    .include_template()
+    .all()
+)
+```
+
+The `copied_from_id` field identifies source resource. Query that ID directly
+when source details are needed; resource schemas expose source ID, not a
+hydrated `copied_from` relationship.
+
+## Load a complete run tree
+
+```python
+run = (
+    namespace.query_maker()
+    .process_runs()
+    .filter(name="Run 001")
+    .include_steps(include_parameters=True)
+    .include_resources()
+    .first()
+)
+
+for slot_name, assignment in run.assigned_resources.items():
+    print(slot_name, assignment.resource.name)
+
+for step_name, step in run.steps.items():
+    print(step_name, step.parameters)
+```
+
+`include_resources()` also loads child resources of assigned resources, which
+makes the complete provenance tree available from one run model.
+
+## Trace a resource subtree
+
+```python
+samples = (
+    namespace.query_maker()
+    .resources()
+    .descendants(dewar, of_template=sample_template.id)
+    .all()
+)
+```
+
+Use `descendants()` for all-depth traversal. It is equivalent to a targeted
+`under_parent(...).include(["template", "properties"])` query and loads those
+two relationships in one subtree operation.
+
+## Traverse resource-to-run provenance
+
+Start with a resource ID and filter process runs through assigned resources.
+Add steps and parameters when the consuming workflow details are needed.
+
+```python
+consumers = (
+    namespace.query_maker()
+    .process_runs()
+    .filter(resources__id=sample.id)
+    .include_steps(include_parameters=True)
+    .all()
+)
+```
+
+For a focused subtree, combine `descendants()` with a template filter before
+using the resulting resource IDs in a run query.

@@ -1,0 +1,57 @@
+---
+title: Authenticate a Remote Client
+---
+
+# Authenticate a Remote Client
+
+Create a remote client with the API key configured for the current
+single-user server:
+
+```python
+from recap.client import RecapClient
+
+client = RecapClient.from_url(
+    "https://recap.example.org",
+    api_key="your-api-key",
+)
+```
+
+The client sends exactly one `Authorization` header:
+
+```text
+Authorization: Apikey your-api-key
+```
+
+Keep the key in a secret manager or environment variable rather than source
+control. RECAP redacts credentials from client representations and connection
+errors.
+
+This page documents the currently runnable single-user authentication flow.
+Multi-user authorization snapshots can be compiled with
+`recap-authz-compile`, but `recap-server` does not yet wire the multi-user
+configuration into application startup. See [Set Up a RECAP Server](setup-recap-server.qmd)
+for the deployment procedure and current implementation gap.
+
+## Namespace permissions
+
+Inspect the current actor's effective permissions for a namespace:
+
+```python
+permissions = client.namespace("beamline/amx").permissions()
+print(permissions.effective_scopes)
+print(permissions.matched_namespace_paths)
+```
+
+Permissions are computed for the authenticated actor. In the current
+single-user server, this reports unrestricted effective access. The client
+cannot ask for another actor's permissions; namespace-specific evaluation
+requires unavailable multi-user server startup wiring.
+
+## Authentication failures
+
+Missing or malformed credentials fail before query or command execution. A
+valid credential with insufficient scope is authenticated but denied by the
+authorization policy.
+
+See [Authentication and Authorization](../explanation/authentication-authorization.qmd)
+for namespace grants, scope evaluation, and cross-namespace rules.

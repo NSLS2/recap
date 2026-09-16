@@ -1,8 +1,6 @@
 import typing
 from typing import Any, Generic, TypeVar
 
-from recap.adapter import Backend
-
 if typing.TYPE_CHECKING:
     from recap.dsl.process_builder import StepTemplateBuilder
     from recap.dsl.resource_builder import ResourceTemplateBuilder
@@ -20,9 +18,9 @@ class AttributeGroupBuilder(Generic[ParentType]):
     ):
         self.group_name = group_name
         self.parent: ParentType = parent
-        self.backend: Backend = parent.backend
-        self._attribute_group = self.backend.add_attr_group(
-            self.group_name, self.parent._template
+        raise RuntimeError(
+            "AttributeGroupBuilder direct mutation is unsupported; use a "
+            "command-backed template builder"
         )
 
     def add_attribute(
@@ -33,19 +31,10 @@ class AttributeGroupBuilder(Generic[ParentType]):
         default: Any,
         metadata: dict[str, Any] | None = None,
     ) -> "AttributeGroupBuilder[ParentType]":
-        self.backend.add_attribute(
-            attr_name,
-            value_type,
-            unit,
-            default,
-            self._attribute_group,
-            metadata=metadata,
-        )
-        return self
+        raise RuntimeError("AttributeGroupBuilder direct mutation is unsupported")
 
     def remove_attribute(self, attr_name: str) -> "AttributeGroupBuilder":
-        self.backend.remove_attribute(attr_name)
-        return self
+        raise RuntimeError("AttributeGroupBuilder direct mutation is unsupported")
 
     def close_group(self) -> ParentType:
         return self.parent

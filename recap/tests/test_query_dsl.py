@@ -4,36 +4,63 @@ import warnings
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 
 from recap.adapter.local import LocalBackend
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
-from recap.db.campaign import Campaign
+from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate, StepTemplateResourceSlotBinding
-from recap.dsl.query import QueryDSL, ResourceQuery
+from recap.dsl.query import Field, QueryDSL, ResourceQuery
 from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
+from recap.lifecycle import LifecycleStatus
+from recap.schemas.namespace import NamespaceContext
 from recap.schemas.process import (
-    ProcessRunRef,
     ProcessRunSchema,
-    ProcessTemplateRef,
     ProcessTemplateSchema,
 )
 from recap.schemas.resource import (
-    ResourceRef,
     ResourceSchema,
-    ResourceTemplateRef,
     ResourceTemplateSchema,
 )
 from recap.utils.database import get_or_create
 from recap.utils.general import Direction
 
+_ACTIVE_CONTEXT = None
 
-def make_query(db_session, campaign_id=None):
+
+@pytest.fixture(autouse=True)
+def active_namespace(db_session):
+    global _ACTIVE_CONTEXT
+    namespace = Namespace(
+        id=uuid4(),
+        path=f"test/{uuid4().hex}",
+        metadata_json={},
+        status=LifecycleStatus.ACTIVE,
+    )
+    db_session.add(namespace)
+    db_session.flush()
+    _ACTIVE_CONTEXT = NamespaceContext(id=namespace.id, path=namespace.path)
+
+    def assign_namespace(_session, _flush_context, _instances):
+        for item in _session.new:
+            if isinstance(
+                item, ProcessTemplate | ResourceTemplate | Resource | ProcessRun
+            ):
+                item.namespace = namespace
+                item.status = LifecycleStatus.ACTIVE
+
+    event.listen(db_session, "before_flush", assign_namespace)
+    yield namespace
+    event.remove(db_session, "before_flush", assign_namespace)
+
+
+def make_query(db_session):
     SessionLocal = sessionmaker(bind=db_session.get_bind())
     backend = LocalBackend(SessionLocal)
-    return QueryDSL(backend, campaign_id=campaign_id)
+    return QueryDSL(backend, context=_ACTIVE_CONTEXT)
 
 
 def seed_process_run(
@@ -43,9 +70,9 @@ def seed_process_run(
     with_parameters: bool = False,
     with_resource: bool = False,
     bind_step_slot: bool = False,
-) -> tuple[Campaign, ProcessRun]:
+    with_resource_child: bool = False,
+) -> tuple[Namespace, ProcessRun]:
     with db_session.no_autoflush:
-        campaign = Campaign(name=f"Campaign-{name}", proposal=f"PROP-{name}")
         template = ProcessTemplate(name=f"Template-{name}", version="1.0")
         step_template = StepTemplate(name=f"Step-{name}", process_template=template)
 
@@ -61,14 +88,9 @@ def seed_process_run(
             name=f"Run-{name}",
             description=f"Process run for {name}",
             template=template,
-            campaign=campaign,
         )
 
-    db_session.add_all([campaign, template, step_template])
-    db_session.flush()
-
-    db_session.add(run)
-    db_session.flush()
+    db_session.add_all([template, step_template])
 
     if with_resource:
         resource_type = ResourceType(name=f"resource-type-{uuid4().hex}")
@@ -81,42 +103,25 @@ def seed_process_run(
             direction=Direction.input,
         )
         resource = Resource(name=f"Resource-{name}", template=resource_template)
+        if with_resource_child:
+            Resource(
+                name=f"Resource-{name}-child",
+                template=resource_template,
+                parent=resource,
+            )
         db_session.add_all([resource_type, resource_template, slot, resource])
-        db_session.flush()
         if bind_step_slot:
             step_template.bindings["input_resource"] = StepTemplateResourceSlotBinding(
                 role="input_resource",
                 resource_slot=slot,
             )
+    db_session.flush()
+    db_session.add(run)
+    if with_resource:
         run.resources[slot] = resource
 
     db_session.commit()
-    return campaign, run
-
-
-def test_campaign_without_include_requires_lazy_load(db_session):
-    campaign, _ = seed_process_run(db_session, name="lazy")
-    campaign_row = make_query(db_session).campaigns().filter(id=campaign.id).first()
-    assert campaign_row is not None
-    # with pytest.raises(DetachedInstanceError):
-    _ = len(campaign_row.process_runs)
-
-
-def test_campaign_include_process_runs_and_steps(db_session):
-    campaign, _ = seed_process_run(db_session, name="include", with_parameters=True)
-
-    loaded_campaign = (
-        make_query(db_session)
-        .campaigns()
-        .filter(id=campaign.id)
-        .include_process_runs()  # lambda q: q.include_steps(include_parameters=True))
-        .first()
-    )
-    assert loaded_campaign is not None
-    assert loaded_campaign.process_runs[0].name.startswith("Run-include")
-    step = loaded_campaign.process_runs[0].steps["Step-include"]
-    exposure = step.parameters["Exposure-include"]
-    assert exposure.values.dwell_time.value == 5
+    return run.namespace, run
 
 
 def test_process_run_pagination_and_filtering(db_session):
@@ -126,8 +131,8 @@ def test_process_run_pagination_and_filtering(db_session):
     query = (
         make_query(db_session)
         .process_runs()
-        .where(ProcessRun.name.like("Run-batch%"))
-        .order_by(ProcessRun.name)
+        .where(Field("name").starts_with("Run-batch"))
+        .order_by(Field("name"))
     )
 
     # head = query.limit(2).as_models()
@@ -136,7 +141,7 @@ def test_process_run_pagination_and_filtering(db_session):
     third = query.offset(2).first()
     assert third.name == names[2]
 
-    filtered = query.where(ProcessRun.name == names[1]).all()
+    filtered = query.where(Field("name") == names[1]).all()
     assert [run.name for run in filtered] == [names[1]]
 
 
@@ -195,6 +200,7 @@ def test_process_run_include_resources_populates_step_resources(db_session):
         name="step-resources",
         with_resource=True,
         bind_step_slot=True,
+        with_resource_child=True,
     )
 
     loaded_run = (
@@ -236,8 +242,8 @@ def test_include_steps_with_parameters_adds_nested_preload(db_session):
         ("resource_templates", ResourceTemplateSchema),
     ],
 )
-def test_query_defaults_use_full_shape(factory, schema, db_session):
-    query = getattr(make_query(db_session), factory)()
+def test_query_defaults_use_full_shape(factory, schema, read_client):
+    query = getattr(read_client.query_maker(), factory)()
 
     assert query._shape == "full"
     assert query.model is schema
@@ -253,13 +259,56 @@ def test_query_defaults_use_full_shape(factory, schema, db_session):
         ("resource_templates", ResourceTemplateSchema),
     ],
 )
-def test_query_accepts_eager_load(factory, schema, db_session):
-    query = getattr(make_query(db_session), factory)(shape="full", load="eager")
+def test_query_accepts_eager_load(factory, schema, read_client):
+    query = getattr(read_client.query_maker(), factory)(shape="full", load="eager")
 
     assert query._shape == "full"
     assert query._load == "eager"
     assert query.model is schema
     assert query._spec.load_mode == "eager"
+
+
+def test_query_entity_and_load_parity(read_client):
+    query = read_client.query_maker()
+
+    resources = query.resources().filter(name="plate-1").all()
+    templates = query.resource_templates().filter(name="Parity plate").all()
+    runs = query.process_runs().filter(name="run-high").all()
+    process_templates = query.process_templates().filter(name="Parity workflow").all()
+
+    assert [type(item) for item in resources] == [ResourceSchema]
+    assert [type(item) for item in templates] == [ResourceTemplateSchema]
+    assert [type(item) for item in runs] == [ProcessRunSchema]
+    assert [type(item) for item in process_templates] == [ProcessTemplateSchema]
+    assert [item.name for item in resources] == ["plate-1"]
+    assert [item.name for item in templates] == ["Parity plate"]
+    assert [item.name for item in runs] == ["run-high"]
+    assert [item.name for item in process_templates] == ["Parity workflow"]
+
+    assert query.resources().filter(name="plate-1").count() == 1
+    assert query.resources().filter(name="missing").first() is None
+
+
+def test_query_relations_and_identity_are_local_remote_parity(read_client):
+    query = read_client.query_maker()
+    partial = query.resources().filter(name="plate-1").first()
+    assert partial is not None
+    assert partial.is_loaded("properties") is False
+
+    direct_template = query.resource_templates().filter(name="Parity plate").first()
+    loaded = query.resources().filter(name="plate-1").include_template().first()
+    eager = query.resources(load="eager").filter(name="plate-1").first()
+    run = query.process_runs().filter(name="run-high").include_resources().first()
+    repeated = query.resources().filter(name="plate-1").first()
+
+    assert loaded is partial
+    assert loaded.template is direct_template
+    assert run is not None
+    assert next(iter(run.assigned_resources.values())).resource is loaded
+    assert repeated is loaded
+
+    assert eager is loaded
+    assert eager.is_loaded("properties") is True
 
 
 def test_deprecated_query_names_warn_and_normalize_immediately(db_session):
@@ -287,7 +336,12 @@ def test_cloning_normalized_query_emits_no_deprecation_warning(db_session):
 def test_direct_query_construction_normalizes_deprecated_names(db_session):
     backend = make_query(db_session).backend
     with pytest.warns(DeprecationWarning) as warnings_seen:
-        query = ResourceQuery(backend, shape="schema", load="full")
+        query = ResourceQuery(
+            backend,
+            context=make_query(db_session).context,
+            shape="schema",
+            load="full",
+        )
 
     assert len(warnings_seen) == 2
     assert query._shape == "full"
@@ -304,15 +358,6 @@ def test_direct_query_construction_normalizes_deprecated_names(db_session):
 def test_query_rejects_unknown_shape_and_load(kwargs, message, db_session):
     with pytest.raises(ValueError, match=message):
         make_query(db_session).resources(**kwargs)
-
-
-@pytest.mark.parametrize(
-    "factory",
-    ["process_runs", "process_templates", "resources", "resource_templates"],
-)
-def test_query_include_rejects_ref_shape(factory, db_session):
-    with pytest.raises(ValueError, match="shape='full'"):
-        getattr(make_query(db_session), factory)(shape="ref").include("relation")
 
 
 @pytest.mark.parametrize(
@@ -353,99 +398,14 @@ def test_run_assignment_auto_populates_bound_step_assignments(db_session):
     )
 
 
-def test_add_child_step_allows_descendant_of_slot_resource(db_session):
-    _, run = seed_process_run(
-        db_session,
-        name="child-descendant-allowed",
-        with_resource=True,
-        bind_step_slot=True,
-    )
-
-    run_assignment = next(iter(run.assignments.values()))
-    child_resource = Resource(
-        name="child-well-A1", template=run_assignment.resource.template
-    )
-    child_resource.parent = run_assignment.resource
-    db_session.add(child_resource)
-    db_session.commit()
-
-    SessionLocal = sessionmaker(bind=db_session.get_bind())
-    backend = LocalBackend(SessionLocal)
-
-    loaded_run = (
-        QueryDSL(backend)
-        .process_runs()
-        .filter(id=run.id)
-        .include_steps(include_parameters=False)
-        .include_resources()
-        .first()
-    )
-
-    assert loaded_run is not None
-    parent = loaded_run.steps["Step-child-descendant-allowed"]
-    child = parent.generate_child()
-    child.resources["input_resource"] = ResourceRef.model_validate(child_resource)
-
-    uow = backend.begin()
-    try:
-        created_child = backend.add_child_step(loaded_run, child)
-    finally:
-        uow.rollback()
-
-    assert created_child.resources["input_resource"].id == child_resource.id
-
-
-def test_add_child_step_rejects_unrelated_resource(db_session):
-    _, run = seed_process_run(
-        db_session,
-        name="child-unrelated-rejected",
-        with_resource=True,
-        bind_step_slot=True,
-    )
-
-    unrelated_type = ResourceType(name=f"unrelated-type-{uuid4().hex}")
-    unrelated_template = ResourceTemplate(name=f"unrelated-template-{uuid4().hex}")
-    unrelated_template.types.append(unrelated_type)
-    unrelated_resource = Resource(
-        name="unrelated-resource", template=unrelated_template
-    )
-    db_session.add_all([unrelated_type, unrelated_template, unrelated_resource])
-    db_session.commit()
-
-    SessionLocal = sessionmaker(bind=db_session.get_bind())
-    backend = LocalBackend(SessionLocal)
-
-    loaded_run = (
-        QueryDSL(backend)
-        .process_runs()
-        .filter(id=run.id)
-        .include_steps(include_parameters=False)
-        .include_resources()
-        .first()
-    )
-
-    assert loaded_run is not None
-    parent = loaded_run.steps["Step-child-unrelated-rejected"]
-    child = parent.generate_child()
-    child.resources["input_resource"] = ResourceRef.model_validate(unrelated_resource)
-
-    uow = backend.begin()
-    try:
-        with pytest.raises(ValueError, match="must be the assigned resource"):
-            backend.add_child_step(loaded_run, child)
-    finally:
-        uow.rollback()
-
-
 def test_process_run_query_can_return_ref(db_session):
     _, run = seed_process_run(db_session, name="ref-run")
 
     ref = make_query(db_session).process_runs(shape="ref").filter(id=run.id).first()
 
-    assert isinstance(ref, ProcessRunRef)
-    assert isinstance(ref.template, ProcessTemplateRef)
-    # Ref objects should not expose steps
-    assert not hasattr(ref, "steps")
+    assert isinstance(ref, ProcessRunSchema)
+    assert isinstance(ref.template, ProcessTemplateSchema)
+    assert ref.is_loaded("steps") is False
 
 
 def test_process_template_query_can_return_ref(db_session):
@@ -458,8 +418,8 @@ def test_process_template_query_can_return_ref(db_session):
         .first()
     )
 
-    assert isinstance(ref, ProcessTemplateRef)
-    assert not hasattr(ref, "step_templates")
+    assert isinstance(ref, ProcessTemplateSchema)
+    assert ref.step_templates == {}
 
 
 def test_process_template_includes(db_session):
@@ -477,6 +437,18 @@ def test_process_template_includes(db_session):
     assert tmpl is not None
     assert "Step-pt-include" in tmpl.step_templates
     assert any(rs.name.startswith("slot-pt-include") for rs in tmpl.resource_slots)
+    assert tmpl.is_loaded("step_templates") is True
+    assert tmpl.is_loaded("resource_slots") is True
+
+
+def test_process_template_query_marks_unrequested_relations_unloaded(db_session):
+    _, run = seed_process_run(db_session, name="pt-flags", with_resource=True)
+
+    tmpl = make_query(db_session).process_templates().filter(id=run.template.id).first()
+
+    assert tmpl is not None
+    assert tmpl.is_loaded("step_templates") is False
+    assert tmpl.is_loaded("resource_slots") is False
 
 
 def test_resource_queries_can_return_refs(db_session):
@@ -497,9 +469,9 @@ def test_resource_queries_can_return_refs(db_session):
         .first()
     )
 
-    assert isinstance(res_ref, ResourceRef)
-    assert isinstance(res_ref.template, ResourceTemplateRef)
-    assert isinstance(tmpl_ref, ResourceTemplateRef)
+    assert isinstance(res_ref, ResourceSchema)
+    assert isinstance(res_ref.template, ResourceTemplateSchema)
+    assert isinstance(tmpl_ref, ResourceTemplateSchema)
 
 
 def test_resource_template_includes(db_session):
@@ -533,6 +505,23 @@ def test_resource_template_includes(db_session):
         for at in tmpl.attribute_group_templates[0].attribute_templates
     )
     assert any(t.name == "rt-inc" for t in tmpl.types)
+    assert tmpl.is_loaded("children") is True
+    assert tmpl.is_loaded("attribute_group_templates") is True
+    assert tmpl.is_loaded("types") is True
+    assert tmpl.is_loaded("parent") is False
+
+
+def test_eager_template_query_marks_all_relations_loaded(db_session):
+    _, run = seed_process_run(db_session, name="pt-eager", with_resource=True)
+    process_template = (
+        make_query(db_session)
+        .process_templates(load="eager")
+        .filter(id=run.template.id)
+        .first()
+    )
+    assert process_template is not None
+    assert process_template.is_loaded("step_templates") is True
+    assert process_template.is_loaded("resource_slots") is True
 
 
 def test_resource_property_filtering_and_parent_scope(db_session):
@@ -577,7 +566,6 @@ def test_resource_property_filtering_and_parent_scope(db_session):
 
 def test_process_run_parameter_filtering(db_session):
     with db_session.no_autoflush:
-        campaign = Campaign(name="C-param", proposal="P-param")
         tmpl = ProcessTemplate(name="PT-param", version="1.0")
         step_tmpl = StepTemplate(name="Collect", process_template=tmpl)
         params_grp = AttributeGroupTemplate(name="Exposure", step_template=step_tmpl)
@@ -585,20 +573,18 @@ def test_process_run_parameter_filtering(db_session):
             AttributeTemplate(name="dwell", value_type="int", default_value="5")
         )
 
-        db_session.add_all([campaign, tmpl, step_tmpl, params_grp])
+        db_session.add_all([tmpl, step_tmpl, params_grp])
         db_session.commit()
 
         run_low = ProcessRun(
             name="run-low",
             description="low dwell",
             template=tmpl,
-            campaign=campaign,
         )
         run_high = ProcessRun(
             name="run-high",
             description="high dwell",
             template=tmpl,
-            campaign=campaign,
         )
 
         run_low.steps["Collect"].parameters["Exposure"].values["dwell"] = 4
@@ -624,7 +610,6 @@ def test_process_run_parameter_filtering_strings(db_session):
     (e.g., '"active"'), so the comparison must encode the RHS the same way.
     """
     with db_session.no_autoflush:
-        campaign = Campaign(name="C-str", proposal="P-str")
         tmpl = ProcessTemplate(name="PT-str", version="1.0")
         step_tmpl = StepTemplate(name="Collect", process_template=tmpl)
         params_grp = AttributeGroupTemplate(name="Status", step_template=step_tmpl)
@@ -632,20 +617,18 @@ def test_process_run_parameter_filtering_strings(db_session):
             AttributeTemplate(name="state", value_type="str", default_value="pending")
         )
 
-        db_session.add_all([campaign, tmpl, step_tmpl, params_grp])
+        db_session.add_all([tmpl, step_tmpl, params_grp])
         db_session.commit()
 
         run_active = ProcessRun(
             name="run-active",
             description="active run",
             template=tmpl,
-            campaign=campaign,
         )
         run_done = ProcessRun(
             name="run-done",
             description="done run",
             template=tmpl,
-            campaign=campaign,
         )
 
         run_active.steps["Collect"].parameters["Status"].values["state"] = "active"
@@ -710,7 +693,6 @@ def test_resource_property_filtering_strings(db_session):
 def test_parameter_filtering_numeric_unchanged(db_session):
     """Ensure the coercion refactor doesn't break numeric/bool filtering."""
     with db_session.no_autoflush:
-        campaign = Campaign(name="C-num", proposal="P-num")
         tmpl = ProcessTemplate(name="PT-num", version="1.0")
         step_tmpl = StepTemplate(name="Measure", process_template=tmpl)
         params_grp = AttributeGroupTemplate(name="Readings", step_template=step_tmpl)
@@ -721,20 +703,18 @@ def test_parameter_filtering_numeric_unchanged(db_session):
             AttributeTemplate(name="enabled", value_type="bool", default_value="true")
         )
 
-        db_session.add_all([campaign, tmpl, step_tmpl, params_grp])
+        db_session.add_all([tmpl, step_tmpl, params_grp])
         db_session.commit()
 
         run_a = ProcessRun(
             name="run-num-a",
             description="a",
             template=tmpl,
-            campaign=campaign,
         )
         run_b = ProcessRun(
             name="run-num-b",
             description="b",
             template=tmpl,
-            campaign=campaign,
         )
 
         run_a.steps["Measure"].parameters["Readings"].values["count"] = 10
@@ -755,47 +735,6 @@ def test_parameter_filtering_numeric_unchanged(db_session):
 
     hits_bool = q.filter_parameter("enabled", eq=True, group="Readings").all()
     assert {r.name for r in hits_bool} == {"run-num-a"}
-
-
-def test_queries_are_scoped_to_campaign(db_session):
-    camp_a, run_a = seed_process_run(
-        db_session, name="scope-a", with_resource=True, with_parameters=True
-    )
-    camp_b, run_b = seed_process_run(
-        db_session, name="scope-b", with_resource=True, with_parameters=True
-    )
-
-    q_a = make_query(db_session, campaign_id=camp_a.id)
-    runs_a = q_a.process_runs().all()
-    assert {r.id for r in runs_a} == {run_a.id}
-
-    resources_a = q_a.resources().all()
-    assigned_res_ids = {res.id for res in run_a.resources.values()}
-    assert {res.id for res in resources_a} == assigned_res_ids
-
-    campaigns_a = q_a.campaigns().all()
-    assert camp_a.id in {c.id for c in campaigns_a}
-
-    q_b = make_query(db_session, campaign_id=camp_b.id)
-    runs_b = q_b.process_runs().all()
-    assert {r.id for r in runs_b} == {run_b.id}
-
-
-def test_campaign_scope_not_applied_to_templates(db_session):
-    camp_a, _ = seed_process_run(
-        db_session, name="tmpl-a", with_resource=True, with_parameters=True
-    )
-    _, run_b = seed_process_run(
-        db_session, name="tmpl-b", with_resource=True, with_parameters=True
-    )
-
-    q = make_query(db_session, campaign_id=camp_a.id)
-
-    tmpl_ids = {pt.id for pt in q.process_templates().all()}
-    res_tmpl_ids = {rt.id for rt in q.resource_templates().all()}
-
-    assert run_b.template.id in tmpl_ids
-    assert len(res_tmpl_ids) >= 2
 
 
 def _seed_resource_hierarchy(db_session):

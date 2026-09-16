@@ -1,0 +1,88 @@
+---
+title: Choose Query Shape and Loading
+---
+
+# Choose Query Shape and Loading
+
+Choose relationship loading, then add targeted paths when needed. Query results
+are canonical full models; loading controls relationship hydration.
+
+```{mermaid}
+%%| fig-cap: "Choosing RECAP query shape and relationship loading"
+flowchart TD
+    Start[What data does the task need?]
+    Start --> Identity{Identity and scalar fields only?}
+    Identity -->|Yes| Full[Full models with no relationship loading]
+    Identity -->|No| Full[Full models]
+    Full --> Complete{Need complete relationship tree?}
+    Complete -->|Yes| Eager[Complete tree: eager loading]
+    Complete -->|No| Targeted[Targeted loading with explicit includes]
+    Targeted --> Bounded[Use explicit relationship paths or descendants]
+```
+
+Use `load="none"` when identity and scalar fields are enough. Use eager loading
+for a complete relationship tree or non-eager explicit includes for targeted
+relationships. `shape="ref"` remains deprecated compatibility syntax and must
+not be used in new code.
+
+## Choose a result shape
+
+```python
+minimal = namespace.query_maker().resources(load="none").all()
+resources = namespace.query_maker().resources(load="eager").all()
+```
+
+Both queries return canonical full models. First query returns identity and
+scalar fields; second hydrates configured relationships.
+
+## Choose loading mode
+
+`load="none"` avoids relationship hydration. `load="eager"` loads the
+configured relationship tree.
+
+```python
+minimal = namespace.query_maker().resources(load="none").all()
+complete = namespace.query_maker().resources(load="eager").all()
+```
+
+Use eager loading only when the complete tree is required. For a bounded
+subtree, prefer explicit inclusion or `descendants()`.
+
+## Include targeted relationships
+
+`include(...)` selects explicit relationship paths on full, non-eager queries.
+Convenience methods expand to those paths:
+
+```python
+resources = (
+    namespace.query_maker()
+    .resources(load="none")
+    .include(["template", "properties", "children"])
+    .all()
+)
+
+runs = (
+    namespace.query_maker()
+    .process_runs(load="none")
+    .include_steps(include_parameters=True)
+    .include_resources()
+    .all()
+)
+```
+
+`include_template()` is the resource shortcut. Process runs provide
+`include_steps()` and `include_resources()`.
+
+## Deprecated combinations
+
+New code should not use `shape="ref"`. It is normalized to full models; use
+`load="none"` when relationships must remain unloaded. `include(...)` still requires
+non-eager loading:
+
+```python
+namespace.query_maker().resources(load="eager").include("children")
+```
+
+Use `load="none"` with `include(...)`, or use `load="eager"` without explicit
+includes. Hydration plans have bounded SQL statement counts and avoid N+1
+queries for resource trees.

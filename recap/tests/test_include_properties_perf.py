@@ -12,16 +12,14 @@ fetched with ``include(["properties"])`` issues **zero** additional SQL
 statements.
 """
 
-from recap.dsl.resource_builder import ResourceTemplateBuilder
+import pytest
 
 from .conftest import count_statements
 
 
 def _make_template(client, name="IncPropT"):
     """A template with three property groups, each with one attribute."""
-    with ResourceTemplateBuilder(
-        name=name, type_names=["container"], backend=client.backend
-    ) as rtb:
+    with client.build_resource_template(name=name, type_names=["container"]) as rtb:
         rtb.prop_group("details").add_attribute(
             "serial", "str", "", "abc"
         ).close_group()
@@ -31,14 +29,18 @@ def _make_template(client, name="IncPropT"):
         rtb.prop_group("status").add_attribute("state", "str", "", "new").close_group()
 
 
+@pytest.mark.performance
 def test_build_property_model_after_include_properties_no_lazy_loads(client):
     """build_property_model() on a resource fetched with include(["properties"])
     must not trigger any additional SQL (no per-group template lazy load)."""
     _make_template(client)
-    client.create_resource("incprop-a", "IncPropT", on_existing="create")
-    client.create_resource("incprop-b", "IncPropT", on_existing="create")
+    first = client.create_resource("incprop-a", "IncPropT", on_existing="create")
+    second = client.create_resource("incprop-b", "IncPropT", on_existing="create")
+    for resource in (first, second):
+        with client.build_resource(resource_id=resource.id) as builder:
+            builder.finalize()
 
-    qm = client.query_maker(unscoped=True)
+    qm = client.query_maker()
     resources = qm.resources().include(["properties"]).filter(name="incprop-a").all()
 
     # All hydration SQL should have run during .all(); building the dynamic
@@ -59,6 +61,7 @@ def test_build_property_model_after_include_properties_no_lazy_loads(client):
     )
 
 
+@pytest.mark.performance
 def test_include_properties_matches_load_eager_statement_count(client):
     """include(['properties']) must load property templates as efficiently as
     the load="eager" path. Both go through
@@ -69,9 +72,13 @@ def test_include_properties_matches_load_eager_statement_count(client):
     Property.template per group while load="eager" does not.
     """
     _make_template(client, name="IncPropParity")
-    client.create_resource("parity-res", "IncPropParity", on_existing="create")
+    resource = client.create_resource(
+        "parity-res", "IncPropParity", on_existing="create"
+    )
+    with client.build_resource(resource_id=resource.id) as builder:
+        builder.finalize()
 
-    qm = client.query_maker(unscoped=True)
+    qm = client.query_maker()
 
     with count_statements(client) as c_include:
         inc = qm.resources().include(["properties"]).filter(name="parity-res").all()

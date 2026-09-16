@@ -1,0 +1,604 @@
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+
+from recap.client.backend import ClientBackend
+from recap.commands.models import (
+    CreateProcessRun,
+    CreateProcessTemplate,
+    CreateResource,
+)
+from recap.dsl.builder_state import BuilderChanges, BuilderTransactionState
+from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
+from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
+from recap.lifecycle import LifecycleStatus
+from recap.schemas.namespace import NamespaceContext
+from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
+from recap.tests.transport_factories import minimal_resource, resource_template
+from recap.utils.general import Direction
+
+
+class RecordingBackend:
+    def __init__(self, existing=None):
+        self.commands = []
+        self.existing = existing
+        self.resource_template = None
+
+    def get_process_template(self, *args, **kwargs):
+        return self.existing
+
+    def find_resources_by_identity(self, *args, **kwargs):
+        return []
+
+    def query(self, schema, *args, **kwargs):
+        if (
+            schema is ResourceTemplateSchema
+            and args
+            and args[0].filters.get("name") is not None
+        ):
+            self.resource_template = resource_template().model_copy(
+                update={
+                    "name": args[0].filters["name"],
+                    "version": args[0].filters["version"],
+                }
+            )
+            return [self.resource_template]
+        if schema is ResourceTemplateSchema and self.resource_template is not None:
+            return [self.resource_template]
+        if (
+            schema.__name__ == "ProcessTemplateSchema"
+            and args
+            and args[0].filters.get("id") is not None
+        ):
+            return [SimpleNamespace(id=uuid4(), step_templates={}, resource_slots=[])]
+        return []
+
+    def execute(self, command, context):
+        self.commands.append((command, context))
+        return self.existing
+
+    def count(self, *args, **kwargs):
+        return 0
+
+    def list_child_namespaces(self, parent_path):
+        return []
+
+    def create_namespace(self, path, metadata, context):
+        return None
+
+    def update_namespace(
+        self, namespace_id, expected_revision, metadata, status, context, *, etag=None
+    ):
+        return None
+
+
+class RecordingReader:
+    def __init__(self, existing=None):
+        self.existing = existing
+        self.queries = []
+
+    def query(self, schema, spec, *, namespace_path):
+        self.queries.append((schema, spec, namespace_path))
+        if schema is ResourceTemplateSchema:
+            template = self.existing or resource_template()
+            if "name" in spec.filters:
+                template = template.model_copy(
+                    update={
+                        "name": spec.filters["name"],
+                        "version": spec.filters["version"],
+                    }
+                )
+            return [template]
+        return []
+
+    def count(self, schema, spec, *, namespace_path):
+        return 0
+
+
+class RecordingWriter:
+    def __init__(self, existing=None):
+        self.existing = existing
+        self.commands = []
+
+    def execute(self, command, context):
+        self.commands.append((command, context))
+        return self.existing
+
+
+class RecordingNamespaces:
+    def list_child_namespaces(self, parent_path):
+        return []
+
+
+class RecordingNamespaceWriter:
+    def create_namespace(self, path, metadata, context):
+        return None
+
+    def update_namespace(
+        self, namespace_id, expected_revision, metadata, status, context, *, etag=None
+    ):
+        return None
+
+
+class RecordingNamspaceContextResolver:
+    def get_namespace_context(self, path):
+        return NamespaceContext(id=uuid4(), path=path)
+
+
+def resource_backend():
+    reader = RecordingReader()
+    writer = RecordingWriter()
+    context_resolver = RecordingNamspaceContextResolver()
+    return (
+        ClientBackend(
+            reader=reader,
+            writer=writer,
+            namespaces=RecordingNamespaces(),
+            namespace_writer=RecordingNamespaceWriter(),
+            context_resolver=context_resolver,
+        ),
+        reader,
+        writer,
+    )
+
+
+def test_transaction_state_flushes_only_on_clean_outermost_exit():
+    state = BuilderTransactionState()
+    state.enter()
+    state.enter()
+    assert not state.exit(None)
+    assert state.exit(None)
+
+
+def test_transaction_state_preserves_pending_lifecycle_after_exception():
+    state = BuilderTransactionState()
+    state.enter()
+    state.request_lifecycle(LifecycleStatus.ACTIVE)
+    assert not state.exit(RuntimeError)
+    assert state.pending_lifecycle is LifecycleStatus.ACTIVE
+
+
+def test_transaction_state_remembers_swallowed_nested_exception():
+    state = BuilderTransactionState()
+    state.enter()
+    state.enter()
+    assert not state.exit(RuntimeError)
+    assert not state.exit(None)
+
+    state.enter()
+    assert state.exit(None)
+
+
+def test_transaction_state_rejects_conflicting_lifecycle_requests():
+    state = BuilderTransactionState()
+    state.request_lifecycle(LifecycleStatus.ACTIVE)
+    with pytest.raises(ValueError, match="Conflicting lifecycle requests"):
+        state.request_lifecycle(LifecycleStatus.ARCHIVED)
+
+
+def test_transaction_state_tracks_lifecycle_by_builder_owner():
+    state = BuilderTransactionState()
+    parent = object()
+    child = object()
+    state.request_lifecycle(LifecycleStatus.ACTIVE, owner=parent)
+    state.request_lifecycle(LifecycleStatus.ACTIVE, owner=child)
+
+    assert state.pending_lifecycle_for(parent) is LifecycleStatus.ACTIVE
+    assert state.pending_lifecycle_for(child) is LifecycleStatus.ACTIVE
+    state.clear_lifecycle(owner=child)
+    assert state.pending_lifecycle_for(parent) is LifecycleStatus.ACTIVE
+    assert state.pending_lifecycle_for(child) is None
+
+
+def test_builder_changes_defaults_to_empty_fields_and_no_lifecycle():
+    changes = BuilderChanges()
+    assert changes.fields == {}
+    assert changes.lifecycle is None
+
+
+def test_all_builders_require_context_for_save_and_expose_serializable_empty_changes(client):
+    client.create_namespace("builder-contracts")
+    scoped = client.namespace("builder-contracts")
+    with scoped.build_resource_template(
+        name="contract-resource-template", type_names=["sample"]
+    ):
+        pass
+    with scoped.build_process_template("contract-process-template", "1.0"):
+        pass
+
+    builders = [
+        scoped.build_resource_template(
+            name="contract-resource-template-2", type_names=["sample"]
+        ),
+        scoped.build_process_template("contract-process-template-2", "1.0"),
+        scoped.build_resource("contract-resource", "contract-resource-template"),
+        scoped.build_process_run(
+            "contract-process-run",
+            "",
+            "contract-process-template",
+            "1.0",
+        ),
+    ]
+
+    for builder in builders:
+        assert not hasattr(builder, "activate")
+        with pytest.raises(RuntimeError, match="require a context manager"):
+            builder.save()
+        with builder:
+            pass
+        assert builder.changes().model_dump(mode="json") == {
+            "fields": {},
+            "lifecycle": None,
+        }
+
+
+def process_backend(adapter=None):
+    adapter = adapter or RecordingBackend()
+    context_resolver = RecordingNamspaceContextResolver()
+    return (
+        ClientBackend(
+            reader=adapter,
+            writer=adapter,
+            namespaces=adapter,
+            namespace_writer=adapter,
+            context_resolver=context_resolver,
+        ),
+        adapter,
+    )
+
+
+def test_process_template_body_has_no_backend_mutation():
+    client_backend, backend = process_backend()
+    context = object()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
+    builder = ProcessTemplateBuilder(
+        backend=client_backend,
+        namespace_context=namespace_context,
+        name="draft-template",
+        version="1.0",
+        command_context=context,
+    )
+
+    builder.add_resource_slot("input", "container", Direction.input)
+    step = builder.add_step("measure")
+
+    assert backend.commands == []
+    assert step.parent.backend is client_backend
+
+
+def test_process_run_exception_retains_draft_without_submitting():
+    client_backend, backend = process_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
+    builder = ProcessRunBuilder(
+        name="run",
+        description="desc",
+        template_name="template",
+        version="1.0",
+        namespace_context=namespace_context,
+        backend=client_backend,
+        template_id=uuid4(),
+        command_context=object(),
+    )
+
+    try:
+        with builder:
+            builder.assign_resource("input", type("Resource", (), {"id": uuid4()})())
+            raise RuntimeError("discard")
+    except RuntimeError:
+        pass
+
+    assert backend.commands == []
+    assert builder.changes().fields["assignments"]
+
+
+def test_process_builders_submit_one_command_on_clean_exit():
+    client_backend, backend = process_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
+    context = object()
+    with ProcessTemplateBuilder(
+        backend=client_backend,
+        name="template",
+        version="1.0",
+        namespace_context=namespace_context,
+        command_context=context,
+    ) as builder:
+        builder.add_step("measure")
+
+    assert len(backend.commands) == 1
+    assert isinstance(backend.commands[0][0], CreateProcessTemplate)
+
+
+def test_process_run_builder_submits_one_aggregate_command():
+    client_backend, backend = process_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
+    builder = ProcessRunBuilder(
+        name="run",
+        description="desc",
+        template_name="template",
+        version="1.0",
+        backend=client_backend,
+        namespace_context=namespace_context,
+        template_id=uuid4(),
+        command_context=object(),
+    )
+
+    builder.assign_resource("input", type("Resource", (), {"id": uuid4()})())
+    with builder:
+        pass
+
+    assert len(backend.commands) == 1
+    assert isinstance(backend.commands[0][0], CreateProcessRun)
+
+
+def test_resource_builder_has_no_construction_side_effect_and_submits_once():
+    client_backend, reader, writer = resource_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
+    builder = ResourceBuilder(
+        name="resource",
+        template_name="template",
+        backend=client_backend,
+        namespace_context=namespace_context,
+        command_context=object(),
+    )
+
+    assert writer.commands == []
+    with builder:
+        pass
+
+    assert reader.queries
+    assert len(writer.commands) == 1
+    assert isinstance(writer.commands[0][0], CreateResource)
+
+
+def test_resource_builder_serializes_property_values_into_create_command():
+    client_backend, _, writer = resource_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
+    builder = ResourceBuilder(
+        name="resource-with-values",
+        template_name="template",
+        backend=client_backend,
+        namespace_context=namespace_context,
+        command_context=object(),
+    )
+    builder._resource = SimpleNamespace(
+        properties={
+            "measurements": SimpleNamespace(
+                values=SimpleNamespace(
+                    dose=SimpleNamespace(
+                        value=12,
+                        unit="mg",
+                        metadata_json={"source": "builder"},
+                    )
+                )
+            )
+        }
+    )
+    with builder:
+        pass
+
+    assert writer.commands[0][0].properties == {
+        "measurements": {
+            "dose": {
+                "value": 12,
+                "unit": "mg",
+                "metadata_json": {"source": "builder"},
+            }
+        }
+    }
+
+
+def test_resource_child_builder_reuses_client_backend():
+    client_backend, _, _ = resource_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
+    builder = ResourceBuilder(
+        name="parent",
+        template_name="template",
+        backend=client_backend,
+        command_context=object(),
+        namespace_context=namespace_context,
+    )
+
+    child = builder.add_child("child", "template")
+
+    assert child.backend is client_backend
+
+
+def test_client_routes_local_builders_through_commands_without_begin(client):
+    client.create_namespace("command")
+    scoped = client.namespace("command")
+    backend = scoped.connection_state.backend
+
+    with scoped.build_process_template("command-pt", "1.0"):
+        pass
+    with scoped.build_resource_template(name="command-rt", type_names=["container"]):
+        pass
+
+    assert not hasattr(backend, "begin")
+
+    process_template = scoped.build_process_template("command-pt-2", "1.0")
+    process_run = scoped.build_process_run(
+        "command-run", "description", "command-pt", "1.0"
+    )
+    resource_template = scoped.build_resource_template(
+        name="command-rt-2", type_names=["container"]
+    )
+    resource = scoped.build_resource(
+        "command-resource", "command-rt", on_existing="create"
+    )
+
+    for builder in (process_template, process_run, resource_template, resource):
+        assert builder._command_context is not None
+    assert resource_template.backend is backend
+    assert resource.backend is backend
+
+
+def test_resource_template_command_draft_accepts_attribute_group_builder():
+    client_backend, _, writer = resource_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
+    builder = ResourceTemplateBuilder(
+        name="template",
+        type_names=["container"],
+        backend=client_backend,
+        namespace_context=namespace_context,
+        command_context=object(),
+    )
+
+    builder.prop_group("properties").add_attribute(
+        "serial", "str", "", ""
+    ).close_group()
+    with builder:
+        pass
+
+    assert writer.commands[0][0].draft.property_groups[0].attributes[0].name == "serial"
+
+
+def test_process_run_command_builder_rejects_missing_template_and_run_ids():
+    import pytest
+
+    client_backend, backend = process_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
+
+    with pytest.raises(ValueError, match="template_id or process_run_id"):
+        ProcessRunBuilder(
+            "run",
+            "description",
+            "template",
+            backend=client_backend,
+            namespace_context=namespace_context,
+            command_context=object(),
+        )
+
+
+def test_process_run_command_save_tolerates_none_or_partial_result():
+    class ResultBackend(RecordingBackend):
+        def __init__(self, result):
+            super().__init__()
+            self.result = result
+
+        def execute(self, command, context):
+            self.commands.append((command, context))
+            return self.result
+
+    for result in (None, object()):
+        client_backend, backend = process_backend(ResultBackend(result))
+        namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
+        builder = ProcessRunBuilder(
+            "run",
+            "description",
+            "template",
+            backend=client_backend,
+            namespace_context=namespace_context,
+            template_id=uuid4(),
+            command_context=object(),
+        )
+        builder.assign_resource("input", type("Resource", (), {"id": uuid4()})())
+        with builder:
+            pass
+
+        assert len(backend.commands) == 1
+        assert builder._dirty
+        assert not builder._submitted
+
+
+def test_resource_reload_preloads_guarded_relations():
+    class ExistingResourceReader(RecordingReader):
+        def query(self, schema, spec, *, namespace_path):
+            self.queries.append((schema, spec, namespace_path))
+            if schema is ResourceSchema:
+                return [minimal_resource()]
+            return super().query(schema, spec, namespace_path=namespace_path)
+
+    reader = ExistingResourceReader()
+    writer = RecordingWriter()
+    backend = ClientBackend(
+        reader=reader,
+        writer=writer,
+        namespaces=RecordingNamespaces(),
+        namespace_writer=RecordingNamespaceWriter(),
+        context_resolver=RecordingNamspaceContextResolver(),
+    )
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
+    ResourceBuilder(
+        name=None,
+        template_name=None,
+        backend=backend,
+        resource_id=uuid4(),
+        namespace_context=namespace_context,
+        command_context=object(),
+    )
+
+    resource_query = next(
+        spec for schema, spec, _ in reader.queries if schema is ResourceSchema
+    )
+    assert resource_query.preloads == ["template", "parent", "children", "properties"]
+
+
+def test_process_run_builder_loads_template_without_client_lookup():
+    template_id = uuid4()
+
+    class QueryBackend(RecordingBackend):
+        def query(self, schema, spec, *, namespace_path):
+            if spec.filters == {"name": "template", "version": "1.0"}:
+                return [
+                    SimpleNamespace(
+                        id=template_id,
+                        step_templates={},
+                        resource_slots=[],
+                    )
+                ]
+            return []
+
+    client_backend, backend = process_backend(QueryBackend())
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
+    builder = ProcessRunBuilder(
+        "run",
+        "description",
+        "template",
+        backend=client_backend,
+        namespace_context=namespace_context,
+        version="1.0",
+        command_context=object(),
+    )
+
+    assert builder._template_id == template_id
+
+
+def test_process_run_command_save_handles_missing_template_steps():
+    client_backend, backend = process_backend()
+    namespace_context = NamespaceContext(id=uuid4(), path="beamline/amx")
+    builder = ProcessRunBuilder(
+        "run",
+        "description",
+        "template",
+        backend=client_backend,
+        namespace_context=namespace_context,
+        template_id=uuid4(),
+        command_context=object(),
+    )
+    builder._process_template = SimpleNamespace(step_templates=None)
+
+    with builder:
+        pass
+
+    assert len(backend.commands) == 1
+
+
+def test_resource_reuse_with_changed_properties_submits_update(client):
+    with client.build_resource_template(
+        name="ReuseUpdateRT", type_names=["container"]
+    ) as template:
+        template.prop_group("properties").add_attribute(
+            "serial", "str", "", ""
+        ).close_group()
+    first = client.create_resource("ReuseUpdate", "ReuseUpdateRT", on_existing="create")
+
+    with client.build_resource(
+        "ReuseUpdate", "ReuseUpdateRT", on_existing="silent"
+    ) as builder:
+        builder.resource.properties["properties"].values["serial"] = "changed"
+
+    with client.build_resource(resource_id=first.id) as verifier:
+        assert (
+            verifier.resource.properties["properties"].values.serial.value == "changed"
+        )

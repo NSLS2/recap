@@ -1,0 +1,92 @@
+---
+title: Create a Process Template
+---
+
+# Create a Process Template
+
+Use a process template to define a workflow that consumes or produces
+resources. Templates contain resource slots, ordered steps, role bindings, and
+parameters.
+
+```python
+from recap.utils.general import Direction
+
+with namespace.build_process_template("Collect Data", "1.0") as builder:
+    builder.add_resource_slot("sample", "sample", Direction.input)
+    builder.add_resource_slot(
+        "calibration", "calibration", Direction.input, required=False
+    )
+    builder.add_resource_slot(
+        "output", "file", Direction.output, create_resource_type=True
+    )
+    (
+        builder.add_step("Collect")
+        .add_parameters({
+            "acquisition": [
+                {"name": "exposure", "type": "float", "default": 1.0}
+            ]
+        })
+        .bind_slot("sample", "sample")
+        .bind_slot("output", "output")
+        .close_step()
+    )
+```
+
+## Add required and optional slots
+
+Slots identify resource types used by a process. Slots are required by default;
+set `required=False` when a run may omit that resource, such as optional
+calibration data.
+
+```python
+builder.add_resource_slot("sample", "sample", Direction.input)
+builder.add_resource_slot(
+    "calibration", "calibration", Direction.input, required=False
+)
+```
+
+## Declare input and output directions
+
+Use `Direction.input` for resources consumed by a process and
+`Direction.output` for resources it produces. Direction is part of the slot
+definition and keeps process roles explicit.
+
+```python
+builder.add_resource_slot("source", "raw-data", Direction.input)
+builder.add_resource_slot("result", "processed-data", Direction.output)
+```
+
+## Create resource types from slots
+
+Set `create_resource_type=True` when slot's named resource type should be
+created as part of template construction. Leave it false when type must already
+exist or is managed separately.
+
+```python
+builder.add_resource_slot(
+    "report", "analysis-report", Direction.output,
+    create_resource_type=True,
+)
+```
+
+## Define step parameters
+
+Add typed parameter groups to a step. Parameters support defaults, units, and
+metadata constraints just like resource properties:
+
+```python
+step = builder.add_step("Collect")
+step.add_parameters({
+    "acquisition": [
+        {"name": "exposure", "type": "float", "default": 1.0, "unit": "s"},
+        {"name": "mode", "type": "str", "default": "standard"},
+    ],
+})
+step.bind_slot("sample", "sample")
+step.bind_slot("output", "output")
+step.close_step()
+```
+
+Process templates are versioned. Once a template becomes referenced, lifecycle
+rules prevent unsafe mutation; create a new version when the workflow shape
+must change.

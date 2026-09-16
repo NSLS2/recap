@@ -1,20 +1,31 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Any, Literal, overload
-from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from recap.adapter import Backend
-from recap.adapter.local import LocalBackend
+from recap.client.backend import ClientBackend
+from recap.client.connection_state import ConnectionState
+from recap.client.permissions import ActorPermissions
+from recap.commands.context import build_local_command_context
+from recap.commands.errors import CommandValidationError
+from recap.commands.models import (
+    CopyProcessRun,
+    CopyResource,
+    CreateNamespace,
+    UpdateNamespace,
+)
 from recap.dsl.process_builder import ProcessRunBuilder, ProcessTemplateBuilder
 from recap.dsl.query import QueryDSL
 from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
-from recap.schemas.process import CampaignSchema
-from recap.schemas.resource import ResourceRef, ResourceSchema
+from recap.exceptions import RecapNotFoundError
+from recap.lifecycle import LifecycleStatus
+from recap.schemas.namespace import NamespaceContext
+from recap.schemas.process import ProcessRunCopyOptions, ProcessRunSchema
+from recap.schemas.resource import ResourceCopyOptions, ResourceRef, ResourceSchema
 from recap.utils.migrations import apply_migrations
 
 
@@ -22,63 +33,61 @@ class RecapClient:
     """Primary entry point for interacting with a RECAP provenance database.
 
     ``RecapClient`` wraps a SQLAlchemy session and exposes factory methods for
-    creating and loading the core domain objects — campaigns, resources,
+    creating and loading the core domain objects: namespaces, resources,
     resource templates, process templates, and process runs.
 
-    Prefer the :meth:`from_sqlite` class method over constructing an instance
-    directly; it handles database creation and schema migrations automatically.
+    Use :meth:`from_sqlite` for local SQLite databases and :meth:`from_url` for
+    remote recap servers. These are the canonical initialization methods.
 
     The client can be used as a context manager, which closes the underlying
-    engine on exit::
+    engine on exit:
 
         with RecapClient.from_sqlite() as client:
-            client.create_campaign("my campaign", "proposal-42")
+            client.create_namespace("projects")
+            client.create_namespace("projects/my-project")
 
-    Attributes:
-        database_path: Filesystem path to the SQLite database file, or
-            ``None`` when a non-file URL is used.
-        backend: The storage backend used to persist domain objects.
     """
+
+    @overload
+    def __init__(self, connection_state: ConnectionState, *, namespace_path: str): ...
+
+    @overload
+    def __init__(
+        self, connection_state: ConnectionState, *, namespace_context: NamespaceContext
+    ): ...
 
     def __init__(
         self,
-        url: str | None = None,
-        echo: bool = False,
+        connection_state: ConnectionState,
+        *,
+        namespace_path: str | None = None,
+        namespace_context: NamespaceContext | None = None,
     ):
-        """Initialise a client from a database URL.
+        """Initialise common empty client state.
 
-        In most cases you should use :meth:`from_sqlite` instead, which also
-        creates the database file and runs pending migrations.
-
-        Args:
-            url: A SQLAlchemy-compatible connection string.  Only
-                ``sqlite:///`` URLs are currently supported.  Pass ``None``
-                to create an uninitialised client (useful for testing).
-            echo: When ``True`` the SQLAlchemy engine will log every SQL
-                statement it executes.  Defaults to ``False``.
-
-        Raises:
-            NotImplementedError: If an ``http://`` or ``https://`` URL is
-                supplied (REST backend is not yet implemented).
-            ValueError: If the URL scheme is not recognised.
+        Use :meth:`from_sqlite` for local clients and :meth:`from_url` for
+        remote clients. These are the canonical initialization methods.
         """
-        self._campaign: CampaignSchema | None = None
-        self.database_path: Path | None = None
-        self.backend: Backend | None = None
-        if url is not None:
-            parsed = urlparse(url)
-            if parsed.scheme in ("http", "https"):
-                raise NotImplementedError("Rest api via HTTP(S) is not yet implemented")
-            elif "sqlite" in parsed.scheme:
-                if parsed.path and parsed.path != "/:memory:":
-                    self.database_path = Path(parsed.path)
-                self.engine = create_engine(url, echo=echo)
-                self._sessionmaker = sessionmaker(
-                    bind=self.engine, expire_on_commit=False, future=True
-                )
-                self.backend = LocalBackend(self._sessionmaker)
-            else:
-                raise ValueError(f"Unknown scheme: {parsed.scheme}")
+        namespace_path = namespace_path if namespace_path is not None else ""
+        self.connection_state: ConnectionState = connection_state
+        self.connection_state.acquire()
+        self._namespace_context: NamespaceContext = (
+            namespace_context
+            if namespace_context is not None
+            else self._resolve_namespace_context(namespace_path)
+        )
+        self._closed = False
+
+    def __repr__(self) -> str:
+        return f"RecapClient({self.namespace_path=})"
+
+    @staticmethod
+    def _normalize_namespace(namespace: str | None) -> str:
+        return (namespace or "").strip("/")
+
+    @property
+    def namespace_path(self):
+        return self._namespace_context.path
 
     def close(self):
         """Close the underlying session and engine to release SQLite locks.
@@ -86,20 +95,10 @@ class RecapClient:
         Safe to call multiple times.  After calling this method the client
         should no longer be used.
         """
-        backend = getattr(self, "backend", None)
-        if backend and hasattr(backend, "close"):
-            backend.close()
-        # Close read_backend separately when it differs from backend (e.g. GraphQLAdapter)
-        read_backend = getattr(self, "_read_backend", None)
-        if (
-            read_backend
-            and read_backend is not backend
-            and hasattr(read_backend, "close")
-        ):
-            read_backend.close()
-        engine = getattr(self, "engine", None)
-        if engine:
-            engine.dispose()
+        if self._closed:
+            return
+        self.connection_state.release()
+        self._closed = True
 
     def __enter__(self):
         """Return the client itself when used as a context manager."""
@@ -112,93 +111,139 @@ class RecapClient:
     @classmethod
     def _from_backends(
         cls,
-        read_backend: "Backend",
-        write_backend: "Backend",
+        backend: ClientBackend,
+        *,
+        namespace: str,
+        engine: Any = None,
+        sessionmaker_: Any = None,
+        database_path: Path | None = None,
     ) -> "RecapClient":
-        """Construct a RecapClient with split read/write backends.
-
-        Internal classmethod used by :meth:`from_url` and :meth:`from_sqlite`.
-        The ``backend`` attribute is set to ``write_backend`` for backward
-        compatibility with builder methods that reference ``self.backend``.
-        ``read_backend`` is stored separately and used by :meth:`query_maker`.
-        """
-        instance = cls.__new__(cls)
-        instance._campaign = None
-        instance.database_path = None
-        instance.backend = write_backend
-        instance._read_backend = read_backend
+        """Construct a RecapClient with composed backend capabilities."""
+        state = ConnectionState(
+            backend=backend,
+            engine=engine,
+            sessionmaker=sessionmaker_,
+            database_path=database_path,
+        )
+        instance = cls(connection_state=state, namespace_path=namespace)
         return instance
 
     @classmethod
-    def from_url(cls, url: str) -> "RecapClient":
-        """Connect to a recap GraphQL server.
+    def from_url(
+        cls,
+        url: str,
+        *,
+        api_key: str,
+        timeout: float = 30.0,
+        namespace: str | None = None,
+        unscoped: bool = False,
+    ) -> "RecapClient":
+        """Connect to a recap webserver.
 
-        Fetches ``/db_path`` from the server to obtain the SQLite file path,
-        then uses :class:`~recap.adapter.graphql.GraphQLAdapter` for reads and
-        :class:`~recap.adapter.local.LocalBackend` for direct writes.
+        Uses :class:`~recap.adapter.rest.RESTAdapter` for reads and writes. The client does
+        not require access to the server's database filesystem.
 
-        Phase 1 constraint: requires a shared filesystem between client and
-        server — the server's ``db_path`` must be accessible from the client
-        machine.  This constraint is removed in Phase 2 when writes route
-        through REST.
+        Parameters
+        ----------
+        url : str
+            Base URL of the recap server, e.g. ``"http://localhost:8000"``.
+        api_key : str
+            API key used to authenticate requests.
+        timeout : float, default=30.0
+            HTTP request timeout in seconds.
+        namespace : str, default=None
+            Optional namespace to initialize client with
 
-        Args:
-            url: Base URL of the recap server, e.g. ``"http://localhost:8000"``.
+        Returns
+        -------
+        RecapClient
+            Fully initialized client with REST reads and writes.
 
-        Returns:
-            A fully initialised :class:`RecapClient`.
-
-        Raises:
-            RecapConnectionError: If the server is unreachable or returns an
-                HTTP error response.
+        Raises
+        ------
+        RecapConnectionError
+            If the server is unreachable.
+        RecapProtocolError
+            If the server returns a malformed response.
+        RecapRequestError
+            If the server returns an API error response.
         """
-        import httpx2
+        from recap.adapter.http_transport import HTTPTransport
+        from recap.adapter.rest import RESTAdapter
 
-        from recap.adapter.graphql import GraphQLAdapter
-        from recap.exceptions import RecapConnectionError
+        if unscoped:
+            raise ValueError("Remote clients do not support unscoped=True")
 
         base = url.rstrip("/")
-        try:
-            response = httpx2.get(f"{base}/db_path")
-            response.raise_for_status()
-        except httpx2.ConnectError as exc:
-            raise RecapConnectionError(url, message=str(exc)) from exc
-        except httpx2.TimeoutException as exc:
-            raise RecapConnectionError(url, message=str(exc)) from exc
-        except httpx2.HTTPStatusError as exc:
-            raise RecapConnectionError(
-                url, status_code=exc.response.status_code
-            ) from exc
-
-        db_path = response.json()["db_path"]
-
-        from recap.utils.migrations import apply_migrations
-
-        db_url = f"sqlite:///{db_path}"
-        apply_migrations(db_url)
-
-        from sqlalchemy import create_engine
-        from sqlalchemy.orm import sessionmaker
-
-        engine = create_engine(db_url, echo=False)
-        sm = sessionmaker(bind=engine, expire_on_commit=False, future=True)
-        write_backend = LocalBackend(sm)
-        read_backend = GraphQLAdapter(graphql_url=f"{base}/graphql")
-
-        instance = cls._from_backends(
-            read_backend=read_backend, write_backend=write_backend
+        transport = HTTPTransport(api_key, timeout=timeout)
+        rest = RESTAdapter(base_url=base, _transport=transport)
+        client = cls._from_backends(
+            backend=ClientBackend(
+                reader=rest,
+                writer=rest,
+                namespaces=rest,
+                namespace_writer=rest,
+                context_resolver=rest,
+                permissions=rest,
+            ),
+            namespace=namespace,
         )
-        instance.database_path = None  # server-side path, not local
-        instance.engine = engine
-        return instance
+        return client
+
+    def permissions(self) -> ActorPermissions:
+        """Return typed effective permissions for this client's namespace."""
+        if self.connection_state.backend.permissions is None:
+            raise RuntimeError("Permissions API requires a remote read backend")
+        return self.connection_state.backend.permissions.permissions(
+            self.namespace_path
+        )
+
+    def namespace(self, path: str) -> "RecapClient":
+        """Return a view scoped to an additive namespace path."""
+        if not isinstance(path, str):
+            raise TypeError("namespace path must be a string")
+        child_path = self._normalize_namespace(path)
+        namespace_path = "/".join(
+            part for part in (self.namespace_path, child_path) if part
+        )
+        child_namespace_context = self._resolve_namespace_context(namespace_path)
+        view = self.__class__(
+            connection_state=self.connection_state,
+            namespace_context=child_namespace_context,
+        )
+        return view
+
+    def __getitem__(self, namespace: str) -> "RecapClient":
+        return self.namespace(namespace)
+
+    def _resolve_namespace_context(
+        self, namespace_path: str | None
+    ) -> NamespaceContext:
+        namespace_path = (
+            namespace_path if namespace_path is not None else self.namespace_path
+        )
+        try:
+            return self.connection_state.backend.context_resolver.get_namespace_context(
+                namespace_path
+            )
+        except LookupError:
+            raise
+
+    @staticmethod
+    def _command_context():
+        return build_local_command_context()
 
     @classmethod
     def from_sqlite(
-        cls, path: str | Path | None = None, echo: bool = False
+        cls,
+        path: str | Path | None = None,
+        echo: bool = False,
+        *,
+        namespace: str | None = None,
     ) -> "RecapClient":
         """Create or upgrade a local SQLite database and return a connected client.
 
-        This is the recommended way to create a :class:`RecapClient`.  The
+        This is the canonical way to create a :class:`RecapClient`.  The
         method creates the database file (and any missing parent directories)
         if it does not already exist, then runs any pending Alembic migrations
         so the schema is always up to date.
@@ -239,8 +284,24 @@ class RecapClient:
         db_url = f"sqlite:///{target_path}"
         apply_migrations(db_url)
 
-        client = cls(url=db_url, echo=echo)
-        client.database_path = target_path
+        engine = create_engine(db_url, echo=echo)
+        sessionmaker_ = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+        from recap.adapter.local import LocalBackend
+
+        backend = LocalBackend(sessionmaker_)
+        client = cls._from_backends(
+            backend=ClientBackend(
+                reader=backend,
+                writer=backend,
+                namespaces=backend,
+                namespace_writer=backend,
+                context_resolver=backend,
+            ),
+            namespace=namespace,
+            engine=engine,
+            sessionmaker_=sessionmaker_,
+            database_path=target_path,
+        )
         return client
 
     @overload
@@ -260,7 +321,8 @@ class RecapClient:
         on_existing: Literal["silent", "warn", "raise"] = "warn",
         **kwargs,
     ) -> ProcessTemplateBuilder:
-        """Open a builder for a :class:`~recap.dsl.process_builder.ProcessTemplateBuilder`.
+        """Open a builder for a
+        :class:`~recap.dsl.process_builder.ProcessTemplateBuilder`.
 
         Call this method in two mutually exclusive ways:
 
@@ -295,18 +357,18 @@ class RecapClient:
             RuntimeError: If the backend has not been initialised.
             TypeError: On invalid argument combinations.
         """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-
         if process_template_id is not None:
             if args or kwargs:
                 raise TypeError(
-                    "Pass either an existing process_template_id or name/version, not both"
+                    "Pass either an existing process_template_id or "
+                    "name/version, not both"
                 )
             return ProcessTemplateBuilder(
                 name=None,
                 version=None,
-                backend=self.backend,
+                backend=self.connection_state.backend,
+                command_context=self._command_context(),
+                namespace_context=self.namespace_context,
                 process_template_id=process_template_id,
                 on_existing=on_existing,
             )
@@ -327,7 +389,9 @@ class RecapClient:
         return ProcessTemplateBuilder(
             name=name,
             version=version,
-            backend=self.backend,
+            backend=self.connection_state.backend,
+            command_context=self._command_context(),
+            namespace_context=self.namespace_context,
             on_existing=on_existing,
         )
 
@@ -348,9 +412,8 @@ class RecapClient:
     ) -> ProcessRunBuilder:
         """Open a builder for a :class:`~recap.dsl.process_builder.ProcessRunBuilder`.
 
-        A :class:`~recap.schemas.process.CampaignSchema` must be active (set
-        via :meth:`create_campaign` or :meth:`set_campaign`) before calling
-        this method with new run arguments.
+        Namespace context must be active before calling this method with new
+        run arguments.
 
         Call this method in two mutually exclusive ways:
 
@@ -383,23 +446,22 @@ class RecapClient:
 
         Raises:
             RuntimeError: If the backend has not been initialised.
-            ValueError: If no campaign is set when creating a new run.
+            ValueError: If no namespace context is set when creating a new run.
             TypeError: On invalid argument combinations.
         """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-
         if process_run_id is not None:
             if args or kwargs:
                 raise TypeError(
-                    "Pass either an existing process_run_id or name/description/template_name/version, not both"
+                    "Pass either an existing process_run_id or "
+                    "name/description/template_name/version, not both"
                 )
             return ProcessRunBuilder(
                 name=None,
                 description=None,
                 template_name=None,
-                campaign=self._campaign,
-                backend=self.backend,
+                backend=self.connection_state.backend,
+                namespace_context=self.namespace_context,
+                command_context=self._command_context(),
                 version=None,
                 process_run_id=process_run_id,
                 on_existing=on_existing,
@@ -408,7 +470,8 @@ class RecapClient:
         if args:
             if len(args) != 4:
                 raise TypeError(
-                    "Provide exactly four positional arguments: name, description, template_name, version"
+                    "Provide exactly four positional arguments: name, description, "
+                    "template_name, version"
                 )
             name, description, template_name, version = args
         else:
@@ -424,17 +487,13 @@ class RecapClient:
             if kwargs:
                 raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
 
-        if self._campaign is None:
-            raise ValueError(
-                "Campaign not set, cannot create process run. Use create_campaign() or set_campaign() first"
-            )
-
         return ProcessRunBuilder(
             name=name,
             description=description,
             template_name=template_name,
-            campaign=self._campaign,
-            backend=self.backend,
+            namespace_context=self.namespace_context,
+            backend=self.connection_state.backend,
+            command_context=self._command_context(),
             version=version,
             on_existing=on_existing,
         )
@@ -458,7 +517,8 @@ class RecapClient:
         resource_template_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
     ):
-        """Open a builder for a :class:`~recap.dsl.resource_builder.ResourceTemplateBuilder`.
+        """Open a builder for a
+        :class:`~recap.dsl.resource_builder.ResourceTemplateBuilder`.
 
         A :class:`~recap.schemas.resource.ResourceTemplateSchema` is the
         blueprint for a :class:`~recap.schemas.resource.ResourceSchema`.
@@ -470,7 +530,9 @@ class RecapClient:
                 name="Library Plate",
                 type_names=["container", "plate", "library_plate"],
             ) as tb:
-                tb.add_properties({"dimensions": [{"name": "rows", "type": "int", "default": 8}]})
+                tb.add_properties(
+                    {"dimensions": [{"name": "rows", "type": "int", "default": 8}]}
+                )
 
         **Load an existing template by ID**::
 
@@ -498,19 +560,19 @@ class RecapClient:
             TypeError: If *type_names* is a string, contains non-string
                 items, or if conflicting arguments are provided.
         """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-
         if resource_template_id is not None:
             if name is not None or type_names is not None:
                 raise TypeError(
-                    "Pass either an existing resource_template_id or name/type_names, not both"
+                    "Pass either an existing resource_template_id or "
+                    "name/type_names, not both"
                 )
             return ResourceTemplateBuilder(
                 name=None,
                 type_names=None,
                 version=version,
-                backend=self.backend,
+                backend=self.connection_state.backend,
+                command_context=self._command_context(),
+                namespace_context=self.namespace_context,
                 resource_template_id=resource_template_id,
                 on_existing=on_existing,
             )
@@ -526,7 +588,9 @@ class RecapClient:
             name=name,
             type_names=type_names,
             version=version,
-            backend=self.backend,
+            backend=self.connection_state.backend,
+            command_context=self._command_context(),
+            namespace_context=self.namespace_context,
             on_existing=on_existing,
         )
 
@@ -596,13 +660,11 @@ class RecapClient:
             RuntimeError: If the backend has not been initialised.
             TypeError: On invalid argument combinations.
         """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-
         if resource_id is not None:
             if args or kwargs:
                 raise TypeError(
-                    "Pass either an existing resource_id or name/template_name, not both"
+                    "Pass either an existing resource_id or "
+                    "name/template_name, not both"
                 )
             if parent is not None:
                 raise TypeError(
@@ -613,25 +675,31 @@ class RecapClient:
                 name=None,
                 template_name=None,
                 template_version="1.0",
-                backend=self.backend,
+                backend=self.connection_state.backend,
+                command_context=self._command_context(),
+                namespace_context=self.namespace_context,
                 resource_id=resource_id,
                 on_existing=on_existing,
             )
 
-        resolved_parent = self._resolve_parent(parent)
+        resolved_parent = self._resolve_parent(parent, self.namespace_context)
         name, template_name, template_version = self._parse_resource_args(args, kwargs)
 
         return ResourceBuilder(
             name=name,
             template_name=template_name,
             template_version=template_version,
-            backend=self.backend,
+            backend=self.connection_state.backend,
+            command_context=self._command_context(),
+            namespace_context=self.namespace_context,
             on_existing=on_existing,
             parent=resolved_parent,
         )
 
     def _resolve_parent(
-        self, parent: "ResourceSchema | UUID | None"
+        self,
+        parent: "ResourceSchema | UUID | None",
+        namespace_context: NamespaceContext | None = None,
     ) -> "ResourceSchema | None":
         """Resolve a parent argument to a ResourceSchema (or None)."""
         if parent is None:
@@ -639,15 +707,19 @@ class RecapClient:
         if isinstance(parent, UUID):
             from recap.dsl.query import QuerySpec
 
-            results = self.backend.query(
+            results = self.connection_state.backend.query(
                 ResourceSchema,
                 QuerySpec(
                     filters={"id": parent},
                     preloads=["children", "properties"],
+                    include_mutable=True,
                 ),
+                namespace_path=(namespace_context or self._namespace_context).path,
             )
             if not results:
-                raise ValueError(f"Parent resource with id {parent!r} not found")
+                raise RecapNotFoundError(
+                    f"Parent resource with id {parent!r} not found"
+                )
             return results[0]
         return parent
 
@@ -706,7 +778,7 @@ class RecapClient:
                 - ``"create"`` (default): always create a new resource.
                   Resource names are NOT globally unique — multiple resources
                   with the same name can coexist (e.g., for different
-                  campaigns).
+                  namespaces).
                 - ``"silent"``: reuse the existing resource silently.
                 - ``"warn"``: reuse the existing resource and emit a warning.
                 - ``"raise"``: raise :class:`ExistingResourceError`.
@@ -715,15 +787,56 @@ class RecapClient:
             A :class:`~recap.schemas.resource.ResourceSchema` representing
             the persisted resource, including any auto-created children.
         """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
         return ResourceBuilder.create(
             name=name,
             template_name=template_name,
             template_version=template_version,
-            backend=self.backend,
+            backend=self.connection_state.backend,
+            namespace_context=self.namespace_context,
+            command_context=self._command_context(),
             parent=parent,
             on_existing=on_existing,
+        )
+
+    def copy_resource(
+        self,
+        source_resource_id: UUID,
+        options: ResourceCopyOptions | None = None,
+    ) -> ResourceSchema:
+        """Copy resource across namespaces and commit or roll back atomically.
+
+        Destination namespace comes from this client's scope. Returns persisted
+        full schema and propagates backend validation or authorization errors.
+        """
+        copy_options = options or ResourceCopyOptions()
+        try:
+            return self.connection_state.backend._execute(
+                CopyResource(
+                    source_resource_id=source_resource_id,
+                    destination_namespace_path=self.namespace_context.path,
+                    options=copy_options,
+                ),
+                self._command_context(),
+            )
+        except CommandValidationError as error:
+            raise ValueError(str(error)) from error
+
+    def copy_process_run(
+        self,
+        source_process_run_id: UUID,
+        options: ProcessRunCopyOptions | None = None,
+    ) -> ProcessRunSchema:
+        """Copy process run into current namespace with fresh aggregate identity."""
+        if self.connection_state.backend is None:
+            raise RuntimeError("Backend not initialized")
+        namespace_context = self._resolve_namespace_context()
+        return self.connection_state.backend._execute(
+            CopyProcessRun(
+                source_process_run_id=source_process_run_id,
+                destination_namespace_path=namespace_context.path,
+                options=options or ProcessRunCopyOptions(),
+            ),
+            self._command_context(),
         )
 
     @overload
@@ -783,272 +896,103 @@ class RecapClient:
             :class:`~recap.schemas.resource.ResourceSchema` when
             ``expand=True``.
         """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        return self.backend.get_resource(
-            name,
-            template_name,
-            template_version,
-            expand=expand,
+        from recap.dsl.query import QuerySpec
+
+        schema = ResourceSchema if expand else ResourceRef
+        results = self.connection_state.backend.query(
+            schema,
+            QuerySpec(
+                filters={
+                    "name": name,
+                    "template__name": template_name,
+                    "template__version": template_version,
+                },
+                preloads=("template", "children", "properties") if expand else (),
+                load_mode="eager" if expand else None,
+                include_mutable=True,
+            ),
+            namespace_path=self.namespace_context.path,
         )
-
-    def create_campaign(
-        self,
-        name: str,
-        proposal: str,
-        saf: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> CampaignSchema:
-        """Create a new campaign and make it the active campaign for this client.
-
-        A :class:`~recap.schemas.process.CampaignSchema` is a top-level
-        grouping object that all :class:`ProcessRun` instances belong to.  You
-        must create or set a campaign before calling :meth:`build_process_run`
-        with new run arguments.
-
-        Example::
-
-            client.create_campaign(
-                name="MX Beamtime April 2026",
-                proposal="MX-2026-001",
-                saf="SAF-42",
+        if not results:
+            raise RecapNotFoundError(f"Resource {name!r} not found")
+        if len(results) > 1:
+            raise ValueError(
+                f"Multiple resources named {name!r} matched the requested template"
             )
+        return results[0]
 
-        Args:
-            name: Human-readable name for the campaign.
-            proposal: Proposal or project identifier associated with this
-                campaign.
-            saf: Safety Approval Form (SAF) or equivalent authorization
-                reference.  Optional.
-            metadata: Arbitrary JSON-serialisable key/value pairs to store
-                alongside the campaign record.  Optional.
+    def create_namespace(
+        self, path: str, metadata: dict[str, Any] | None = None, as_current=False
+    ) -> NamespaceContext:
+        """Create a namespace and make it active for subsequent writes."""
+        result = self.connection_state.backend._execute(
+            CreateNamespace(path=path, metadata=metadata), self._command_context()
+        )
+        if as_current:
+            self._namespace_context = self._as_namespace_context(result)
+        return self._namespace_context
 
-        Returns:
-            The created :class:`~recap.schemas.process.CampaignSchema`, which
-            is also stored as the client's active campaign (accessible via the
-            :attr:`campaign` property).
-        """
-        if self.backend is None:
+    def get_namespace(self, path: str) -> NamespaceContext:
+        """Get existing namespace information"""
+        return self._resolve_namespace_context(path)
+
+    def update_namespace(
+        self,
+        namespace_id: UUID | None = None,
+        *,
+        expected_revision: int | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        status: LifecycleStatus | None = None,
+    ) -> NamespaceContext:
+        """Apply namespace metadata/status update and make result active."""
+        if self.connection_state.backend is None:
             raise RuntimeError("Backend not initialized")
-        uow = self.backend.begin()
-        try:
-            self._campaign = self.backend.create_campaign(name, proposal, saf, metadata)
-            uow.commit()
-        except Exception:
-            uow.rollback()
-            raise
-        return self._campaign
+        context = self._namespace_context
+        if namespace_id is None:
+            if context is None:
+                raise ValueError("An active namespace context is required")
+            namespace_id = context.id
+        if expected_revision is None:
+            if context is None or context.revision is None:
+                raise ValueError("Expected namespace revision is required")
+            expected_revision = context.revision
+
+        result = self.connection_state.backend._execute(
+            UpdateNamespace(
+                namespace_id=namespace_id,
+                expected_revision=expected_revision,
+                metadata=None if metadata is None else dict(metadata),
+                status=status,
+            ),
+            self._command_context(),
+            etag_override=None if context is None else context.etag,
+        )
+        self._namespace_context = self._as_namespace_context(result)
+        return self._namespace_context
+
+    @staticmethod
+    def _as_namespace_context(result) -> NamespaceContext:
+        if isinstance(result, NamespaceContext):
+            return result
+        return NamespaceContext.model_validate(result)
 
     @property
-    def campaign(self) -> CampaignSchema | None:
-        """The client's currently active campaign, or ``None`` if unset.
+    def namespace_context(self) -> NamespaceContext:
+        return self._namespace_context
 
-        Read-only. Use :meth:`create_campaign`/:meth:`set_campaign` to change
-        the active campaign and :meth:`update_campaign` to persist edits.
-        """
-        return self._campaign
-
-    def set_campaign(
-        self,
-        id: UUID | None = None,
-        campaign: CampaignSchema | None = None,
-        *,
-        force: bool = False,
-    ) -> CampaignSchema:
-        """Load an existing campaign by ID and make it the active campaign.
-
-        Use this to resume work against a campaign that was created in a
-        previous session or by another client instance.
-
-        The active campaign is cached client-side: re-activating the campaign
-        that is already active is a no-op that skips the database round-trip.
-        There is **no automatic staleness detection** — the client cannot tell
-        whether another process has edited the campaign without re-querying.
-        Pass ``force=True`` to discard the cache and re-read from the backend
-        when you suspect the campaign was changed out of band.
-
-        Example::
-
-            client.set_campaign(existing_campaign_id)
-            # later, after an external edit:
-            client.set_campaign(existing_campaign_id, force=True)
-
-        Args:
-            id: The UUID of the campaign to activate.
-            campaign: Alternatively, the campaign to activate, as a schema.
-            force: When ``True``, always re-query the backend even if the
-                requested campaign is already active.
-
-        Returns:
-            The activated :class:`~recap.schemas.process.CampaignSchema`.
-        """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        if isinstance(id, UUID):
-            target_id = id
-        elif isinstance(campaign, CampaignSchema):
-            target_id = campaign.id
-        else:
-            raise TypeError(
-                f"id should be of type UUID or campaign should be of type CampaignSchema, found type, id: {type(id)} campaign: {type(campaign)}"
-            )
-        # Short-circuit: the requested campaign is already active. Avoid the
-        # transaction + SELECT round-trip unless the caller forces a reload.
-        if not force and self._campaign is not None and self._campaign.id == target_id:
-            return self._campaign
-        uow = self.backend.begin()
-        try:
-            self._campaign = self.backend.set_campaign(target_id)
-            uow.commit()
-        except Exception:
-            uow.rollback()
-            raise
-        return self._campaign
-
-    def update_campaign(
-        self, campaign: CampaignSchema | None = None, **fields: Any
-    ) -> CampaignSchema:
-        """Persist edits to a campaign and refresh the active-campaign cache.
-
-        Edit a campaign either by passing field overrides as keyword arguments
-        or by passing an explicit (already-mutated) schema. When no *campaign*
-        is supplied the client's active campaign is updated. Keyword overrides,
-        when given, are applied on top of the target schema.
-
-        Only the writable fields ``name``, ``proposal``, ``saf`` and
-        ``meta_data`` may be set; all four are written (full overwrite).
-
-        Example::
-
-            # via keyword overrides on the active campaign
-            client.update_campaign(name="MX Beamtime May 2026", saf="SAF-43")
-
-            # via an explicit, mutated schema (GET -> mutate -> PUT)
-            camp = client.campaign
-            camp.proposal = "MX-2026-002"
-            client.update_campaign(camp)
-
-        Args:
-            campaign: The campaign to update. Defaults to the active campaign.
-            **fields: Field overrides (``name``, ``proposal``, ``saf``,
-                ``meta_data``).
-
-        Returns:
-            The updated :class:`~recap.schemas.process.CampaignSchema`, which
-            also becomes the client's active campaign.
-
-        Raises:
-            ValueError: If no campaign is supplied and none is active.
-            TypeError: If an unknown field name is passed.
-        """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-        base = campaign if campaign is not None else self._campaign
-        if base is None:
-            raise ValueError(
-                "No campaign to update. Pass a campaign or set one with "
-                "create_campaign()/set_campaign() first"
-            )
-        if fields:
-            allowed = {"name", "proposal", "saf", "meta_data"}
-            unknown = set(fields) - allowed
-            if unknown:
-                raise TypeError(
-                    f"Unknown campaign field(s): {', '.join(sorted(unknown))}. "
-                    f"Allowed: {', '.join(sorted(allowed))}"
-                )
-            target = base.model_copy(update=fields)
-        else:
-            target = base
-        uow = self.backend.begin()
-        try:
-            self._campaign = self.backend.update_campaign(target)
-            uow.commit()
-        except Exception:
-            uow.rollback()
-            raise
-        return self._campaign
+    def list_namespaces(self) -> list[str]:
+        """Return relative names of direct child namespaces."""
+        return self.connection_state.backend.list_child_namespaces(self.namespace_path)
 
     def query_maker(
         self,
         *,
-        campaign=None,
-        unscoped: bool = False,
         on_unloaded: str = "warn",
     ):
-        """Return a :class:`~recap.dsl.query.QueryDSL` scoped to a campaign.
+        """Return a query DSL scoped to this client's namespace."""
 
-        The returned object exposes a fluent query API for retrieving
-        resources, process runs, and their relationships from the database.
-
-        If *campaign* is omitted the client's currently active campaign is
-        used. Pass an explicit campaign (or its UUID) to query a different
-        one without changing the client's active campaign.
-
-        Pass ``unscoped=True`` to disable campaign scoping entirely and
-        query across all campaigns.  This is mutually exclusive with an
-        explicit *campaign* argument.
-
-        ``on_unloaded`` controls behavior when accessing relationship fields
-        that were not included in the originating query.
-
-        .. note:: Campaign scoping for resources
-
-           Resources do **not** carry a ``campaign_id`` column directly.
-           Campaign scoping for resource queries is achieved by joining
-           through ``ResourceAssignment`` -> ``ProcessRun`` and filtering
-           on ``ProcessRun.campaign_id``.  A consequence is that resources
-           which have never been assigned to any process run will be
-           invisible to campaign-scoped queries.  Use ``unscoped=True`` to
-           include all resources regardless of assignment status.
-
-        Example::
-
-            qm = client.query_maker()
-            resources = qm.resources().of_type("library_plate").all()
-
-            # Cross-campaign query
-            qm_all = client.query_maker(unscoped=True)
-
-        Args:
-            campaign: A :class:`~recap.schemas.process.CampaignSchema` instance
-                or its UUID to scope the query.  When ``None`` the active
-                campaign is used (if one is set).
-            unscoped: When ``True``, ignore the active campaign and return
-                results across all campaigns.  Cannot be combined with
-                an explicit *campaign*.
-            on_unloaded: One of ``"silent"``, ``"warn"``, or ``"raise"``.
-                Defaults to ``"warn"``.
-
-        Returns:
-            A :class:`~recap.dsl.query.QueryDSL` instance.
-
-        Raises:
-            RuntimeError: If the backend has not been initialised.
-            ValueError: If both *campaign* and ``unscoped=True`` are given.
-        """
-        if self.backend is None:
-            raise RuntimeError("Backend not initialized")
-
-        if unscoped and campaign is not None:
-            raise ValueError(
-                "Cannot combine campaign with unscoped=True — "
-                "pass one or the other, not both"
-            )
-
-        campaign_id = None
-        if unscoped:
-            campaign_id = None
-        elif campaign is not None:
-            campaign_id = getattr(campaign, "id", campaign)
-        elif self._campaign is not None:
-            campaign_id = self._campaign.id
-
-        read_backend = getattr(self, "_read_backend", self.backend) or self.backend
-        if read_backend is None:
-            raise RuntimeError("No read backend available")
         return QueryDSL(
-            read_backend,
-            campaign_id=campaign_id,
+            self.connection_state.backend,
+            context=self.namespace_context,
             on_unloaded=on_unloaded,
         )

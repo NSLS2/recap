@@ -1,9 +1,13 @@
 def test_recap_connection_error_importable():
     from recap.exceptions import RecapConnectionError
 
-    err = RecapConnectionError("http://localhost:8000", 404)
-    assert "http://localhost:8000" in str(err)
-    assert "404" in str(err)
+    err = RecapConnectionError(
+        "Connection failed", url="http://localhost:8000", status_code=404
+    )
+    assert err.message == "Connection failed"
+    assert err.url == "http://localhost:8000"
+    assert err.status_code == 404
+    assert str(err) == "Connection failed; HTTP 404"
 
 
 def test_recap_connection_error_is_exception():

@@ -1,12 +1,16 @@
 import warnings
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
+from pathlib import Path
+from typing import IO, TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic import Field as PydanticField
 
+from recap.exporters.protocol import ExportContext
+from recap.exporters.registry import default_exporter_registry
+from recap.schemas.namespace import NamespaceContext, NamespaceSchema
 from recap.schemas.resource import (
     ResourceRef,
     ResourceSchema,
@@ -15,9 +19,8 @@ from recap.schemas.resource import (
 )
 
 if TYPE_CHECKING:
-    from recap.adapter import Backend
+    from recap.adapter import ReadBackend
 from recap.schemas.process import (
-    CampaignSchema,
     ProcessRunRef,
     ProcessRunSchema,
     ProcessTemplateRef,
@@ -53,6 +56,13 @@ FieldOperator = Literal[
 
 
 def _normalize_shape(shape: ShapeInput) -> Shape:
+    if shape == "ref":
+        warnings.warn(
+            "shape='ref' is deprecated; use shape='full', load='none' instead",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return "full"
     if shape == "schema":
         warnings.warn(
             "shape='schema' is deprecated; use shape='full' instead",
@@ -63,6 +73,19 @@ def _normalize_shape(shape: ShapeInput) -> Shape:
     if shape not in ("full", "ref"):
         raise ValueError("shape must be one of 'full', 'ref', or deprecated 'schema'")
     return cast(Shape, shape)
+
+
+def _normalize_expand(expand: bool | None, load: LoadInput) -> LoadMode:
+    if expand:
+        warnings.warn(
+            "expand=True is deprecated; use load='eager' instead",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        if load not in ("none", "eager"):
+            raise ValueError("expand=True cannot be combined with deprecated load='full'")
+        return "eager"
+    return _normalize_load(load)
 
 
 def _normalize_load(load: LoadInput) -> LoadMode:
@@ -89,6 +112,10 @@ def _validate_field_path(path: str) -> str:
 
 
 class FieldPredicate(BaseModel):
+    """Serializable field comparison used by :meth:`BaseQuery.where`."""
+
+    model_config = ConfigDict(extra="forbid")
+
     field: str
     op: FieldOperator
     value: Any
@@ -103,6 +130,10 @@ class FieldPredicate(BaseModel):
 
 
 class FieldOrdering(BaseModel):
+    """Serializable ascending or descending field ordering."""
+
+    model_config = ConfigDict(extra="forbid")
+
     field: str
     direction: Literal["asc", "desc"] = "asc"
 
@@ -110,6 +141,13 @@ class FieldOrdering(BaseModel):
 
 
 class Field:
+    """Typed query-field expression builder.
+
+    Comparisons create immutable :class:`FieldPredicate` values; ``asc`` and
+    ``desc`` create :class:`FieldOrdering` values. Use query ``where`` calls
+    for AND semantics instead of Python ``and``/``or``.
+    """
+
     def __init__(self, path: str):
         self.path = _validate_field_path(path)
 
@@ -117,27 +155,35 @@ class Field:
         return FieldPredicate(field=self.path, op=op, value=value)
 
     def __eq__(self, value: Any) -> FieldPredicate:  # type: ignore[override]
+        """Create equality predicate ``path == value``."""
         return self._predicate("eq", value)
 
     def __ne__(self, value: Any) -> FieldPredicate:  # type: ignore[override]
+        """Create inequality predicate."""
         return self._predicate("ne", value)
 
     def __lt__(self, value: Any) -> FieldPredicate:
+        """Create less-than predicate."""
         return self._predicate("lt", value)
 
     def __le__(self, value: Any) -> FieldPredicate:
+        """Create less-than-or-equal predicate."""
         return self._predicate("lte", value)
 
     def __gt__(self, value: Any) -> FieldPredicate:
+        """Create greater-than predicate."""
         return self._predicate("gt", value)
 
     def __ge__(self, value: Any) -> FieldPredicate:
+        """Create greater-than-or-equal predicate."""
         return self._predicate("gte", value)
 
     def in_(self, values: Sequence[Any]) -> FieldPredicate:
+        """Create membership predicate; strings are rejected as sequences."""
         return self._membership_predicate("in", values)
 
     def not_in(self, values: Sequence[Any]) -> FieldPredicate:
+        """Create non-membership predicate."""
         return self._membership_predicate("not_in", values)
 
     def _membership_predicate(
@@ -148,22 +194,28 @@ class Field:
         return self._predicate(op, list(values))
 
     def contains(self, value: str) -> FieldPredicate:
+        """Create substring containment predicate."""
         return self._predicate("contains", value)
 
     def starts_with(self, value: str) -> FieldPredicate:
+        """Create prefix predicate."""
         return self._predicate("starts_with", value)
 
     def ends_with(self, value: str) -> FieldPredicate:
+        """Create suffix predicate."""
         return self._predicate("ends_with", value)
 
     def asc(self) -> FieldOrdering:
+        """Order ascending by this field."""
         return FieldOrdering(field=self.path, direction="asc")
 
     def desc(self) -> FieldOrdering:
+        """Order descending by this field."""
         return FieldOrdering(field=self.path, direction="desc")
 
 
 class PropertyFilter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str
     group: str | None = None
     op: Literal["eq", "gt", "gte", "lt", "lte", "between", "in"] = "eq"
@@ -178,6 +230,7 @@ class PropertyFilter(BaseModel):
 
 
 class ParameterFilter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str
     group: str | None = None
     step: str | None = None
@@ -192,6 +245,7 @@ class ParameterFilter(BaseModel):
 
 
 class QuerySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     filters: dict[str, Any] = {}
     predicates: Sequence[Any] = ()
     orderings: Sequence[Any] = ()
@@ -201,7 +255,10 @@ class QuerySpec(BaseModel):
     property_filters: list[PropertyFilter] = PydanticField(default_factory=list)
     parent_resource_id: UUID | None = None
     parameter_filters: list[ParameterFilter] = PydanticField(default_factory=list)
-    campaign_id: UUID | None = None
+    include_archived: bool = False
+    include_mutable: bool = False
+    local_metadata_filters: dict[str, Any] = PydanticField(default_factory=dict)
+    effective_metadata_filters: dict[str, Any] = PydanticField(default_factory=dict)
     load_mode: LoadMode | None = None
     on_unloaded: OnUnloadedPolicy | None = None
 
@@ -238,12 +295,15 @@ class QuerySpec(BaseModel):
 
 
 class BaseQuery(Generic[SchemaT]):
+    """Immutable query base with filtering, pagination, loading, and execution."""
+
     schema: type[SchemaT]
 
     def __init__(
         self: Self,
-        backend: "Backend",
+        backend: "ReadBackend",
         *,
+        context: NamespaceContext,
         model: type[SchemaT] | None = None,
         filters: dict[str, Any] | None = None,
         predicates: list[Any] | None = None,
@@ -254,11 +314,14 @@ class BaseQuery(Generic[SchemaT]):
         property_filters: list[PropertyFilter] | None = None,
         parent_resource_id: UUID | None = None,
         parameter_filters: list[ParameterFilter] | None = None,
-        campaign_id: UUID | None = None,
+        include_archived: bool = False,
+        local_metadata_filters: dict[str, Any] | None = None,
+        effective_metadata_filters: dict[str, Any] | None = None,
         load_mode: LoadMode | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
     ):
         self._backend = backend
+        self._context = context
         self.model: type[SchemaT] = model or self.__class__.model  # type: ignore[attr-defined]
         self._filters = filters or {}
         self._predicates = predicates or []
@@ -269,7 +332,9 @@ class BaseQuery(Generic[SchemaT]):
         self._property_filters = property_filters or []
         self._parent_resource_id = parent_resource_id
         self._parameter_filters = parameter_filters or []
-        self._campaign_id = campaign_id
+        self._include_archived = include_archived
+        self._local_metadata_filters = local_metadata_filters or {}
+        self._effective_metadata_filters = effective_metadata_filters or {}
         self._load_mode = load_mode
         self._on_unloaded = on_unloaded
 
@@ -292,6 +357,7 @@ class BaseQuery(Generic[SchemaT]):
         """
         params = dict(
             backend=self._backend,
+            context=self._context,
             model=self.model,
             filters=dict(self._filters),
             predicates=list(self._predicates),
@@ -302,7 +368,9 @@ class BaseQuery(Generic[SchemaT]):
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
-            campaign_id=self._campaign_id,
+            include_archived=self._include_archived,
+            local_metadata_filters=dict(self._local_metadata_filters),
+            effective_metadata_filters=dict(self._effective_metadata_filters),
             load_mode=self._load_mode,
             on_unloaded=self._on_unloaded,
         )
@@ -311,11 +379,13 @@ class BaseQuery(Generic[SchemaT]):
         return clone
 
     def filter(self, **kwargs) -> "Self":
+        """Return clone with equality filters merged."""
         new_filters = dict(self._filters)
         new_filters.update(kwargs)
         return self._clone(filters=new_filters)
 
     def where(self, *predicates) -> "Self":
+        """Return clone with predicates appended using AND semantics."""
         for predicate in predicates:
             if not isinstance(predicate, FieldPredicate):
                 warnings.warn(
@@ -326,6 +396,7 @@ class BaseQuery(Generic[SchemaT]):
         return self._clone(predicates=self._predicates + list(predicates))
 
     def order_by(self, *orderings) -> "Self":
+        """Return clone with orderings appended."""
         normalized = []
         for ordering in orderings:
             if isinstance(ordering, Field):
@@ -341,12 +412,19 @@ class BaseQuery(Generic[SchemaT]):
         return self._clone(orderings=self._orderings + normalized)
 
     def limit(self, value: int) -> "Self":
+        """Return clone constrained to at most ``value`` rows."""
         return self._clone(limit=value)
 
     def offset(self, value: int) -> "Self":
+        """Return clone skipping ``value`` rows."""
         return self._clone(offset=value)
 
+    def include_archived(self) -> "Self":
+        """Return clone including archived entities."""
+        return self._clone(include_archived=True)
+
     def include(self, relation_names: str | Sequence[str]) -> "Self":
+        """Return clone requesting relation preloads."""
         names = (
             [relation_names]
             if isinstance(relation_names, str)
@@ -370,55 +448,83 @@ class BaseQuery(Generic[SchemaT]):
             property_filters=self._property_filters,
             parent_resource_id=self._parent_resource_id,
             parameter_filters=self._parameter_filters,
-            campaign_id=self._campaign_id,
+            include_archived=self._include_archived,
+            local_metadata_filters=self._local_metadata_filters,
+            effective_metadata_filters=self._effective_metadata_filters,
             load_mode=self._load_mode,
             on_unloaded=self._on_unloaded,
         )
 
     def _execute(self) -> list[SchemaT]:
-        rows = self._backend.query(self.model, self._spec)
+        rows = self._backend.query(
+            self.model, self._spec, namespace_path=self._context.path
+        )
         return rows
 
     def all(self) -> Sequence[SchemaT] | Sequence[BaseModel]:
+        """Execute query and return all matching models or references."""
         return self._execute()
 
     def first(self) -> SchemaT | None:
+        """Execute query and return first match, or ``None``."""
         return next(iter(self.limit(1)._execute()), None)
 
     def count(self) -> int:
-        return self._backend.count(self.model, self._spec)
+        """Return matching row count without materializing rows."""
+        return self._backend.count(
+            self.model, self._spec, namespace_path=self._context.path
+        )
+
+    def export(self, format: str, destination: Path | IO | None = None) -> object:
+        """Export one materialized query result through a registered exporter."""
+        exporter = default_exporter_registry.get(format)
+        items = self._execute()
+        if any(not isinstance(item, BaseModel) for item in items):
+            raise TypeError("Export requires BaseModel entity results, not scalar counts")
+        return exporter.export(ExportContext(query=self, items=items), destination)
 
 
-class CampaignQuery(BaseQuery[CampaignSchema]):
-    model = CampaignSchema
-    default_schema = None  # e.g. recap.schemas.campaign.CampaignSchema
+class NamespaceQuery(BaseQuery[NamespaceSchema]):
+    """Query namespaces, including local and effective metadata filters."""
 
-    def include_process_runs(
-        self,
-    ) -> "CampaignQuery":
-        return self.include("process_run")
+    model = NamespaceSchema
+
+    def filter_local_metadata(self, **metadata: Any) -> "NamespaceQuery":
+        """Return clone filtering metadata stored directly on namespaces."""
+        values = dict(self._local_metadata_filters)
+        values.update(metadata)
+        return self._clone(local_metadata_filters=values)
+
+    def filter_effective_metadata(self, **metadata: Any) -> "NamespaceQuery":
+        """Return clone filtering metadata inherited through namespace ancestry."""
+        values = dict(self._effective_metadata_filters)
+        values.update(metadata)
+        return self._clone(effective_metadata_filters=values)
 
 
 class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
+    """Query process runs with optional steps, resources, and parameters."""
+
     model = ProcessRunSchema
     default_schema = None
 
     def __init__(
         self,
-        backend: "Backend",
+        backend: "ReadBackend",
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
         **kwargs,
     ):
         shape = _normalize_shape(shape)
-        load = _normalize_load(load)
+        load = _normalize_expand(expand, load)
         if shape == "ref" and load != "none":
             raise ValueError("load must be 'none' when shape='ref'")
         self._shape = shape
         self._load = load
-        model = ProcessRunSchema if shape == "full" else ProcessRunRef
+        model = ProcessRunSchema
         super().__init__(
             backend,
             model=model,
@@ -430,6 +536,7 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
     def _clone(self, **overrides) -> "ProcessRunQuery":
         params = dict(
             backend=self._backend,
+            context=self._context,
             shape=self._shape,
             load=self._load,
             filters=dict(self._filters),
@@ -441,7 +548,9 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
-            campaign_id=self._campaign_id,
+            include_archived=self._include_archived,
+            local_metadata_filters=dict(self._local_metadata_filters),
+            effective_metadata_filters=dict(self._effective_metadata_filters),
             on_unloaded=self._on_unloaded,
         )
         params.update(overrides)
@@ -455,6 +564,7 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
         return super().include(relation_names)
 
     def include_steps(self, *, include_parameters: bool = False) -> "ProcessRunQuery":
+        """Return clone preloading run steps and optionally their parameters."""
         if include_parameters:
             return self.include(["steps", "steps.parameters"])
         return self.include("steps")
@@ -474,6 +584,7 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
         in_: Sequence[Any] | None = None,
         value_type: str | None = None,
     ) -> "ProcessRunQuery":
+        """Return clone filtering process-run parameters by name and comparison."""
         comparators = {
             "eq": eq,
             "gt": gt,
@@ -516,29 +627,33 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
         return self._clone(parameter_filters=self._parameter_filters + [pf])
 
     def include_resources(self) -> "ProcessRunQuery":
+        """Return clone preloading assigned process-run resources."""
         return self.include("resources")
 
 
 class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
+    """Query resources, properties, templates, and parent relationships."""
+
     model = ResourceSchema
     default_schema = None
 
     def __init__(
         self,
-        backend: "Backend",
+        backend: "ReadBackend",
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
         **kwargs,
     ):
         shape = _normalize_shape(shape)
-        load = _normalize_load(load)
+        load = _normalize_expand(expand, load)
         if shape == "ref" and load != "none":
             raise ValueError("load must be 'none' when shape='ref'")
         self._shape = shape
         self._load = load
-        model = ResourceSchema if shape == "full" else ResourceRef
+        model = ResourceSchema
         super().__init__(
             backend,
             model=model,
@@ -550,6 +665,7 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
     def _clone(self, **overrides) -> "ResourceQuery":
         params = dict(
             backend=self._backend,
+            context=self._context,
             shape=self._shape,
             load=self._load,
             filters=dict(self._filters),
@@ -561,7 +677,9 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
-            campaign_id=self._campaign_id,
+            include_archived=self._include_archived,
+            local_metadata_filters=dict(self._local_metadata_filters),
+            effective_metadata_filters=dict(self._effective_metadata_filters),
             on_unloaded=self._on_unloaded,
         )
         params.update(overrides)
@@ -575,6 +693,7 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
         return super().include(relation_names)
 
     def include_template(self) -> "ResourceQuery":
+        """Return clone preloading each resource template."""
         return self.include("template")
 
     def filter_property(
@@ -591,6 +710,7 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
         in_: Sequence[Any] | None = None,
         value_type: str | None = None,
     ) -> "ResourceQuery":
+        """Return clone filtering typed resource properties."""
         comparators = {
             "eq": eq,
             "gt": gt,
@@ -634,6 +754,7 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
     def under_parent(
         self, parent: ResourceRef | ResourceSchema | UUID | str | Any
     ) -> "ResourceQuery":
+        """Return clone restricted to direct children of a parent resource."""
         parent_id: UUID
         if isinstance(parent, ResourceRef | ResourceSchema):
             parent_id = parent.id
@@ -655,6 +776,7 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
         *,
         of_template: UUID | None = None,
     ) -> "ResourceQuery":
+        """Return clone restricted to descendants of a parent resource."""
         """Fetch every resource beneath ``parent`` (all levels) in one bulk
         recursive query, with ``template`` and ``properties`` eagerly loaded.
 
@@ -668,25 +790,28 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
 
 
 class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateRef]):
+    """Query resource templates and optionally hydrate child relationships."""
+
     model = ResourceTemplateSchema
     default_schema = None
 
     def __init__(
         self,
-        backend: "Backend",
+        backend: "ReadBackend",
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
         **kwargs,
     ):
         shape = _normalize_shape(shape)
-        load = _normalize_load(load)
+        load = _normalize_expand(expand, load)
         if shape == "ref" and load != "none":
             raise ValueError("load must be 'none' when shape='ref'")
         self._shape = shape
         self._load = load
-        model = ResourceTemplateSchema if shape == "full" else ResourceTemplateRef
+        model = ResourceTemplateSchema
         super().__init__(
             backend,
             model=model,
@@ -698,6 +823,7 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateR
     def _clone(self, **overrides) -> "ResourceTemplateQuery":
         params = dict(
             backend=self._backend,
+            context=self._context,
             shape=self._shape,
             load=self._load,
             filters=dict(self._filters),
@@ -709,7 +835,9 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateR
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
-            campaign_id=self._campaign_id,
+            include_archived=self._include_archived,
+            local_metadata_filters=dict(self._local_metadata_filters),
+            effective_metadata_filters=dict(self._effective_metadata_filters),
             on_unloaded=self._on_unloaded,
         )
         params.update(overrides)
@@ -723,38 +851,49 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateR
         return super().include(relation_names)
 
     def filter_by_types(self, type_list: list[str]) -> "ResourceTemplateQuery":
+        """Return clone matching templates carrying every requested type."""
         return self.filter(types__names_in=type_list)
 
+    def filter_label(self, label: str) -> "ResourceTemplateQuery":
+        """Return clone matching resource-template label."""
+        return self.filter(labels__contains=label)
+
     def include_children(self) -> "ResourceTemplateQuery":
+        """Return clone preloading child templates."""
         return self.include("children")
 
     def include_attribute_groups(self) -> "ResourceTemplateQuery":
+        """Return clone preloading attribute-group templates."""
         return self.include("attribute_group_templates")
 
     def include_types(self) -> "ResourceTemplateQuery":
+        """Return clone preloading resource type tags."""
         return self.include("types")
 
 
 class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]):
+    """Query process templates and optionally hydrate steps and slots."""
+
     model = ProcessTemplateSchema
     default_schema = None
 
     def __init__(
         self,
-        backend: "Backend",
+        backend: "ReadBackend",
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
         **kwargs,
     ):
         shape = _normalize_shape(shape)
-        load = _normalize_load(load)
+        load = _normalize_expand(expand, load)
         if shape == "ref" and load != "none":
             raise ValueError("load must be 'none' when shape='ref'")
         self._shape = shape
         self._load = load
-        model = ProcessTemplateSchema if shape == "full" else ProcessTemplateRef
+        model = ProcessTemplateSchema
         super().__init__(
             backend,
             model=model,
@@ -766,6 +905,7 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]
     def _clone(self, **overrides) -> "ProcessTemplateQuery":
         params = dict(
             backend=self._backend,
+            context=self._context,
             shape=self._shape,
             load=self._load,
             filters=dict(self._filters),
@@ -777,7 +917,9 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]
             property_filters=list(self._property_filters),
             parent_resource_id=self._parent_resource_id,
             parameter_filters=list(self._parameter_filters),
-            campaign_id=self._campaign_id,
+            include_archived=self._include_archived,
+            local_metadata_filters=dict(self._local_metadata_filters),
+            effective_metadata_filters=dict(self._effective_metadata_filters),
             on_unloaded=self._on_unloaded,
         )
         params.update(overrides)
@@ -791,61 +933,52 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]
         return super().include(relation_names)
 
     def include_step_templates(self) -> "ProcessTemplateQuery":
+        """Return clone preloading process step templates."""
         return self.include("step_templates")
 
     def include_resource_slots(self) -> "ProcessTemplateQuery":
+        """Return clone preloading process resource slots."""
         return self.include("resource_slots")
+
+    def filter_label(self, label: str) -> "ProcessTemplateQuery":
+        """Return clone matching process-template label."""
+        return self.filter(labels__contains=label)
 
 
 class QueryDSL:
+    """Factory for namespace-scoped query families."""
+
     def __init__(
         self,
-        backend: "Backend",
+        backend: "ReadBackend",
         *,
-        campaign_id: UUID | None = None,
+        context: NamespaceContext,
         on_unloaded: OnUnloadedPolicy = "warn",
     ):
         if on_unloaded not in {"silent", "warn", "raise"}:
             raise ValueError("on_unloaded must be one of: 'silent', 'warn', 'raise'")
         self.backend = backend
-        self._campaign_id = campaign_id
+        self.context = context
+        self.namespace_path = context.path
         self._on_unloaded = on_unloaded
 
-    def _resolve_campaign_id(self, campaign: UUID | str | Any | None) -> UUID | None:
-        if campaign is None:
-            return None
-        if isinstance(campaign, UUID):
-            return campaign
-        if isinstance(campaign, str):
-            return UUID(campaign)
-        if hasattr(campaign, "id"):
-            return campaign.id
-        raise TypeError("campaign must be a UUID, UUID string, or object with an id")
-
-    def _pick_campaign_id(self, campaign: UUID | str | Any | None) -> UUID | None:
-        return (
-            self._resolve_campaign_id(campaign)
-            if campaign is not None
-            else self._campaign_id
-        )
-
-    def campaigns(self) -> CampaignQuery:
-        return CampaignQuery(self.backend)
+    def namespaces(self) -> NamespaceQuery:
+        return NamespaceQuery(self.backend, context=self.context)
 
     def process_runs(
         self,
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
-        campaign: UUID | str | Any | None = None,
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ProcessRunQuery:
-        campaign_id = self._pick_campaign_id(campaign)
         return ProcessRunQuery(
             self.backend,
+            context=self.context,
             shape=_normalize_shape(shape),
             load=_normalize_load(load),
-            campaign_id=campaign_id,
+            expand=expand,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )
 
@@ -854,12 +987,15 @@ class QueryDSL:
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ProcessTemplateQuery:
         return ProcessTemplateQuery(
             self.backend,
+            context=self.context,
             shape=_normalize_shape(shape),
             load=_normalize_load(load),
+            expand=expand,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )
 
@@ -868,27 +1004,15 @@ class QueryDSL:
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
-        campaign: UUID | str | Any | None = None,
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ResourceQuery:
-        """Start a resource query, optionally scoped to a campaign.
-
-        .. note:: Campaign scoping for resources
-
-           Resources do not have a direct ``campaign_id`` column.  When a
-           campaign is active, the scope is applied by joining through
-           ``ResourceAssignment`` -> ``ProcessRun`` and filtering on
-           ``ProcessRun.campaign_id``.  Resources that have never been
-           assigned to a process run in the target campaign will be
-           excluded.  Use ``query_maker(unscoped=True)`` to include all
-           resources regardless of assignment status.
-        """
-        campaign_id = self._pick_campaign_id(campaign)
         return ResourceQuery(
             self.backend,
+            context=self.context,
             shape=_normalize_shape(shape),
             load=_normalize_load(load),
-            campaign_id=campaign_id,
+            expand=expand,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )
 
@@ -897,11 +1021,14 @@ class QueryDSL:
         *,
         shape: ShapeInput = "full",
         load: LoadInput = "none",
+        expand: bool | None = None,
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ResourceTemplateQuery:
         return ResourceTemplateQuery(
             self.backend,
+            context=self.context,
             shape=_normalize_shape(shape),
             load=_normalize_load(load),
+            expand=expand,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )

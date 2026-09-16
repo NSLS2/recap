@@ -1,0 +1,61 @@
+---
+title: Nest Resource Templates
+---
+
+# Nest Resource Templates
+
+Use nested resource templates when every instance should expose the same
+hierarchy. Each `add_child` call returns a child builder. Add that child's
+properties or children, then call `close_child()` to return to its parent.
+
+```python
+with namespace.build_resource_template(
+    name="Experiment",
+    type_names=["experiment"],
+) as experiment:
+    sample = experiment.add_child("Sample", ["sample"])
+    sample.add_properties({
+        "identity": [
+            {"name": "sample_id", "type": "str", "default": ""},
+        ],
+    })
+
+    vial = sample.add_child("Vial", ["vial"])
+    vial.add_properties({
+        "storage": [
+            {"name": "position", "type": "str", "default": ""},
+        ],
+    })
+    sample = vial.close_child()
+    experiment = sample.close_child()
+```
+
+The example defines two nesting levels below `Experiment`: `Sample` and `Vial`.
+Close builders from deepest child back to root so each builder's parent is
+explicit. A `with` block also saves the root template when it exits.
+
+## Distinguish template and runtime children
+
+**Template children:** predictable structure defined once by a template.
+
+**Runtime children:** experiment-specific structure added to an instance.
+
+Use template children for required hierarchy such as experiment, sample, and
+vial. Use runtime children when count or structure is discovered during an
+experiment and should not change the template for every future instance.
+
+## Copy an existing resource into a group
+
+Use runtime children to group an existing resource without changing its source
+or its template. Pass either its `ResourceSchema` or UUID to `add_child`:
+
+```python
+with namespace.build_resource(resource_id=group.id) as group_builder:
+    copied_sample = group_builder.add_child(sample)
+```
+
+The operation copies the selected resource and its full descendant subtree
+beneath the group. The copied root has `copied_from_id == sample.id`;
+descendants do not individually record lineage. A copied root keeps its source
+name, and a group cannot receive another child with the same name. Rename the
+source before grouping when that name already exists under the group.

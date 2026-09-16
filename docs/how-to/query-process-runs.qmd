@@ -1,0 +1,78 @@
+---
+title: Query Process Runs
+---
+
+# Query Process Runs
+
+Process-run queries support process-template filters, typed parameter filters,
+relationship inclusion, visibility, ordering, and pagination.
+
+## Filter process templates
+
+Use `filter()` for query fields and `Field` predicates for portable structured
+comparisons.
+
+```python
+from recap.dsl.query import Field
+
+runs = (
+    namespace.query_maker()
+    .process_runs()
+    .where(Field("process_template.name") == "Collect")
+    .where(Field("name").starts_with("Run-"))
+    .all()
+)
+```
+
+## Filter parameters
+
+`filter_parameter()` requires exactly one comparator. Use `eq`, range
+comparators, `between`, or membership with `in_`; pass `step` when parameter
+names repeat across steps.
+
+```python
+query = namespace.query_maker()
+
+exact = query.process_runs().filter_parameter(
+    "detector", eq="pilatus", step="Collect"
+).all()
+
+in_range = query.process_runs().filter_parameter(
+    "exposure", between=(0.1, 1.0), step="Collect"
+).all()
+
+selected = query.process_runs().filter_parameter(
+    "energy", in_=[8.0, 12.0, 16.0], value_type="float"
+).all()
+```
+
+## Include run relationships
+
+```python
+runs = (
+    query.process_runs()
+    .include_steps(include_parameters=True)
+    .include_resources()
+    .all()
+)
+```
+
+`include_steps()` loads steps; `include_steps(include_parameters=True)` also
+loads step parameters; `include_resources()` loads assigned resources and
+their child resources.
+
+## Include archived runs and paginate
+
+```python
+runs = (
+    query.process_runs()
+    .include_archived()
+    .order_by(Field("create_date").desc())
+    .limit(25)
+    .offset(50)
+    .all()
+)
+```
+
+Archived runs are excluded by default. `first()` is equivalent to applying
+`limit(1)` and returning the first result.

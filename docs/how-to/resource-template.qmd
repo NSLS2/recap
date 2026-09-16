@@ -1,0 +1,95 @@
+---
+title: Create a Resource Template
+---
+
+# Create a Resource Template
+
+Use a resource template to define the shape of trackable entities. Templates
+can include typed properties, defaults, property groups, and child templates.
+
+```python
+with namespace.build_resource_template(
+    name="Detector File",
+    type_names=["file", "detector-data"],
+) as builder:
+    builder.add_properties({
+        "file": [
+            {"name": "path", "type": "str", "default": ""},
+            {"name": "sha256", "type": "str", "default": ""},
+        ]
+    })
+```
+
+## Define typed property groups
+
+Group related properties so resource values have a stable, readable shape. The
+mapping form is useful when defining several groups at once:
+
+```python
+builder.add_properties({
+    "file": [
+        {"name": "path", "type": "str", "default": ""},
+        {"name": "size", "type": "int", "default": 0, "unit": "byte"},
+    ],
+    "provenance": [
+        {"name": "instrument", "type": "str", "default": ""},
+    ],
+})
+```
+
+For incremental definitions, open a group and close it when finished:
+
+```python
+properties = builder.prop_group("checksum")
+properties.add_attribute("sha256", "str", "", "")
+properties.close_group()
+```
+
+## Set defaults, units, and metadata
+
+Defaults fill omitted values. Units document how numeric values are interpreted;
+metadata carries validation hints and other property information:
+
+```python
+builder.add_properties({
+    "measurement": [
+        {
+            "name": "temperature",
+            "type": "float",
+            "default": 20.0,
+            "unit": "degC",
+            "metadata": {"min": -273.15, "max": 500.0},
+        },
+    ],
+})
+```
+
+Property metadata validates resource values against constraints such as numeric
+bounds or enum choices. It does not replace the declared property type.
+
+## Constrain values
+
+Use `min` and `max` metadata for numeric properties, or `choices` for an enum:
+
+```python
+builder.add_properties({
+    "state": [
+        {
+            "name": "mode",
+            "type": "enum",
+            "default": "idle",
+            "metadata": {"choices": ["idle", "running", "failed"]},
+        },
+    ],
+})
+```
+
+Choose constraints that describe every valid resource instance. Invalid values
+are rejected when resource properties are validated.
+
+## Choose template child structure
+
+Use `add_child` for hierarchy known when defining the template. Child templates
+are owned by the parent template and create predictable structure; runtime
+children are added later to one resource instance. See [Nest resource
+templates](nested-resource-templates.qmd) for multi-level examples.

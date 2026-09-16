@@ -143,9 +143,6 @@ venv.bak/
 # Rope project settings
 .ropeproject
 
-# mkdocs documentation
-/site
-
 # mypy
 .mypy_cache/
 .dmypy.json
@@ -178,6 +175,10 @@ cython_debug/
 
 # Built docs
 site/
+great-docs/
+
+# Git worktrees
+.worktrees/
 
 # MacOS
 .DS_Store

@@ -10,7 +10,6 @@ The fix serializes list-like defaults to JSON strings before storage/query.
 
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.resource import Resource, ResourceTemplate
-from recap.dsl.resource_builder import ResourceTemplateBuilder
 
 
 class TestArrayDefaultViaLocalBackend:
@@ -22,6 +21,7 @@ class TestArrayDefaultViaLocalBackend:
             name="ArrayTest-T1", type_names=["sample"]
         ) as rtb:
             rtb.prop_group("data").add_attribute("tags", "array", "", []).close_group()
+            rtb.finalize()
 
         # Verify template was persisted and is queryable
         tmpl = (
@@ -40,6 +40,7 @@ class TestArrayDefaultViaLocalBackend:
             rtb.prop_group("meta").add_attribute(
                 "labels", "array", "", ["a", "b", "c"]
             ).close_group()
+            rtb.finalize()
 
         tmpl = (
             client.query_maker()
@@ -52,13 +53,16 @@ class TestArrayDefaultViaLocalBackend:
     def test_array_default_idempotent_on_reopen(self, client):
         """Reopening a template with an array attribute doesn't create duplicates."""
         for _ in range(2):
-            with ResourceTemplateBuilder(
-                name="ArrayTest-T3", type_names=["container"], backend=client.backend
+            with client.build_resource_template(
+                name="ArrayTest-T3", type_names=["container"]
             ) as rtb:
                 rtb.prop_group("info").add_attribute(
                     "items", "array", "", []
                 ).close_group()
-
+        with client.build_resource_template(
+            name="ArrayTest-T3", type_names=["container"]
+        ) as rtb:
+            rtb.finalize()
         # Should still have exactly one attribute template named "items"
         tmpl = (
             client.query_maker()
@@ -122,15 +126,24 @@ class TestArrayDefaultRoundTrip:
                 "measurements", "array", "mm", [1, 2, 3]
             ).close_group()
 
-        with client.build_resource("ArrayE2E-R", "ArrayE2E-T") as _:
-            pass  # just create with defaults
-
-        res = (
-            client.query_maker()
-            .resources()
-            .filter(name="ArrayE2E-R")
-            .include(["template", "properties"])
-            .first()
-        )
+        with client.build_resource("ArrayE2E-R", "ArrayE2E-T") as builder:
+            resource_id = builder.resource.id
+        with client.build_resource(resource_id=resource_id) as builder:
+            res = builder.get_model(update=True)
         assert res is not None
         assert res.properties.data.values.measurements.value == [1, 2, 3]
+
+    def test_repeated_array_values_are_not_collapsed_to_default(self, client):
+        """Values repeating an array default remain distinct values."""
+        with client.build_resource_template(
+            name="ArrayRepeatedDefault-T", type_names=["sample"]
+        ) as rtb:
+            rtb.prop_group("data").add_attribute(
+                "measurements", "array", "", [1]
+            ).close_group()
+
+        with client.build_resource("ArrayRepeatedDefault-R", "ArrayRepeatedDefault-T") as builder:
+            model = builder.get_model()
+            model.properties.data.values.measurements.value = [1, 1]
+            builder.set_model(model)
+            assert builder.get_model().properties.data.values.measurements.value == [1, 1]

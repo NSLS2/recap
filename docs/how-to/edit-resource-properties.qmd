@@ -1,0 +1,49 @@
+---
+title: Edit Resource Properties
+---
+
+# Edit Resource Properties
+
+Resource schemas provide typed property groups and values for inspection and
+local editing. Editing a schema does not persist changes by itself; use a
+resource builder to submit the edited model.
+
+## Read values
+
+```python
+plate = namespace.query_maker().resources(load="eager").first()
+plate.build_property_model()
+
+rows = plate.properties.dimensions.rows.value
+unit = plate.properties.dimensions.rows.unit
+```
+
+Attributes support dot access and bracket access. Brackets accept either the
+normalized slug or the original attribute name, and `.get(name)` returns a
+missing attribute as `None`.
+
+```python
+group = plate.properties["dimensions"]
+rows = group["rows"].value
+rows = group.get("rows").value
+```
+
+## Modify and persist values
+
+```python
+with namespace.build_resource(resource_id=plate.id) as builder:
+    model = builder.get_model()
+    model.properties.dimensions.rows = 16
+    model.properties.dimensions.rows.unit = "count"
+    builder.set_model(model)
+```
+
+The builder validates values against the template and persists the aggregate on
+successful context-manager exit. An exception rolls the change back.
+
+## Units and metadata
+
+Setting an attribute value preserves its existing unit. Set the unit explicitly
+when the update changes its meaning. Template metadata can constrain numeric
+ranges or enumerate allowed values; invalid values fail validation before the
+mutation is committed.

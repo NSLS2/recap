@@ -1,0 +1,267 @@
+# Great Docs Configuration
+# See https://posit-dev.github.io/great-docs/user-guide/configuration.html
+
+# Module Name (optional)
+# ----------------------
+# Set this if your importable module name differs from the project name.
+# Example: project 'py-yaml12' with module name 'yaml12'
+module: recap
+
+# Site Identity
+# -------------
+display_name: Recap
+repo: https://github.com/nsls2/recap
+logo: docs/assets/recap_logo.png
+favicon: docs/assets/favicon.ico
+
+# Docstring Parser
+# ----------------
+# The docstring format used in your package (numpy, google, or sphinx)
+parser: numpy
+
+# Dynamic Introspection
+# ---------------------
+# Use runtime introspection for more accurate documentation (default: true)
+# Set to false if your package has cyclic alias issues (e.g., PyO3/Rust bindings)
+dynamic: true
+
+# API Discovery Settings
+# ----------------------
+# Exclude items from auto-documentation
+# exclude:
+#   - InternalClass
+#   - helper_function
+
+# Logo & Favicon
+# ---------------
+# Point to a single logo file (replaces the text title in the navbar):
+# logo: assets/logo.svg
+#
+# For light/dark variants:
+# logo:
+#   light: assets/logo-light.svg
+#   dark: assets/logo-dark.svg
+#
+# To show the text title alongside the logo, add: show_title: true
+
+# Author Information
+# ------------------
+# Author metadata for display in the landing page sidebar
+# You can add additional fields: github, orcid, affiliation, homepage
+authors:
+  - name: Venkateswaran Shekar
+    role: Author
+    affiliation: Brookhaven National Lab
+    email: vshekar1@bnl.gov
+    # github: 
+    # orcid: 
+    # homepage: 
+
+# Diataxis Content Sections
+# -------------------------
+
+sections:
+  - title: Getting Started
+    dir: docs/getting_started
+  - title: How-To Guides
+    dir: docs/how-to
+    sidebar_groups:
+      - section: Quick Start
+        contents:
+          - quick-start-create-and-store-data-locally.qmd
+          - setup-recap-server.qmd
+          - use-remote-authentication.qmd
+      - section: Create Templates
+        contents:
+          - resource-template.qmd
+          - process-template.qmd
+          - nested-resource-templates.qmd
+          - update-and-retire-templates.qmd
+      - section: Create and Edit Instances
+        contents:
+          - build-process-runs.qmd
+          - add-runtime-children.qmd
+          - edit-resource-properties.qmd
+          - manage-resource-lifecycle.qmd
+          - handle-errors-and-request-ids.qmd
+          - use-revisions-and-idempotency.qmd
+      - section: Query Experiments
+        contents:
+          - query-resources.qmd
+          - query-process-runs.qmd
+          - query-templates-and-namespaces.qmd
+          - choose-query-shape-and-loading.qmd
+          - provenance-queries.qmd
+          - performance.qmd
+  - title: Explanation
+    dir: docs/explanation
+  - title: Tutorials
+    dir: docs/tutorials
+
+custom_pages:
+  - dir: docs/assets
+    output: docs/assets
+
+
+navbar_order:
+  - Getting Started
+  - How-To Guides
+  - Explanation
+  - Tutorials
+  - Reference
+  - Changelog
+
+# Funding / Copyright Holder
+# --------------------------
+# Credit the organization that funds or holds copyright for this package.
+# Displays in sidebar and footer. Homepage and ROR provide links.
+# funding:
+#   name: "Posit Software, PBC"
+#   roles:
+#     - Copyright holder
+#     - funder
+#   homepage: https://posit.co
+#   ror: https://ror.org/03wc8by49
+
+# API Reference Structure
+# -----------------------
+# Customize the sections below to organize your API documentation.
+# - Reorder items within a section to change their display order
+# - Move items between sections or create new sections
+# - Use 'members: false' to exclude methods from documentation
+# - Add 'desc:' to sections for descriptions
+
+reference:
+  - title: Client
+    desc: Local and remote clients, namespace context, and permissions.
+    contents:
+      - name: RecapClient
+        members: true
+      - name: ActorPermissions
+        members: true
+      - name: EffectivePermissions
+        members: true
+      - name: PermissionDecision
+        members: true
+      - DenialCode
+  - title: Queries
+    desc: Immutable query composition and field predicates.
+    contents:
+      - name: QueryDSL
+        members: true
+      - name: Field
+        members: true
+      - name: FieldPredicate
+        members: true
+      - name: FieldOrdering
+        members: true
+      - name: BaseQuery
+        members: true
+      - name: NamespaceQuery
+        members: true
+      - name: ResourceQuery
+        members: true
+      - name: ResourceTemplateQuery
+        members: true
+      - name: ProcessTemplateQuery
+        members: true
+      - name: ProcessRunQuery
+        members: true
+  - title: Builders
+    desc: Context-managed resource and process builders.
+    contents:
+      - name: ResourceTemplateBuilder
+        members: true
+      - name: ResourceBuilder
+        members: true
+      - name: ProcessTemplateBuilder
+        members: true
+      - name: StepTemplateBuilder
+        members: true
+      - name: ProcessRunBuilder
+        members: true
+      - name: AttributeGroupBuilder
+        members: true
+  - title: Models and Lifecycle
+    desc: Public schemas, lifecycle state, directions, and copy options.
+    contents:
+      - LifecycleStatus
+      - Direction
+      - validate_transition
+      - name: NamespaceRef
+        members: true
+      - name: NamespaceContext
+        members: true
+      - name: NamespaceSchema
+        members: true
+      - name: ResourceTypeSchema
+        members: true
+      - name: ResourceCopyChanges
+        members: true
+      - name: ResourceCopyOptions
+        members: true
+      - name: ResourceTemplateRef
+        members: true
+      - name: ResourceTemplateSchema
+        members: true
+      - name: ResourceRef
+        members: true
+      - name: ResourceSchema
+        members: true
+      - name: ResourceAssignmentSchema
+        members: true
+      - name: ProcessTemplateRef
+        members: true
+      - name: ProcessTemplateSchema
+        members: true
+      - name: ProcessRunRef
+        members: true
+      - name: ProcessRunSchema
+        members: true
+      - name: StepTemplateRef
+        members: true
+      - name: StepTemplateSchema
+        members: true
+      - name: StepSchema
+        members: true
+      - name: ParameterSchema
+        members: true
+      - name: AttributeTemplateSchema
+        members: true
+      - name: AttributeGroupRef
+        members: true
+      - name: AttributeGroupTemplateSchema
+        members: true
+      - name: AttributeValueSchema
+        members: true
+      - name: AttributeTemplateValidator
+        members: true
+# Site URL
+# --------
+# Canonical address of the deployed documentation site.
+# Required for subdirectory deployments, skills page install commands,
+# .well-known/ discovery, and sitemaps.
+# site_url: "https://your-org.github.io/your-package/"
+
+# Site Settings
+# -------------
+# site:
+#   theme: flatly              # Quarto theme (default: flatly)
+#   toc: true                  # Show table of contents (default: true)
+#   toc-depth: 2               # TOC heading depth (default: 2)
+#   toc-title: On this page    # TOC title (default: "On this page")
+
+# Jupyter Kernel
+# --------------
+# Jupyter kernel to use for executing code cells in .qmd files.
+# This is set at the project level so it applies to all pages, including
+# auto-generated API reference pages. Can be overridden in individual .qmd
+# file frontmatter if needed for special cases.
+jupyter: python3
+
+# CLI Documentation
+# -----------------
+# cli:
+#   enabled: true              # Enable CLI documentation
+#   module: my_package.cli     # Module containing Click commands
+#   name: cli                  # Name of the Click command object

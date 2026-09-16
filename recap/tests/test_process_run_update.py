@@ -1,5 +1,8 @@
+import pytest
+
+
 def test_process_run_update_persists_param_changes(client):
-    client.create_campaign("Campaign", "proposal-1", saf=None)
+    client.create_namespace("process-run-update")
 
     with client.build_process_template("PT-update", "1.0") as ptb:
         (
@@ -16,23 +19,63 @@ def test_process_run_update_persists_param_changes(client):
         template_name="PT-update",
         version="1.0",
     ) as prb:
-        run = prb.process_run
+        run_id = prb.process_run.id
 
-        # Mutate typed param values on the pydantic model, then hand the
-        # mutated model back via set_model() so __exit__ persists it.
-        model = prb.get_model()
-        model.steps["Mix"].parameters.inputs.values.voltage.value = 42
-        prb.set_model(model)
-
-    refreshed_run = (
-        client.query_maker()
-        .process_runs()
-        .include_steps(include_parameters=True)
-        .filter(id=run.id)
-        .first()
-    )
+        params = prb.get_params("Mix")
+        canonical_run = prb._process_run
+        params.inputs.values.voltage.value = 42
+        assert params.inputs.values.voltage.value == 42
+        prb.set_params(params)
+    with client.build_process_run(process_run_id=run_id) as builder:
+        refreshed_run = builder.process_run
     assert refreshed_run is not None
     assert refreshed_run.steps["Mix"].parameters.inputs.values.voltage.value == 42
+    assert canonical_run.steps["Mix"].parameters.inputs.values.voltage.value == 42
+
+
+def test_finalized_process_run_builder_uses_copy_on_write(client):
+    client.create_namespace("process-run-finalized-copy")
+    with client.build_process_template("PT-finalized-copy", "1.0"):
+        pass
+    with client.build_process_run(
+        name="run-finalized-copy",
+        description="desc",
+        template_name="PT-finalized-copy",
+        version="1.0",
+    ) as builder:
+        run_id = builder.process_run.id
+        builder.finalize()
+
+    with client.build_process_run(process_run_id=run_id) as builder:
+        model = builder.get_model()
+        model.description = "draft-only"
+        assert builder.process_run.description != "draft-only"
+
+
+def test_finalized_process_run_save_creates_lineage_copy(client):
+    client.create_namespace("process-run-copy-lineage")
+    with client.build_process_template("PT-copy-lineage", "1.0"):
+        pass
+    with client.build_process_run(
+        name="run-copy-lineage",
+        description="source",
+        template_name="PT-copy-lineage",
+        version="1.0",
+    ) as builder:
+        source_id = builder.process_run.id
+        builder.finalize()
+
+    with client.build_process_run(process_run_id=source_id) as builder:
+        draft = builder.get_model()
+        draft.description = "copy"
+        builder.set_model(draft)
+
+    copied = builder.process_run
+    assert copied.id != source_id
+    assert copied.copied_from_id == source_id
+    assert copied.description == "copy"
+    with client.build_process_run(process_run_id=source_id) as source:
+        assert source.process_run.description == "source"
 
 
 def test_resource_builder_persists_property_changes(client):
@@ -43,9 +86,142 @@ def test_resource_builder_persists_property_changes(client):
 
     with client.build_resource("R1", "Robot") as rb:
         rb.resource.properties.details.values.serial.value = "xyz"
+        resource_id = rb.resource.id
 
-    refreshed = (
-        client.query_maker().resources().include("properties").filter(name="R1").first()
-    )
+    with client.build_resource(resource_id=resource_id) as builder:
+        refreshed = builder.get_model(update=True)
     assert refreshed is not None
     assert refreshed.properties.details.values.serial.value == "xyz"
+
+
+def test_resource_parent_lifecycle_waits_for_child_data(client, monkeypatch):
+    client.create_namespace("resource-lifecycle-order")
+    scoped = client.namespace("resource-lifecycle-order")
+    with scoped.build_resource_template(name="ParentRT", type_names=["container"]):
+        pass
+    with scoped.build_resource_template(name="ChildRT", type_names=["sample"]):
+        pass
+
+    parent = scoped.build_resource("parent", "ParentRT")
+    child = parent.add_child("child", "ChildRT")
+    child.finalize()
+    parent.finalize()
+    events = []
+    backend = client.connection_state.backend
+    writer = backend.writer
+    execute = writer.execute
+
+    def recording_execute(command, context):
+        events.append(type(command).__name__)
+        return execute(command, context)
+
+    monkeypatch.setattr(writer, "execute", recording_execute)
+    with parent:
+        child.finalize()
+        parent.finalize()
+
+    first_lifecycle = events.index("SetLifecycleStatus")
+    last_resource_write = max(
+        index for index, event in enumerate(events) if event == "CreateResource"
+    )
+    assert last_resource_write < first_lifecycle
+
+
+def _assignment_fixture(client, suffix):
+    client.create_namespace(suffix)
+    scoped = client.namespace(suffix)
+    with scoped.build_resource_template(
+        name=f"Dataset-{suffix}", type_names=["dataset"]
+    ):
+        pass
+    unchanged = scoped.create_resource(f"unchanged-{suffix}", f"Dataset-{suffix}")
+    changed = scoped.create_resource(f"changed-{suffix}", f"Dataset-{suffix}")
+    with scoped.build_process_template(f"Pandda-{suffix}", "1.0") as template:
+        template.add_resource_slot("unchanged_dataset", "dataset", "input")
+        template.add_resource_slot("changed_dataset", "dataset", "input")
+    return scoped, unchanged, changed
+
+
+def test_deferred_process_run_finalization_keeps_all_assignments_without_duplicate(
+    client,
+):
+    scoped, unchanged, changed = _assignment_fixture(client, "deferred-finalize")
+    builder = scoped.build_process_run(
+        "Pandda analysis 1", "First pandda analysis", "Pandda-deferred-finalize", "1.0"
+    )
+    with builder:
+        builder.assign_resource("unchanged_dataset", unchanged)
+    with builder:
+        builder.assign_resource("changed_dataset", changed)
+        builder.finalize()
+
+    assert builder.process_run.status.value == "ACTIVE"
+    assert {
+        name: assignment.resource.id
+        for name, assignment in builder.process_run.assigned_resources.items()
+    } == {
+        "unchanged_dataset": unchanged.id,
+        "changed_dataset": changed.id,
+    }
+
+
+def test_process_run_exception_retains_assignment_and_finalize_request(client):
+    scoped, unchanged, _ = _assignment_fixture(client, "exception-retain")
+    builder = scoped.build_process_run("run", "desc", "Pandda-exception-retain", "1.0")
+    with pytest.raises(RuntimeError), builder:
+        builder.assign_resource("unchanged_dataset", unchanged)
+        builder.finalize()
+        raise RuntimeError("stop")
+
+    assert builder.changes().fields["assignments"]["unchanged_dataset"] == unchanged.id
+    assert builder.changes().lifecycle.value == "ACTIVE"
+
+
+def test_process_run_lifecycle_request_outside_context_is_deferred(client):
+    scoped, _, _ = _assignment_fixture(client, "outside-context-lifecycle")
+    builder = scoped.build_process_run(
+        "run", "desc", "Pandda-outside-context-lifecycle", "1.0"
+    )
+
+    builder.finalize()
+
+    assert builder.process_run.status.value == "MUTABLE"
+    assert builder.changes().lifecycle.value == "ACTIVE"
+    with builder:
+        pass
+    assert builder.process_run.status.value == "ACTIVE"
+
+
+def test_process_run_changes_are_empty_after_successful_commit(client):
+    scoped, unchanged, _ = _assignment_fixture(client, "changes-empty")
+    with scoped.build_process_run(
+        "run", "desc", "Pandda-changes-empty", "1.0"
+    ) as builder:
+        builder.assign_resource("unchanged_dataset", unchanged)
+    assert builder.changes().fields == {}
+
+
+def test_process_run_set_model_then_mutation_preserves_persisted_baseline(client):
+    scoped, unchanged, _ = _assignment_fixture(client, "set-model-baseline")
+    with scoped.build_process_run(
+        "run", "original", "Pandda-set-model-baseline", "1.0"
+    ) as builder:
+        run_id = builder.process_run.id
+
+    with scoped.build_process_run(process_run_id=run_id) as builder:
+        model = builder.get_model()
+        model.description = "edited draft"
+        builder.set_model(model)
+        builder.assign_resource("unchanged_dataset", unchanged)
+
+        assert builder.changes().fields == {
+            "assignments": {"unchanged_dataset": unchanged.id},
+            "description": "edited draft",
+        }
+
+    with scoped.build_process_run(process_run_id=run_id) as builder:
+        assert builder.process_run.description == "edited draft"
+        assert (
+            builder.process_run.assigned_resources["unchanged_dataset"].resource.id
+            == unchanged.id
+        )

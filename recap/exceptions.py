@@ -60,14 +60,102 @@ class UnloadedFieldError(RuntimeError):
     """Raised when unloaded relationship access policy is set to 'raise'."""
 
 
-class RecapConnectionError(Exception):
-    """Raised when RecapClient cannot connect to a recap server."""
+class RecapError(Exception):
+    code = "recap_error"
 
     def __init__(
-        self, url: str, status_code: int | None = None, message: str | None = None
-    ):
+        self,
+        message: str,
+        *,
+        url: str | None = None,
+        status_code: int | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        self.message = message
         self.url = url
         self.status_code = status_code
-        detail = f" (HTTP {status_code})" if status_code else ""
-        extra = f": {message}" if message else ""
-        super().__init__(f"Cannot connect to recap server at {url}{detail}{extra}")
+        self.request_id = request_id
+        details = [message]
+        if status_code is not None:
+            details.append(f"HTTP {status_code}")
+        if request_id is not None:
+            details.append(f"request_id={request_id}")
+        super().__init__("; ".join(details))
+
+
+class RecapConnectionError(RecapError):
+    code = "connection_error"
+
+
+class RecapProtocolError(RecapError):
+    code = "protocol_error"
+
+
+class RecapRequestError(RecapError):
+    code = "request_error"
+
+
+class RecapAuthenticationError(RecapRequestError):
+    code = "authentication_required"
+
+
+class RecapPermissionDeniedError(RecapRequestError):
+    code = "permission_denied"
+
+
+class AuthorizationDenied(RecapPermissionDeniedError):
+    """Signal an authorization denial without carrying sensitive context."""
+
+    def __init__(self, *, conceal: bool = False) -> None:
+        super().__init__("Permission denied")
+        self.conceal = conceal
+
+
+class RecapNotFoundError(RecapRequestError):
+    code = "not_found"
+
+
+class RecapValidationError(RecapRequestError):
+    code = "validation_error"
+
+
+class RecapConflictError(RecapRequestError):
+    code = "conflict"
+
+
+class RecapServiceUnavailableError(RecapRequestError):
+    code = "service_unavailable"
+
+
+class RecapInternalError(RecapRequestError):
+    code = "internal_error"
+
+
+ERROR_TYPES = {
+    "authentication_required": RecapAuthenticationError,
+    "permission_denied": RecapPermissionDeniedError,
+    "not_found": RecapNotFoundError,
+    "validation_error": RecapValidationError,
+    "conflict": RecapConflictError,
+    "service_unavailable": RecapServiceUnavailableError,
+    "internal_error": RecapInternalError,
+    "request_error": RecapRequestError,
+}
+
+
+def error_from_code(
+    code: str,
+    message: str,
+    *,
+    url: str | None = None,
+    status_code: int | None = None,
+    request_id: str | None = None,
+) -> RecapRequestError:
+    error_type = ERROR_TYPES.get(code, RecapRequestError)
+    error = error_type(
+        message,
+        url=url,
+        status_code=status_code,
+        request_id=request_id,
+    )
+    return error

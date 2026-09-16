@@ -10,16 +10,14 @@ The regression these tests guard against is hydrating the tree by walking
 that grows with tree depth.
 """
 
-from recap.dsl.resource_builder import ResourceTemplateBuilder
+import pytest
 
 from .conftest import count_statements
 
 
 def _make_template(client, name):
     """A minimal single-type template with one property group."""
-    with ResourceTemplateBuilder(
-        name=name, type_names=["container"], backend=client.backend
-    ) as rtb:
+    with client.build_resource_template(name=name, type_names=["container"]) as rtb:
         rtb.prop_group("details").add_attribute(
             "serial", "str", "", "abc"
         ).close_group()
@@ -39,6 +37,8 @@ def _make_chain(client, depth, *, template, prefix):
             parent=parent,
             on_existing="create",
         )
+    with client.build_resource(resource_id=root.id) as builder:
+        builder.finalize()
     return root
 
 
@@ -52,6 +52,7 @@ def _walk_depth(resource):
     return n
 
 
+@pytest.mark.performance
 def test_get_resource_expand_is_depth_independent(client):
     """``get_resource(expand=True)`` must issue a bounded, depth-independent
     number of SQL statements regardless of tree depth."""
@@ -78,6 +79,7 @@ def test_get_resource_expand_is_depth_independent(client):
     )
 
 
+@pytest.mark.performance
 def test_get_resource_expand_matches_query_eager(client):
     """``get_resource(expand=True)`` must return the same hydrated tree as a
     ``load="eager"`` query for the same root (behaviour-preserving refactor)."""
@@ -86,7 +88,7 @@ def test_get_resource_expand_matches_query_eager(client):
 
     got = client.get_resource("eq-0", "GetResEqT", expand=True)
 
-    qm = client.query_maker(unscoped=True)
+    qm = client.query_maker()
     expected = qm.resources(load="eager").filter(name="eq-0").first()
 
     assert got.id == expected.id

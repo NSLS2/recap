@@ -19,12 +19,18 @@ from recap.dsl.query import (
     PropertyFilter,
     QuerySpec,
 )
+from recap.exceptions import RecapProtocolError
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
+    AttributeTemplateSchema,
 )
 from recap.schemas.common import StepStatus
 from recap.schemas.process import ProcessRunSchema
-from recap.schemas.resource import ResourceSchema
+from recap.schemas.resource import (
+    PropertySchema,
+    ResourceSchema,
+    ResourceTemplateSchema,
+)
 from recap.tests.transport_factories import (
     STAMP,
     attribute_group,
@@ -42,7 +48,6 @@ def test_query_spec_normalizes_legacy_full_load_mode():
 
 
 def test_query_request_serializes_complete_supported_query_spec():
-    campaign_id = uuid4()
     parent_id = uuid4()
     spec = QuerySpec(
         filters={"name": "sample"},
@@ -51,14 +56,17 @@ def test_query_request_serializes_complete_supported_query_spec():
         offset=5,
         property_filters=[PropertyFilter(name="temperature", value=20)],
         parent_resource_id=parent_id,
-        campaign_id=campaign_id,
+        include_archived=True,
         load_mode="eager",
         on_unloaded="raise",
     )
 
-    request = QueryRequest.from_query(ResourceSchema, spec)
+    request = QueryRequest.from_query(
+        ResourceSchema, spec, namespace_path="beamline/amx"
+    )
 
     assert request.schema_name == "ResourceSchema"
+    assert request.namespace_path == "beamline/amx"
     assert request.spec == {
         "filters": {"name": "sample"},
         "predicates": [],
@@ -78,29 +86,55 @@ def test_query_request_serializes_complete_supported_query_spec():
         ],
         "parent_resource_id": str(parent_id),
         "parameter_filters": [],
-        "campaign_id": str(campaign_id),
+        "include_archived": True,
+        "local_metadata_filters": {},
+        "effective_metadata_filters": {},
         "load_mode": "eager",
         "on_unloaded": "raise",
     }
     assert request.spec["load_mode"] == "eager"
     assert "full" not in request.spec.values()
+    assert "include_mutable" not in request.spec
+
+
+def test_hydrate_result_rejects_contradictory_legacy_schema_metadata():
+    result = QueryResult(
+        entity="process_run",
+        projection="full",
+        schema_name="ResourceSchema",
+        items=[],
+    )
+
+    with pytest.raises(RecapProtocolError, match="does not match"):
+        hydrate_result(ResourceSchema, result)
+
+
+def test_query_request_serializes_include_mutable_when_true():
+    request = QueryRequest.from_query(
+        ResourceSchema,
+        QuerySpec(include_mutable=True),
+        namespace_path="beamline/amx",
+    )
+
+    assert request.spec["include_mutable"] is True
 
 
 def test_query_request_serializes_structured_predicates_and_orderings():
-    campaign_id = uuid4()
+    namespace_id = uuid4()
     request = QueryRequest.from_query(
         ProcessRunSchema,
         QuerySpec(
             predicates=[
-                Field("campaign_id") == campaign_id,
+                Field("namespace_id") == namespace_id,
                 Field("create_date") >= STAMP,
             ],
             orderings=[Field("create_date").desc()],
         ),
+        namespace_path="beamline/amx",
     )
 
     assert request.spec["predicates"] == [
-        {"field": "campaign_id", "op": "eq", "value": str(campaign_id)},
+        {"field": "namespace_id", "op": "eq", "value": str(namespace_id)},
         {
             "field": "create_date",
             "op": "gte",
@@ -128,7 +162,11 @@ def test_query_request_serializes_structured_predicates_and_orderings():
 )
 def test_query_request_rejects_every_legacy_query_feature(field, value):
     with pytest.raises(TypeError, match="Field"):
-        QueryRequest.from_query(ResourceSchema, QuerySpec(**{field: value}))
+        QueryRequest.from_query(
+            ResourceSchema,
+            QuerySpec(**{field: value}),
+            namespace_path="beamline/amx",
+        )
 
 
 def test_datetime_default_value_round_trips_as_datetime():
@@ -200,6 +238,118 @@ def test_resource_round_trip_preserves_full_graph_and_transport_state():
     assert hydrated.children["child"]._on_unloaded == "silent"
 
 
+def test_serialize_model_truncates_repeated_cyclic_template_edges():
+    parent = ResourceTemplateSchema.model_construct(
+        id=uuid4(),
+        namespace_id=uuid4(),
+        create_date=STAMP,
+        modified_date=STAMP,
+        status="ACTIVE",
+        revision=1,
+        name="Parent",
+        slug="parent",
+        version="1.0",
+        labels=[],
+        types=[],
+        children={},
+        attribute_group_templates=[],
+    )
+    child = ResourceTemplateSchema.model_construct(
+        id=uuid4(),
+        namespace_id=parent.namespace_id,
+        create_date=STAMP,
+        modified_date=STAMP,
+        status="ACTIVE",
+        revision=1,
+        name="Child",
+        slug="child",
+        version="1.0",
+        labels=[],
+        types=[],
+        children={},
+        attribute_group_templates=[],
+    )
+    parent.children = {"child": child}
+    child.parent = parent
+
+    payload = serialize_model(parent)
+
+    assert payload["children"]["child"]["parent"]["id"] == str(parent.id)
+    assert "children" not in payload["children"]["child"]["parent"]
+
+
+def test_resource_round_trip_preserves_hydrated_array_override_and_metadata():
+    group = AttributeGroupTemplateSchema(
+        **{
+            **{
+                "id": uuid4(),
+                "create_date": STAMP,
+                "modified_date": STAMP,
+                "namespace_id": uuid4(),
+                "status": "ACTIVE",
+                "revision": 1,
+                "labels": [],
+            },
+            "name": "Measurements",
+            "slug": "measurements",
+            "attribute_templates": [
+                AttributeTemplateSchema(
+                    **{
+                        "id": uuid4(),
+                        "create_date": STAMP,
+                        "modified_date": STAMP,
+                        "namespace_id": uuid4(),
+                        "status": "ACTIVE",
+                        "revision": 1,
+                        "labels": [],
+                        "name": "Samples",
+                        "slug": "samples",
+                        "value_type": "array",
+                        "unit": "uL",
+                        "default_value": [1],
+                        "metadata_json": {"source": "detector"},
+                    }
+                )
+            ],
+        }
+    )
+    resource = minimal_resource()
+    resource.template.attribute_group_templates = [group]
+    resource.properties = {"Measurements": PropertySchema(
+        id=uuid4(),
+        create_date=STAMP,
+        modified_date=STAMP,
+        template=group,
+        values={
+            "Samples": {
+                "value": [1, 1],
+                "unit": "mL",
+                "metadata_json": {"sample": "override"},
+            }
+        },
+    )}
+    resource.set_loaded_relations({"children": True, "properties": True})
+
+    payload = serialize_model(resource)
+    [hydrated] = hydrate_result(
+        ResourceSchema,
+        QueryResult(schema_name="ResourceSchema", items=[payload]),
+    )
+
+    value = hydrated.properties.measurements.values.samples
+    assert value.value == [1, 1]
+    assert value.unit == "mL"
+    assert value.metadata_json == {"sample": "override"}
+
+    [rehydrated] = hydrate_result(
+        ResourceSchema,
+        QueryResult(
+            schema_name="ResourceSchema", items=[serialize_model(hydrated)]
+        ),
+    )
+    assert rehydrated.properties.measurements.values.samples.value == [1, 1]
+
+
 def test_minimal_resource_round_trip_does_not_trigger_unloaded_guard():
     resource = minimal_resource()
     resource.set_loaded_relations(
@@ -241,7 +391,7 @@ def test_process_run_round_trip_restores_enums_dynamic_parameters_and_nested_sta
     )
 
     assert hydrated.id == run.id
-    assert hydrated.campaign_id == run.campaign_id
+    assert hydrated.namespace_id == run.namespace_id
     assert hydrated.create_date == STAMP
     assert hydrated.steps["Acquire"].state is StepStatus.COMPLETE
     assert isinstance(hydrated.steps["Acquire"].parameters, BaseModel)
