@@ -76,8 +76,9 @@ Minimal example
 from recap.client import RecapClient
 
 with RecapClient.from_sqlite("experiment.db") as client:
+    client.create_namespace("beamline")
+    client.create_namespace("beamline/amx", metadata={"beamline": "amx"})
     namespace = client.namespace("beamline/amx")
-    namespace.create(metadata={"beamline": "amx"})
 
     with namespace.build_resource_template(
         name="Sample Plate",
@@ -90,10 +91,11 @@ with RecapClient.from_sqlite("experiment.db") as client:
             ]
         })
 
-    plate = namespace.build_resource(
+    with namespace.build_resource(
         name="Plate 001",
         template_name="Sample Plate",
-    ).save()
+    ) as plate_builder:
+        plate = plate_builder.resource
 The same namespace-scoped client can define process templates, create process
 runs, assign resources, record parameters, and query the resulting provenance
 graph.
@@ -134,7 +136,7 @@ Learn more
 - How-to guides (/how-to/index.html)
 - Reference (/reference/index.html)
 - Explanations (/explanation/index.html)
-- Examples (/examples/index.html)
+- Tutorials (/tutorials/index.html)
 Install
 pip install pyrecap
 Install server support with:

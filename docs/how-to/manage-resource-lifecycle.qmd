@@ -36,9 +36,11 @@ Active and archived resources cannot be patched in place. Create mutable copy,
 then edit copy:
 
 ```python
+from recap.schemas.resource import ResourceCopyOptions
+
 copied = namespace.copy_resource(
     source_resource_id=plate.id,
-    changes={"name": "Sample Plate 001 Revision"},
+    options=ResourceCopyOptions(name="Sample Plate 001 Revision"),
 )
 
 with namespace.build_resource(resource_id=copied.id) as builder:

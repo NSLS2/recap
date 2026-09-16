@@ -24,8 +24,8 @@ with namespace.build_process_template("Measure Plate", "1.0") as template:
                 {"name": "mode", "type": "str", "default": "standard"},
             ]
         })
-        .bind_slot("input_plate", "source")
-        .bind_slot("result_file", "destination")
+        .bind_slot("source", "input_plate")
+        .bind_slot("destination", "result_file")
         .close_step()
     )
 ```

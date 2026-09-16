@@ -75,8 +75,8 @@ runs = (
 
 ## Deprecated combinations
 
-New code should not use `shape="ref"`. It is normalized to full models with no
-loading and emits a deprecation warning. `include(...)` still requires
+New code should not use `shape="ref"`. It is normalized to full models; use
+`load="none"` when relationships must remain unloaded. `include(...)` still requires
 non-eager loading:
 
 ```python

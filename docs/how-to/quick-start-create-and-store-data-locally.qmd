@@ -14,8 +14,9 @@ and persist an aggregate when their context manager exits successfully.
 from recap.client import RecapClient
 
 with RecapClient.from_sqlite("experiment.db") as client:
+    client.create_namespace("beamline")
+    client.create_namespace("beamline/amx", metadata={"beamline": "amx"})
     namespace = client.namespace("beamline/amx")
-    namespace.create(metadata={"beamline": "amx"})
 ```
 
 `from_sqlite()` creates or upgrades the database. A namespace path scopes

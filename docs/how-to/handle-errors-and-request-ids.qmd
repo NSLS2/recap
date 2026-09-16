@@ -36,16 +36,16 @@ values in user-facing errors.
 
 ## Rely on atomic mutation behavior
 
-Failed mutations roll back database changes. Failure audits remain durable in a
-separate transaction, preserving request ID, actor, target, and safe reason code
-without retaining partial state or secret values.
+Failed mutations roll back database changes without retaining partial state.
+The current REST server does not persist failure audits; use its request ID to
+correlate a rejected response with server diagnostics.
 
 ```python
-from recap.exceptions import RecapHTTPError
+from recap.exceptions import ExistingResourceError
 
 try:
     with namespace.build_resource(resource_id=plate.id) as builder:
         builder.set_props({"dimensions": {"rows": -1}})
-except RecapHTTPError as exc:
-    print(f"Mutation failed; contact operator with request ID {exc.request_id}")
+except ExistingResourceError as exc:
+    print(f"Local mutation failed: {exc}")
 ```

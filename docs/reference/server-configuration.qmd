@@ -48,9 +48,9 @@ server:
 
 Environment variables include `RECAP_DB_PATH`, `RECAP_HOST`, `RECAP_PORT`,
 `RECAP_AUTHENTICATION_MODE`, and `RECAP_API_KEY` when `ServerConfig` is
-constructed directly. Do not assume environment variables override values
-loaded by `ServerConfig.from_yaml()` until that precedence is covered by an
-end-to-end server configuration test.
+constructed directly. `ServerConfig.from_yaml()` supplies YAML values as
+constructor arguments, so YAML overrides environment variables; explicit CLI
+flags override loaded configuration.
 
 `audit_log_path` is currently a configuration field, but the server application
 does not yet connect it to a durable audit sink.

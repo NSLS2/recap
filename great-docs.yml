@@ -79,11 +79,9 @@ sections:
           - update-and-retire-templates.qmd
       - section: Create and Edit Instances
         contents:
-          - create-resources.qmd
           - build-process-runs.qmd
           - add-runtime-children.qmd
           - edit-resource-properties.qmd
-          - copy-frozen-resources.qmd
           - manage-resource-lifecycle.qmd
           - handle-errors-and-request-ids.qmd
           - use-revisions-and-idempotency.qmd

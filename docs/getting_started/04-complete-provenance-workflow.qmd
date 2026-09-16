@@ -20,6 +20,7 @@ Create a new SQLite database and a namespace for this experiment:
 from recap.client import RecapClient
 
 client = RecapClient.from_sqlite("provenance-tutorial.db")
+client.create_namespace("tutorial")
 namespace_context = client.create_namespace(
     "tutorial/sample-preparation",
     metadata={"experiment": "sample preparation"},

@@ -16,7 +16,7 @@ for focused procedures, concepts, and exact API details.
 
 ## Provenance Workflows
 
-- [Complete Local Provenance](complete-local-provenance.qmd): sample hierarchy, process run, parameters, and local provenance query. See [create resources](../how-to/create-resources.qmd), [build process runs](../how-to/build-process-runs.qmd), and [trace provenance](../how-to/provenance-queries.qmd).
+- [Complete Local Provenance](complete-local-provenance.qmd): sample hierarchy, process run, parameters, and local provenance query. See [quick start](../how-to/quick-start-create-and-store-data-locally.qmd), [build process runs](../how-to/build-process-runs.qmd), and [trace provenance](../how-to/provenance-queries.qmd).
 
 ## Remote Integration
 

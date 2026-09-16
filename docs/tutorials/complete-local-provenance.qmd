@@ -5,7 +5,7 @@ title: Complete Local Provenance
 # Complete Local Provenance
 
 This example records a sample-preparation run and queries its resource hierarchy
-and parameters in one local SQLite database. See [create resources](../how-to/create-resources.qmd),
+and parameters in one local SQLite database. See [quick start](../how-to/quick-start-create-and-store-data-locally.qmd),
 [build process runs](../how-to/build-process-runs.qmd), and [trace provenance](../how-to/provenance-queries.qmd)
 for focused procedures.
 
@@ -15,6 +15,7 @@ from recap.utils.general import Direction
 
 
 with RecapClient.from_sqlite("sample-preparation.db") as client:
+    client.create_namespace("beamline")
     client.create_namespace(
         "beamline/sample-preparation",
         metadata={"experiment": "sample preparation"},

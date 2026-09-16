@@ -4,8 +4,9 @@ title: Audit and Error Semantics
 
 # Audit and Error Semantics
 
-Every command carries request identity through the mutation path. Audit records
-capture request ID, actor ID, mutation, target, outcome, and a safe reason code.
+Every command carries request identity through the mutation path. Command-service
+audit records capture request ID, actor ID, mutation, target, outcome, and a safe
+reason code.
 
 Audit output excludes API keys, authorization headers, property values, and
 process parameter values. These exclusions keep operational records useful
@@ -15,6 +16,7 @@ Server errors use stable error categories and request IDs. Clients can return a
 request ID with an error report without exposing internal exception details or
 authorization grant contents.
 
-The command layer emits success records inside the mutation transaction. Failure
-records are written after rollback so the audit trail records rejected commands
-without preserving their partial database changes.
+The command layer emits success records inside the mutation transaction and can
+write non-authorization failure records after rollback. The current REST server
+does not connect commands to a durable audit sink, so REST audit output is not
+persisted.

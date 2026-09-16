@@ -61,4 +61,4 @@ process_templates = (
 Template queries return canonical full models. Use `load="none"` for identity
 and scalar fields, then add targeted includes when relationships are needed.
 `shape="ref"` is deprecated compatibility syntax and normalizes to
-`shape="full", load="none"`. See [Choose query shape and loading](choose-query-shape-and-loading.qmd).
+`shape="full"`; use `load="none"` for unloaded relationships. See [Choose query shape and loading](choose-query-shape-and-loading.qmd).

@@ -105,7 +105,8 @@ are excluded unless explicitly requested.
 
 The branch adds aggregate lifecycle and immutability rules:
 
-- `MUTABLE -> ACTIVE -> ARCHIVED` is forward-only.
+- `MUTABLE -> ACTIVE`, `MUTABLE -> ARCHIVED`, and `ACTIVE -> ARCHIVED` are
+  allowed; transitions are forward-only.
 - Templates and resources freeze after first stable reference.
 - Nested aggregate mutations are checked through the owning root.
 - Frozen resources are copied into another namespace instead of edited in
@@ -271,11 +272,14 @@ POST  /api/v1/resources/{source_resource_id}/copies
 
 POST  /api/v1/process-runs/{namespace_path}
 PATCH /api/v1/process-runs/{process_run_id}
+POST  /api/v1/process-runs/{source_process_run_id}/copies
+
+POST  /api/v1/lifecycle/{object_type}/{object_id}
 ```
 
-Creates and copies require `Idempotency-Key`. Updates require both
-`Idempotency-Key` and `If-Match`. Successful responses include `ETag` with the
-new revision.
+Creates and copies require `Idempotency-Key`. Entity updates and lifecycle
+transitions require both `Idempotency-Key` and `If-Match`. Successful responses
+include `ETag` with the new revision.
 
 Copy requests send destination namespace in the body rather than the URL:
 
@@ -322,9 +326,10 @@ incremental remote writes.
   drafts and submits aggregate commands.
 - `recap/client/base_client.py` selects the local or REST command executor.
 
-The important invariant is one builder save equals one aggregate command. A
-builder body that raises produces no persistence side effect. The same command
-shape works locally and remotely, which is tested by
+The important invariant is that a clean builder context flushes its aggregate
+draft once. Requested lifecycle transitions are submitted after that aggregate
+command. A builder body that raises produces no persistence side effect. The same
+command shapes work locally and remotely, which is tested by
 `recap/tests/test_remote_builder_parity.py`.
 
 Resource and process-run loading use bounded, depth-independent SQL statement
@@ -397,8 +402,4 @@ Branch-added or branch-modified tests cover the architecture at each boundary:
   `test_rest_resources.py`, `test_rest_process_runs.py`,
   `test_namespace_client.py`, `test_remote_builder_parity.py`.
 
-The final branch reports record full-suite verification at `518 passed, 1
-skipped` before the final merge commit, with existing warnings called out in the
-task reports. The relevant reports are `plan3-task-3-report.md`,
-`plan3-task-6-report.md`, `plan3-task-7-report.md`, and
-`plan3-task-9-report.md`.
+Run `pixi run -e dev test-all` to execute the current full test suite.

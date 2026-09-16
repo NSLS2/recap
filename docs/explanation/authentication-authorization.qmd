@@ -18,9 +18,10 @@ Authentication produces an immutable `RequestActor` containing:
 - A credential fingerprint for safe audit correlation.
 
 The actor is created once per request and passed through REST request context.
-Query and command requests use ordinary JSON over authenticated REST. The same
-actor and namespace policy govern local and remote query execution; transport
-does not change visibility semantics.
+Query and command requests use ordinary JSON over authenticated REST. Local
+execution uses an unrestricted single-user actor and policy; remote execution
+authenticates each request and applies server policy. Both use namespace-scoped
+query semantics.
 
 ## Scopes
 

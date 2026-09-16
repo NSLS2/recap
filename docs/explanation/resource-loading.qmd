@@ -11,8 +11,8 @@ hydration without choosing a separate wire or model shape.
 
 Full models contain stable identity and schema fields. `load="none"` leaves
 relationships unloaded; targeted includes and `load="eager"` hydrate them.
-The old `shape="ref"` spelling is deprecated and means
-`shape="full", load="none"` during migration.
+The old `shape="ref"` spelling is deprecated and normalizes to `shape="full"`.
+Specify `load="none"` explicitly for unloaded relationships.
 
 ```python
 plates = (

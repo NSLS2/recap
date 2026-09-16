@@ -4,8 +4,8 @@ title: Add Runtime Children
 
 # Add Runtime Children
 
-Templates describe predictable structure. Builders can add child resources or
-child process steps when an experiment discovers structure at runtime.
+Templates describe predictable structure. Resource builders can add child
+resources when an experiment discovers structure at runtime.
 
 ## Add a child resource
 
@@ -23,19 +23,6 @@ with namespace.build_resource(resource_id=collection.id) as builder:
 Child resources are persisted as part of the root aggregate and remain
 available through the root's `children` dictionary.
 
-## Add a child process step
-
-Generate a child from a step template, set its parameters and resource roles,
-then add it to the process-run builder:
-
-```python
-with namespace.build_process_run(process_run_id=run.id) as builder:
-    child = run.steps["Transfer"].generate_child()
-    child.parameters.transfer.volume = 20
-    child.resources["source"] = source.children["A01"]
-    child.resources["destination"] = target.children["A01"]
-    builder.add_child_step(child)
-```
-
-Runtime additions preserve the parent template's structure while recording the
-specific details of one process run.
+Process templates define their ordered steps. Process-run builders record
+assignments and parameter values for those declared steps; they do not support
+adding child process steps at runtime.

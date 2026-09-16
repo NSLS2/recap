@@ -119,17 +119,11 @@ Missing, malformed, or invalid credentials return `401` before query or
 command execution. Credentials are compared using constant-time comparison
 and are redacted from client representations and connection errors.
 
-The single-user actor currently receives all defined scopes and has no
-namespace restriction. Authorization still applies to namespace operations:
-
-- Read and write permissions are separate scopes.
-- Write permission does not implicitly grant read permission.
-- Grants on ancestor namespaces can apply to descendants.
-- Sibling namespaces remain isolated.
-- Resource copy requires source read permission and destination write permission.
-- Process-run access requires exact namespace context.
-- REST query authorization visibility is applied before filtering, ordering,
-  pagination, and counts.
+The single-user actor currently receives all defined scopes and has no namespace
+restriction. The runnable server therefore permits this actor to access every
+namespace. Namespace-specific grants, ancestor visibility, and cross-namespace
+authorization rules require multi-user server startup wiring, which is not yet
+available.
 
 Inspect effective permissions from a client:
 
@@ -204,9 +198,11 @@ Use responses as follows:
 
 - `200`: request authenticated and query completed.
 - `401`: credential is missing, malformed, or invalid.
-- `403`: authenticated actor lacks required permission.
-- `404`: resource or namespace may be concealed by authorization policy.
-- `503`: authorization snapshot is unavailable.
+- `403`: request is rejected by an authorization policy in a future multi-user
+  deployment.
+- `404`: requested resource or namespace does not exist; a future multi-user
+  policy may also conceal it.
+- `503`: authorization snapshot is unavailable in a future multi-user deployment.
 
 Use the `X-Request-ID` response header when reporting server-side failures.
 

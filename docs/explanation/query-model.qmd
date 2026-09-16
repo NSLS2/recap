@@ -14,7 +14,7 @@ clients.
 - `shape="full"` is the supported model shape and returns canonical schema
   models.
 - `shape="ref"` is deprecated compatibility syntax. It normalizes to
-  `shape="full", load="none"`; do not use it in new code.
+  `shape="full"`; specify `load="none"` explicitly for unloaded relationships.
 - `load="none"` avoids relationship hydration.
 - `load="eager"` loads configured relationships eagerly.
 - `include(...)` selects explicit relationship paths for full, non-eager
