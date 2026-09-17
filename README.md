@@ -54,12 +54,15 @@ Sample
                                 └── Processed Result
 ```
 This structure lets you answer questions such as:
+
 - Which sample and preparation conditions produced this result?
 - Which resources were used by this process run?
 - Which parameters controlled a particular analysis?
 - Which results depend on a specific input?
 - What metadata belongs to all experiments in a namespace?
-Why this is useful for high-throughput science
+
+## Why this is useful for high-throughput science
+
 High-throughput workflows often repeat the same operations across many samples,
 plates, visits, or processing batches. Manually maintaining relationships in
 notebooks, filenames, and spreadsheets makes provenance difficult to query and
@@ -72,7 +75,10 @@ boundaries as projects grow.
 The result is a provenance layer that can support automation, quality control,
 reproducibility, and downstream analysis without requiring every application to
 invent its own data model.
-Minimal example
+
+## Minimal example
+
+```python
 from recap.client import RecapClient
 
 with RecapClient.from_sqlite("experiment.db") as client:
@@ -96,18 +102,30 @@ with RecapClient.from_sqlite("experiment.db") as client:
         template_name="Sample Plate",
     ) as plate_builder:
         plate = plate_builder.resource
+```
+
 The same namespace-scoped client can define process templates, create process
 runs, assign resources, record parameters, and query the resulting provenance
 graph.
-Local and remote use
+
+## Local and remote use
+
 For local workflows, RECAP manages a SQLite database:
+
+```python
 client = RecapClient.from_sqlite("experiment.db")
+```
+
 For shared or service-based deployments, clients connect to an authenticated
 RECAP server:
+
+```python
 client = RecapClient.from_url(
     "https://recap.example.org",
     api_key="your-api-key",
 )
+```
+
 Remote clients use authenticated REST for queries, reads, creates, updates, and
 resource copies. Applications do not need direct access
 to the server's database filesystem.
@@ -121,24 +139,39 @@ drafts and submit one aggregate command at `save()`, locally or through REST.
 Query results can be passed to `query.export(format, destination)` through the
 registered exporter extension point. RECAP does not prescribe a built-in export
 format.
-What RECAP does not do
+
+## What RECAP does not do
+
 RECAP records experimental data and provenance. It is not:
+
 - An electronic lab notebook.
 - A laboratory inventory management system.
 - An instrument-control system.
 - A scientific analysis or computation engine.
+
 Applications can build those capabilities on top of RECAP's provenance model.
-Learn more
-- Getting started (/getting_started/00-orientation.html)
-- Complete provenance workflow (/getting_started/04-complete-provenance-workflow.html)
-- Quick start: create and store data locally (/how-to/quick-start-create-and-store-data-locally.html)
-- Model a process workflow (/getting_started/03-process-workflow.html)
-- How-to guides (/how-to/index.html)
-- Reference (/reference/index.html)
-- Explanations (/explanation/index.html)
-- Tutorials (/tutorials/index.html)
-Install
+
+## Learn more
+
+- [Getting started](https://nsls2.github.io/recap/getting_started/00-orientation.html)
+- [Complete provenance workflow](https://nsls2.github.io/recap/getting_started/04-complete-provenance-workflow.html)
+- [Quick start: create and store data locally](https://nsls2.github.io/recap/how-to/quick-start-create-and-store-data-locally.html)
+- [Model a process workflow](https://nsls2.github.io/recap/getting_started/03-process-workflow.html)
+- [How-to guides](https://nsls2.github.io/recap/how-to/index.html)
+- [Reference](https://nsls2.github.io/recap/reference/index.html)
+- [Explanations](https://nsls2.github.io/recap/explanation/index.html)
+- [Tutorials](https://nsls2.github.io/recap/tutorials/index.html)
+
+## Install
+
+```bash
 pip install pyrecap
+```
+
 Install server support with:
+
+```bash
 pip install "pyrecap[server]"
+```
+
 RECAP is released under the 3-clause BSD license.
