@@ -498,6 +498,19 @@ def _enforce_provenance_lifecycle(session, flush_context, instances):  # noqa: C
         source_status = _source_status(root)
         if source_status is LifecycleStatus.MUTABLE:
             continue
+        if isinstance(root, Resource) and isinstance(obj, Resource):
+            state = inspect(obj)
+            changed_keys = {
+                attr.key
+                for attr in state.attrs
+                if attr.history.has_changes()
+                and attr.key
+                not in {"assignments", "revision", "status", "modified_date"}
+            }
+            # Provenance assignments may target a child resource. They change
+            # only the relationship, not immutable resource content.
+            if not changed_keys and obj not in session.deleted:
+                continue
         if obj is root:
             state = inspect(obj)
             changed_keys = {

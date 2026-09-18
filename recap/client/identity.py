@@ -65,6 +65,7 @@ class IdentityMap:
         self._models: dict[IdentityKey, BaseModel] = {}
         self._lock = RLock()
         self._canonical_merge_pairs: set[tuple[int, int]] = set()
+        self._canonicalizing: set[int] = set()
 
     def get(self, key: IdentityKey) -> BaseModel | None:
         with self._lock:
@@ -87,6 +88,7 @@ class IdentityMap:
         with self._lock:
             self._models.clear()
             self._canonical_merge_pairs.clear()
+            self._canonicalizing.clear()
 
     def _intern(self, model: BaseModel, *, authoritative: bool = False) -> BaseModel:
         family = self._family(model)
@@ -515,13 +517,20 @@ class IdentityMap:
     def _canonicalize_relations(self, model: BaseModel) -> None:
         if not isinstance(model, BaseModel):
             return
-        for name in model.model_fields_set:
-            if _loaded_relations(model).get(name) is False:
-                continue
-            value = model.__dict__.get(name)
-            canonical = self._canonicalize_value(value)
-            if canonical is not value:
-                setattr(model, name, canonical)
+        model_key = id(model)
+        if model_key in self._canonicalizing:
+            return
+        self._canonicalizing.add(model_key)
+        try:
+            for name in model.model_fields_set:
+                if _loaded_relations(model).get(name) is False:
+                    continue
+                value = model.__dict__.get(name)
+                canonical = self._canonicalize_value(value)
+                if canonical is not value:
+                    setattr(model, name, canonical)
+        finally:
+            self._canonicalizing.remove(model_key)
 
     def _merge_loaded_relations(self, current: BaseModel, incoming: BaseModel) -> None:
         current_flags = _loaded_relations(current)
