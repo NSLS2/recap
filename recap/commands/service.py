@@ -1415,7 +1415,7 @@ class CommandService:
                         target_step.assignments[assignment.resource_slot_id] = (
                             ResourceAssignment(
                                 process_run=copied,
-                                resource_slot=assignment.resource_slot,
+                                resource_slot_id=assignment.resource_slot_id,
                                 step=target_step,
                                 resource=assignment.resource,
                             )
