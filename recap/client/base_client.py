@@ -924,13 +924,19 @@ class RecapClient:
     def create_namespace(
         self, path: str, metadata: dict[str, Any] | None = None, as_current=False
     ) -> NamespaceContext:
-        """Create a namespace and make it active for subsequent writes."""
+        """Create a namespace, optionally making it active for subsequent writes.
+
+        Returns the namespace that was created. Pass ``as_current=True`` to also
+        make it this client's active namespace context; otherwise the client's
+        active context is left unchanged.
+        """
         result = self.connection_state.backend._execute(
             CreateNamespace(path=path, metadata=metadata), self._command_context()
         )
+        context = self._as_namespace_context(result)
         if as_current:
-            self._namespace_context = self._as_namespace_context(result)
-        return self._namespace_context
+            self._namespace_context = context
+        return context
 
     def get_namespace(self, path: str) -> NamespaceContext:
         """Get existing namespace information"""

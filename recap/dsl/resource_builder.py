@@ -654,16 +654,6 @@ class ResourceBuilder:
         )
         return model()
 
-    def set_props(self, filled_props):
-        if self.resource is None:
-            raise ValueError("Resource not setup")
-        for prop in self._draft.properties.values():
-            filled_prop = filled_props.get(prop.template.name)
-            for value_name in self.resource.properties[prop.template.name].values:
-                self.resource.properties[prop.template.name].values[value_name] = (
-                    filled_prop.get(value_name)
-                )
-
 
 class ResourceTemplateBuilder:
     def __init__(  # noqa: C901

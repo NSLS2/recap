@@ -347,7 +347,7 @@ def test_client_fixture_starts_at_root_scope(client):
 
 def test_query_maker_uses_client_namespace_scope(apply_migrations, db_path):
     with RecapClient.from_sqlite(db_path) as client:
-        context = client.create_namespace("query-name")
+        context = client.create_namespace("query-name", as_current=True)
         qm = client.query_maker()
 
         assert qm.process_runs()._context == context
@@ -364,11 +364,13 @@ def test_query_maker_receives_client_backend_reader_facade(client):
 
 def test_query_maker_uses_scoped_namespace_view(apply_migrations, db_path):
     with RecapClient.from_sqlite(db_path) as client:
-        other = client.create_namespace("client-other")
-        qm = client.query_maker()
+        client.create_namespace("client-other")
+        scoped = client.namespace("client-other")
+        qm = scoped.query_maker()
 
-        assert qm.process_runs()._context == other
-        assert qm.resources()._context == other
+        assert qm.process_runs()._context == scoped.namespace_context
+        assert qm.resources()._context == scoped.namespace_context
+        assert scoped.namespace_context.path == "client-other"
 
 
 def test_query_maker_can_set_on_unloaded_policy(apply_migrations, db_path):
@@ -376,6 +378,36 @@ def test_query_maker_can_set_on_unloaded_policy(apply_migrations, db_path):
         client.create_namespace("name-policy")
         qm = client.query_maker(on_unloaded="raise")
         assert qm.process_runs()._spec.on_unloaded == "raise"
+
+
+def test_create_namespace_returns_the_created_namespace(apply_migrations, db_path):
+    with RecapClient.from_sqlite(db_path) as client:
+        parent = client.create_namespace("returned")
+        child = client.create_namespace("returned/child")
+
+        assert parent.path == "returned"
+        assert child.path == "returned/child"
+        assert parent.id != child.id
+
+
+def test_create_namespace_leaves_active_context_unchanged_by_default(
+    apply_migrations, db_path
+):
+    with RecapClient.from_sqlite(db_path) as client:
+        before = client.namespace_path
+        created = client.create_namespace("not-current")
+
+        assert created.path == "not-current"
+        assert client.namespace_path == before
+
+
+def test_create_namespace_can_make_the_new_namespace_active(apply_migrations, db_path):
+    with RecapClient.from_sqlite(db_path) as client:
+        created = client.create_namespace("now-current", as_current=True)
+
+        assert created.path == "now-current"
+        assert client.namespace_context == created
+        assert client.namespace_path == "now-current"
 
 
 def test_root_query_maker_uses_root_scope_remotely(monkeypatch):

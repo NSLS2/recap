@@ -736,3 +736,40 @@ def test_optional_slot_can_be_assigned_later(client):
     with client.build_process_run(process_run_id=run_id) as verifier:
         fresh = verifier.process_run
     assert fresh.steps["Move"].parameters.mv.values.count.value == 42
+
+
+def test_resource_properties_are_set_through_the_values_mapping(client):
+    """Property values are set one way: builder.resource.properties[g].values[n]."""
+    with client.build_resource_template(
+        name="Props-Template", type_names=["container"]
+    ) as rtb:
+        rtb.prop_group("details").add_attribute(
+            "serial", "str", "", "default-serial"
+        ).add_attribute("batch", "str", "", "default-batch").close_group()
+
+    with client.build_resource("Props-1", "Props-Template") as rb:
+        rb.resource.properties["details"].values["serial"] = "xyz"
+        rb.finalize()
+
+    with client.build_resource(resource_id=rb.resource.id) as verifier:
+        refreshed = verifier.get_model(update=True)
+
+    assert refreshed.properties.details.values.serial.value == "xyz"
+    # Untouched attributes keep their template default.
+    assert refreshed.properties.details.values.batch.value == "default-batch"
+
+
+def test_resource_builder_has_no_set_props_method(client):
+    """`set_props` was removed; the values mapping is the only supported setter."""
+    assert not hasattr(client.build_resource, "set_props")
+
+    with client.build_resource_template(
+        name="NoSetProps-Template", type_names=["container"]
+    ) as rtb:
+        rtb.prop_group("details").add_attribute(
+            "serial", "str", "", "abc"
+        ).close_group()
+
+    with client.build_resource("NoSetProps-1", "NoSetProps-Template") as rb:
+        assert not hasattr(rb, "set_props")
+        rb.finalize()
