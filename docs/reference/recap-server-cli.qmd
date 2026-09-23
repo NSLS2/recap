@@ -1,0 +1,72 @@
+---
+title: recap-server CLI
+description: Command-line flags for the RECAP server entry point.
+---
+
+# `recap-server` CLI
+
+The `recap-server` command starts the RECAP REST query and command API. It is
+installed by the `server` extra:
+
+```bash
+pip install "pyrecap[server]"
+```
+
+## Synopsis
+
+```bash
+recap-server --db PATH [--host HOST] [--port PORT] [--log-level LEVEL]
+recap-server --config PATH [--host HOST] [--port PORT] [--log-level LEVEL]
+```
+
+The module form is equivalent:
+
+```bash
+python -m recap.server --db /path/to/recap.db
+```
+
+## Options
+
+| Flag | Argument | Default | Meaning |
+| --- | --- | --- | --- |
+| `--db` | `PATH` | none | Path to a SQLite database file |
+| `--config` | `PATH` | none | Path to a YAML configuration file |
+| `--host` | `HOST` | `127.0.0.1` | Bind host |
+| `--port` | `PORT` | `8000` | Bind port |
+| `--log-level` | `LEVEL` | `info` | Uvicorn log level |
+| `-h`, `--help` | | | Show usage and exit |
+
+Exactly one of `--db` or `--config` is required. Supplying neither is an error.
+
+## Precedence
+
+`--host`, `--port`, and `--log-level` are applied *after* configuration is
+loaded, so an explicit flag overrides the same setting in a YAML file.
+
+Use `--config` for anything beyond a database path. `--db` constructs a minimal
+configuration and offers no way to set an API key on the command line, so it is
+only useful when the remaining settings come from `RECAP_`-prefixed environment
+variables. See [Server Configuration](server-configuration.qmd) for every
+available field and for how YAML and environment variables interact.
+
+## Examples
+
+Run against a local database on the default host and port, taking the API key
+from the environment:
+
+```bash
+export RECAP_API_KEY="replace-with-secret"
+recap-server --db /data/recap/recap.db
+```
+
+Run from a configuration file, overriding the port for a test instance:
+
+```bash
+recap-server --config /etc/recap/server.yaml --port 8100
+```
+
+## Exit behaviour
+
+If the `server` extra is not installed, the command reports the missing Uvicorn
+dependency and exits with status 1. Invalid configuration raises a validation
+error naming the offending field.

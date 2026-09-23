@@ -1,0 +1,124 @@
+---
+title: Quick Start
+description: Create a database, define a template, store a resource, and query it back in about five minutes.
+---
+
+# Quick Start
+
+By the end of this page you will have created a local database, defined one
+template, stored one resource, and read it back with a query.
+
+Everything here runs against a local SQLite file. No server required.
+
+```{python}
+#| include: false
+from pathlib import Path
+
+Path("quickstart.db").unlink(missing_ok=True)
+```
+
+## 1. Create a client and a namespace
+
+```{python}
+from recap import RecapClient
+
+client = RecapClient.from_sqlite("quickstart.db")
+
+client.create_namespace("beamline")
+client.create_namespace("beamline/amx", metadata={"beamline": "amx"})
+
+namespace = client.namespace("beamline/amx")
+print(namespace.namespace_path)
+```
+
+`from_sqlite()` creates the database file and applies any pending migrations.
+
+Namespaces are hierarchical, so `beamline` must exist before `beamline/amx`.
+`client.namespace(path)` returns a view of the client scoped to that path;
+every template, resource, and query made through `namespace` now belongs to
+`beamline/amx` without your having to repeat the path.
+
+## 2. Define a resource template
+
+```{python}
+with namespace.build_resource_template(
+    name="Sample Plate",
+    type_names=["container", "plate"],
+) as template:
+    template.add_properties({
+        "dimensions": [
+            {"name": "rows", "type": "int", "default": 8},
+            {"name": "columns", "type": "int", "default": 12},
+        ]
+    })
+```
+
+This declares the shape every sample plate will have: a property group called
+`dimensions` holding two integers with defaults.
+
+The `with` block is doing real work. Builders collect your changes and validate
+them as a single unit, then save once when the block exits cleanly. If the
+block raises, nothing is written.
+
+## 3. Create a resource
+
+```{python}
+with namespace.build_resource(
+    name="Sample Plate 001",
+    template_name="Sample Plate",
+) as builder:
+    builder.resource.properties["dimensions"].values["rows"] = 16
+    builder.finalize()
+```
+
+This plate takes the template's default of 12 columns but overrides rows to 16.
+
+`finalize()` is required if you want to find this resource later. It marks the
+resource **active**. Until then it stays in a mutable draft state, and queries
+skip it by design, so half-built records never show up in results.
+
+## 4. Query it back
+
+```{python}
+plate = (
+    namespace.query_maker()
+    .resources()
+    .filter(name="Sample Plate 001")
+    .first()
+)
+
+print(plate.name)
+print(plate.properties.dimensions.values.rows.value)
+print(plate.properties.dimensions.values.columns.value)
+```
+
+The overridden value and the inherited default both come back.
+
+Stored values are wrapped rather than bare, which is why reading one ends in
+`.value`: the wrapper also carries the unit and the attribute definition.
+
+```{python}
+client.close()
+```
+
+```{python}
+#| include: false
+Path("quickstart.db").unlink(missing_ok=True)
+```
+
+## What you just built
+
+A namespace, a template, one resource, and a query that found it. That is the
+whole create-and-read loop.
+
+Missing so far is the part RECAP exists for: recording a *process* that
+consumes and produces resources, which is what turns isolated records into a
+provenance chain.
+
+---
+
+Next: [record your first provenance chain](05-your-first-provenance-record.qmd).
+
+Related how-to guides: [Query Resources](../how-to/query-resources.qmd),
+[Create a Resource Template](../how-to/resource-template.qmd),
+[Edit Resource Properties](../how-to/edit-resource-properties.qmd).

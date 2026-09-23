@@ -1,5 +1,6 @@
 ---
 title: Choose Efficient Loading and Writes
+description: Keep queries and writes efficient as the number of resources and runs grows.
 ---
 
 # Choose Efficient Loading and Writes

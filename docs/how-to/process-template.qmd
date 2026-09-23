@@ -1,5 +1,6 @@
 ---
 title: Create a Process Template
+description: Define a reusable workflow with ordered steps, typed parameters, and resource slots.
 ---
 
 # Create a Process Template
@@ -9,7 +10,7 @@ resources. Templates contain resource slots, ordered steps, role bindings, and
 parameters.
 
 ```python
-from recap.utils.general import Direction
+from recap import Direction
 
 with namespace.build_process_template("Collect Data", "1.0") as builder:
     builder.add_resource_slot("sample", "sample", Direction.input)
@@ -85,6 +86,42 @@ step.add_parameters({
 step.bind_slot("sample", "sample")
 step.bind_slot("output", "output")
 step.close_step()
+```
+
+Use `model_dump()` on a parameter model to inspect its current values, and
+`model_json_schema()` to inspect the validation schema generated from your
+declarations.
+
+## Bind slots to step roles
+
+`bind_slot(role, slot_name)` gives a step a local name for one of the
+template's slots. The role is an arbitrary string that you choose; it is not
+validated against any fixed vocabulary.
+
+```python
+step.bind_slot("source", "input_plate")
+step.bind_slot("destination", "result_file")
+```
+
+Roles are the stable interface between step logic and resources. A step can
+refer to "the source" without naming one particular plate, which is what lets
+the same template serve every run.
+
+## Inspect assignments on a run
+
+When a run is loaded with its resources, assigned values are available by slot
+name:
+
+```python
+run = (
+    namespace.query_maker()
+    .process_runs()
+    .include_steps(include_parameters=True)
+    .include_resources()
+    .first()
+)
+
+input_plate = run.assigned_resources["input_plate"].resource
 ```
 
 Process templates are versioned. Once a template becomes referenced, lifecycle

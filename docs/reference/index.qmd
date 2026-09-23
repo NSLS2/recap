@@ -1,0 +1,23 @@
+---
+title: Reference Guides
+description: Lookup material - glossary, server configuration fields, and CLI flags.
+---
+
+# Reference Guides
+
+Lookup material. These pages are for checking a fact, not for learning a
+workflow.
+
+- [Glossary](glossary.qmd) defines every RECAP term used across the
+  documentation.
+- [Server Configuration](server-configuration.qmd) lists every `ServerConfig`
+  field, its default, and how YAML, environment variables, and CLI flags
+  interact.
+- [`recap-server` CLI](recap-server-cli.qmd) lists the command-line flags for
+  the server entry point.
+
+For exact Python signatures, parameters, and return models, see the generated
+[API Reference](/reference/index.html).
+
+For task instructions, see the [How-To Guides](../how-to/index.qmd). For
+design rationale, see [Explanation](../explanation/index.qmd).

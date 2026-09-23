@@ -1,5 +1,6 @@
 ---
 title: Add Runtime Children
+description: Add child resources when an experiment discovers structure at runtime.
 ---
 
 # Add Runtime Children

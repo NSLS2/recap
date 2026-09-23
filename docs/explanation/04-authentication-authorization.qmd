@@ -1,5 +1,6 @@
 ---
 title: Authentication and Authorization
+description: Actors, scopes, namespace grants, and why visibility is applied before filtering.
 ---
 
 # Authentication and Authorization

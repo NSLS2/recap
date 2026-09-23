@@ -1,5 +1,6 @@
 ---
 title: Trace Provenance
+description: Trace a result back through the process runs and resources that produced it.
 ---
 
 # Trace Provenance

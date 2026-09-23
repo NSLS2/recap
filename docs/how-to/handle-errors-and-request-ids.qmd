@@ -1,5 +1,6 @@
 ---
 title: Handle Errors and Request IDs
+description: Interpret RECAP errors and use request IDs to correlate failures with server logs.
 ---
 
 # Handle Errors and Request IDs
@@ -45,7 +46,7 @@ from recap.exceptions import ExistingResourceError
 
 try:
     with namespace.build_resource(resource_id=plate.id) as builder:
-        builder.set_props({"dimensions": {"rows": -1}})
+        builder.resource.properties["dimensions"].values["rows"] = -1
 except ExistingResourceError as exc:
     print(f"Local mutation failed: {exc}")
 ```

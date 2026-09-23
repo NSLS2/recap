@@ -1,5 +1,6 @@
 ---
 title: Create a Resource Template
+description: Define the blueprint for a category of resources, with typed properties and defaults.
 ---
 
 # Create a Resource Template

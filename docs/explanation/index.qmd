@@ -1,14 +1,36 @@
 ---
 title: Explanation
+description: Why RECAP is designed the way it is.
 ---
 
 # Explanation
 
-Explanation pages describe how RECAP works and why its design matters. They
-cover namespaces, provenance, lifecycle and freezing, local/remote transport,
-authentication, authorization, and command processing.
+These pages cover why RECAP behaves as it does. Read them when a design
+decision seems surprising and you want the reasoning, or before committing to
+an approach that would be expensive to change.
 
-For exact signatures, accepted values, return models, and failure behavior, see
-the [Reference](/reference/index.html) section. Explanation describes why
-RECAP behaves as it does; Reference is lookup material rather than workflow
-instruction.
+They are not instructions. For steps, see the
+[How-To Guides](../how-to/index.qmd); for exact signatures, see the
+[API Reference](/reference/index.html).
+
+## In reading order
+
+1. **[How RECAP Organizes Data](01-data-organization.qmd)** — namespaces,
+   the definition/record split, resource hierarchies, and the provenance graph.
+   Start here.
+2. **[Query Model and Loading](02-query-model.qmd)** — why queries are
+   immutable, why relationships are unloaded by default, and how the identity
+   map keeps one entity as one object.
+3. **[Resource Loading](03-resource-loading.qmd)** — how resource trees are
+   hydrated without issuing one query per child.
+4. **[Authentication and Authorization](04-authentication-authorization.qmd)** —
+   actors, scopes, namespace grants, and why visibility is applied before
+   filtering.
+5. **[Audit and Error Semantics](05-audit-and-errors.qmd)** — what is recorded
+   about every mutation, and what is deliberately excluded.
+6. **[REST Query and Command Architecture](06-rest-query-architecture.qmd)** —
+   how remote clients reach the same behaviour as local ones over HTTP.
+
+If you are new to RECAP, read
+[Core Concepts](../getting-started/03-core-concepts.qmd) first. It covers the
+same model in far less depth and makes these pages much easier to follow.

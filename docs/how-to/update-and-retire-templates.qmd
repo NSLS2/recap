@@ -1,5 +1,6 @@
 ---
 title: Update and Retire Templates
+description: Version, update, and retire templates without invalidating existing records.
 ---
 
 # Update and Retire Templates

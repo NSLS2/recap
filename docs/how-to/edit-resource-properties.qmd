@@ -1,5 +1,6 @@
 ---
 title: Edit Resource Properties
+description: Read and change typed property values on an existing resource.
 ---
 
 # Edit Resource Properties

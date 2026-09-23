@@ -177,6 +177,12 @@ cython_debug/
 site/
 great-docs/
 
+# Quarto freeze cache for executable documentation cells
+_freeze/
+
+# SQLite databases created by executable documentation examples
+*.db
+
 # Git worktrees
 .worktrees/
 

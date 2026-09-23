@@ -1,5 +1,6 @@
 ---
 title: Query Resources
+description: Filter, order, paginate, and load resources and their properties.
 ---
 
 # Query Resources
@@ -8,7 +9,7 @@ Create namespace-scoped queries and compose immutable filters. Each operation
 returns a new query.
 
 ```python
-from recap.dsl.query import Field
+from recap import Field
 
 query = namespace.query_maker()
 resources = (

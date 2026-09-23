@@ -1,5 +1,6 @@
 ---
 title: Manage Resource Lifecycle
+description: Activate, archive, and copy resources, including how to edit a frozen one.
 ---
 
 # Manage Resource Lifecycle
@@ -36,7 +37,7 @@ Active and archived resources cannot be patched in place. Create mutable copy,
 then edit copy:
 
 ```python
-from recap.schemas.resource import ResourceCopyOptions
+from recap import ResourceCopyOptions
 
 copied = namespace.copy_resource(
     source_resource_id=plate.id,
@@ -44,9 +45,8 @@ copied = namespace.copy_resource(
 )
 
 with namespace.build_resource(resource_id=copied.id) as builder:
-    props = builder.get_props()
-    props.dimensions.rows = 16
-    builder.set_props(props.model_dump(by_alias=True))
+    builder.resource.properties["dimensions"].values["rows"] = 16
+    builder.finalize()
 ```
 
 Copy-on-write preserves frozen source and records lineage from copy to source.

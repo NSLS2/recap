@@ -1,5 +1,6 @@
 ---
 title: REST Query and Command Architecture
+description: How remote clients reach the same behaviour as local ones over authenticated HTTP.
 ---
 
 # REST Query and Command Architecture
@@ -82,6 +83,59 @@ transitions use:
 ```text
 POST /api/v1/lifecycle/{object_type}/{object_id}
 ```
+
+A copy request names its destination in the body rather than the URL, because a
+copy is a new aggregate in a different namespace rather than an edit of the
+source:
+
+```json
+{
+  "destination_namespace": "beamline/amx",
+  "name": "AMXRobot",
+  "changes": {"properties": {"tool": "new-gripper"}}
+}
+```
+
+## Request headers and concurrency
+
+Write routes carry two headers that make retries safe:
+
+| Operation | `Idempotency-Key` | `If-Match` |
+| --- | --- | --- |
+| Create, copy | Required | Not used |
+| Update, lifecycle transition | Required | Required |
+
+`Idempotency-Key` lets a client retry a request that may have already succeeded.
+The server fingerprints the method, route, namespace, source ID, and body; a
+repeat of the same key with the same fingerprint replays the stored response
+instead of mutating twice, while a repeat with a different fingerprint is a
+conflict. Replays re-check authorization before returning the saved result, so a
+key cannot be used to replay a response the actor is no longer allowed to see.
+
+`If-Match` carries the revision the client believes it is editing. Successful
+responses return the new revision as an `ETag`. A mismatch means another writer
+moved first, and the request fails rather than silently overwriting.
+
+## What one command does
+
+Each command handler owns exactly one database transaction:
+
+```text
+authorize -> fingerprint -> claim or replay idempotency key
+-> load and validate aggregate -> mutate -> increment revision
+-> record success audit -> commit
+```
+
+A failure rolls the mutation back and records the failure through a separate
+short transaction, so a rejected write leaves an audit trail without leaving
+partial data.
+
+## Namespace visibility
+
+Visibility depends on the aggregate. Process-run access requires the target and
+the request context to name the same namespace. Templates and resources can be
+visible through ancestor namespaces when authorization allows it. Archived
+entities are excluded from results unless a query asks for them explicitly.
 
 Builders do not issue incremental remote writes. They accumulate immutable draft
 payloads and submit one aggregate command at `save()`. This keeps local and REST

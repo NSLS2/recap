@@ -1,5 +1,6 @@
 ---
 title: Query Process Runs
+description: Find process runs and load their steps, parameters, and assigned resources.
 ---
 
 # Query Process Runs
@@ -13,7 +14,7 @@ Use `filter()` for query fields and `Field` predicates for portable structured
 comparisons.
 
 ```python
-from recap.dsl.query import Field
+from recap import Field
 
 runs = (
     namespace.query_maker()

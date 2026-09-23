@@ -1,0 +1,204 @@
+---
+title: Your First Provenance Record
+description: Follow one experiment from an empty database to a queryable provenance record.
+---
+
+# Your First Provenance Record
+
+The [Quick Start](04-quick-start.qmd) stored a resource. This page records a
+*process* that used one, which is what produces an actual provenance record.
+
+You will define two blueprints, create one sample, run one preparation step
+against it, and then query the result to prove the connection was stored.
+
+Each block builds on the last, so run them in order. One client stays open
+throughout and is closed at the end.
+
+```{python}
+#| include: false
+from pathlib import Path
+
+Path("provenance-tutorial.db").unlink(missing_ok=True)
+```
+
+## 1. Start a client and a namespace
+
+```{python}
+from recap import RecapClient, Direction
+
+client = RecapClient.from_sqlite("provenance-tutorial.db")
+
+client.create_namespace("tutorial")
+client.create_namespace(
+    "tutorial/sample-preparation",
+    metadata={"experiment": "sample preparation"},
+)
+
+namespace = client.namespace("tutorial/sample-preparation")
+print(namespace.namespace_path)
+```
+
+You now have a database file and a namespace to work in.
+
+## 2. Define what a sample looks like
+
+```{python}
+with namespace.build_resource_template(
+    name="Tutorial Sample",
+    type_names=["sample"],
+) as template:
+    template.add_properties({
+        "identity": [
+            {"name": "sample_id", "type": "str", "default": ""},
+        ]
+    })
+```
+
+This is a definition, not a sample. It says every tutorial sample carries a
+string `sample_id`. No actual sample exists yet.
+
+## 3. Create one real sample
+
+```{python}
+with namespace.build_resource(
+    name="Sample A",
+    template_name="Tutorial Sample",
+) as builder:
+    builder.resource.properties["identity"].values["sample_id"] = "A-001"
+    builder.finalize()
+```
+
+Now fetch the saved model. You need the stored version, not the builder's
+draft, because the process run in step 5 has to point at the persisted record.
+
+```{python}
+sample = (
+    namespace.query_maker()
+    .resources()
+    .filter(name="Sample A")
+    .first()
+)
+
+print(sample.name, sample.status)
+print(sample.properties.identity.values.sample_id.value)
+```
+
+::: {.callout-note}
+## `finalize()` is what makes a record visible
+
+Without `builder.finalize()` the resource stays in a mutable draft state and
+the query above returns `None`. Queries return active records only, so
+incomplete work never leaks into results.
+:::
+
+## 4. Define the workflow
+
+```{python}
+with namespace.build_process_template("Tutorial Preparation", "1.0") as template:
+    template.add_resource_slot("sample", "sample", Direction.input)
+    (
+        template.add_step("Prepare")
+        .add_parameters({
+            "conditions": [
+                {"name": "temperature", "type": "float", "default": 20.0, "unit": "degC"},
+                {"name": "duration", "type": "float", "default": 10.0, "unit": "min"},
+            ]
+        })
+        .bind_slot("source", "sample")
+        .close_step()
+    )
+```
+
+Three things were declared here.
+
+`add_resource_slot("sample", "sample", Direction.input)` declares a slot named
+`sample` that accepts resources of type `sample` and is consumed rather than
+produced. The repeated word is coincidence: the first is the slot's name, the
+second is the resource type it accepts.
+
+`add_parameters(...)` declares the settings the step accepts, with defaults and
+units.
+
+`bind_slot("source", "sample")` gives the step a local name for the slot. The
+role `source` is an arbitrary label you choose, not a reserved keyword; it lets
+step logic refer to "the source" without caring which slot is wired to it.
+
+Still no execution has happened. This is a versioned blueprint.
+
+## 5. Record a run
+
+```{python}
+with namespace.build_process_run(
+    name="Prepare Sample A",
+    description="Tutorial preparation run",
+    template_name="Tutorial Preparation",
+    version="1.0",
+) as run:
+    run.assign_resource("sample", sample)
+
+    params = run.get_params("Prepare")
+    params.conditions.temperature = 22.5
+    params.conditions.duration = 12.0
+    run.set_params(params)
+
+    run.finalize()
+```
+
+This is the provenance record. `assign_resource` fills the template's `sample`
+slot with the real `Sample A`, and the parameter values replace the defaults
+for this execution only. The template still says 20.0 degrees; this run says
+22.5.
+
+`get_params()` returns a typed object built from the template, so
+`params.conditions.temperature` is checked against the declared `float` type
+rather than being a loose dictionary key.
+
+## 6. Query the provenance back
+
+```{python}
+result = (
+    namespace.query_maker()
+    .process_runs()
+    .filter(name="Prepare Sample A")
+    .include_steps(include_parameters=True)
+    .include_resources()
+    .first()
+)
+
+print("run:      ", result.name)
+print("used:     ", result.assigned_resources["sample"].resource.name)
+print("temp:     ", result.steps["Prepare"].parameters.conditions.temperature.value)
+print("duration: ", result.steps["Prepare"].parameters.conditions.duration.value)
+```
+
+The two `include_*` calls matter. Queries return records with their
+relationships unloaded by default, so asking for a run does not silently drag
+in every related row. `include_steps(include_parameters=True)` and
+`include_resources()` say explicitly which relationships you want.
+
+```{python}
+client.close()
+```
+
+```{python}
+#| include: false
+Path("provenance-tutorial.db").unlink(missing_ok=True)
+```
+
+## What you built
+
+Reading the output backwards is the point of the whole exercise: the run
+`Prepare Sample A` used the resource `Sample A` and held it at 22.5 degrees for
+12 minutes. That association is now a stored fact rather than a filename
+convention.
+
+Chain runs together, by assigning one run's output resource as the next run's
+input, and this becomes a full provenance graph.
+
+---
+
+Next: [where to go from here](06-next-steps.qmd).
+
+Related how-to guides: [Build Process Runs](../how-to/build-process-runs.qmd),
+[Create a Process Template](../how-to/process-template.qmd),
+[Trace Provenance](../how-to/provenance-queries.qmd).

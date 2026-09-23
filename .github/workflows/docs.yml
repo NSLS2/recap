@@ -23,13 +23,38 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
-          python -m pip install great-docs
+          python -m pip install great-docs ipykernel
 
       - name: Set up Quarto
         uses: quarto-dev/quarto-actions/setup@v2
 
       - name: Build docs
         run: great-docs build
+
+      # Self-referencing URLs are excluded because pages added in this commit
+      # are not deployed yet and would 404 until after publish. They are
+      # validated against the local build in the next step instead.
+      - name: Check documentation links
+        run: great-docs check-links --ignore "recap\.test|nsls2\.github\.io"
+
+      - name: Verify README documentation links resolve to built pages
+        run: |
+          set -euo pipefail
+          site=great-docs/_site
+          status=0
+          urls=$(grep -o 'https://nsls2.github.io/recap/[^)>]*' README.md \
+                 | sed 's|https://nsls2.github.io/recap/||' \
+                 | sed 's|/$|/index.html|' | sort -u)
+          for u in $urls; do
+            path="$site/${u:-index.html}"
+            if [ -f "$path" ]; then
+              echo "ok   $u"
+            else
+              echo "MISS $u"
+              status=1
+            fi
+          done
+          exit $status
 
       - name: Save docs artifact
         uses: actions/upload-artifact@v7

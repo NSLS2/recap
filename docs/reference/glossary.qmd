@@ -1,0 +1,177 @@
+---
+title: Glossary
+description: Definitions of every RECAP term used across the documentation.
+---
+
+# Glossary
+
+## Core model
+
+**Namespace**
+: A hierarchical path such as `beamline/amx` that owns templates, resources,
+and process runs. Namespaces scope queries and writes, and on a server they are
+the unit of authorization. The same name may exist in two different namespaces
+without conflict. See [How RECAP Organizes Data](../explanation/01-data-organization.qmd).
+
+**Resource**
+: One trackable physical, digital, or logical entity: a sample, a plate, a
+detector file, an instrument, a derived dataset. Created from a resource
+template.
+
+**ResourceTemplate**
+: The blueprint for a category of resources. Declares property groups, typed
+attributes, defaults, and optional child templates.
+
+**ProcessTemplate**
+: The versioned blueprint for a workflow. Declares ordered steps, parameters,
+resource slots, and role bindings.
+
+**ProcessRun**
+: One concrete execution of a process template, recording which resources
+filled which slots and which parameter values were used.
+
+**Step**
+: One ordered unit of work within a process template or run. Carries parameter
+groups and slot bindings.
+
+**Slot**
+: A named placeholder in a process template for a resource, with a direction
+(input or output) and an accepted resource type. A run assigns a real resource
+to each slot. Slots are what make a workflow reusable across many resources.
+
+**Role binding**
+: A local alias a step uses to refer to one of the template's slots, created
+with `bind_slot(role, slot_name)`. The role string is chosen by you and is not
+validated against any fixed vocabulary.
+
+**Direction**
+: Whether a slot is consumed (`Direction.input`) or produced
+(`Direction.output`) by the process. Direction is what makes the provenance
+graph directed.
+
+**Parameter**
+: A typed setting attached to a step, declared with a type, a default, and an
+optional unit. A run records the values actually used.
+
+**Property**
+: A typed value attached to a resource, declared by its template. Properties
+are organized into named groups.
+
+**Property group / attribute group**
+: A named collection of related typed attributes, for example a `dimensions`
+group holding `rows` and `columns`.
+
+**Provenance graph**
+: The directed graph formed by resources and process runs, in which a run's
+output resources become a later run's inputs. Tracing a result to its origin
+means walking this graph backwards.
+
+## Lifecycle and consistency
+
+**Lifecycle status**
+: The state of a stored entity: `MUTABLE`, `ACTIVE`, or `ARCHIVED`. Transitions
+are forward-only.
+
+**Mutable**
+: The initial draft state. Mutable entities are excluded from query results, so
+half-built records do not appear. `finalize()` moves an entity to active.
+
+**Active**
+: The normal visible state. Queries return active entities by default.
+
+**Archived**
+: Retired but retained. Excluded from results unless a query calls
+`include_archived()`.
+
+**Frozen**
+: A template or resource that has acquired a stable reference and can no longer
+be edited in place. Changes are made by copying instead. See
+[Manage Resource Lifecycle](../how-to/manage-resource-lifecycle.qmd).
+
+**Copy-on-write**
+: Deriving a new resource from a frozen one rather than editing it, preserving
+the link to the source through `copied_from_id`.
+
+**Revision**
+: A per-entity counter incremented on every successful write, used for
+optimistic concurrency. Sent over HTTP as an `ETag` and checked with `If-Match`.
+
+**Idempotency key**
+: A client-supplied header that lets a write be retried safely. A repeat of the
+same key with the same request fingerprint replays the stored response instead
+of applying the change twice.
+
+**Aggregate**
+: The unit a builder saves and a command writes in one transaction: a root
+entity together with its nested children, such as a resource with its
+properties.
+
+## Client and queries
+
+**RecapClient**
+: The entry point for all RECAP work, created with `from_sqlite()` for a local
+database or `from_url()` for a server. `client.namespace(path)` returns a view
+of the client scoped to one namespace.
+
+**Builder**
+: A context manager that collects changes, validates them together, and saves
+once on clean exit. A builder body that raises writes nothing.
+
+**QueryDSL**
+: The query interface returned by `query_maker()`. Queries are immutable, so
+each call returns a new query rather than mutating the existing one. The same
+query behaves identically against a local database and a remote server.
+
+**Load / hydration**
+: Whether a query result's related records are fetched. Results are unloaded by
+default; `include(...)` requests specific relationships and `load="eager"`
+requests the configured set. See
+[Query Model and Loading](../explanation/02-query-model.qmd).
+
+**Identity map**
+: The client-side cache keyed by entity type and UUID, ensuring the same entity
+fetched through two different queries is one object in memory, with fuller
+loads upgrading the existing object.
+
+**Shape**
+: A deprecated query option. `shape="full"` is the supported value and returns
+canonical models; `shape="ref"` normalizes to it. Use `load` to control
+relationship hydration instead.
+
+## Server and security
+
+**Actor**
+: The authenticated identity behind a request, carrying an actor ID, provider
+identities, credential scopes, and optional namespace restrictions.
+
+**Scope**
+: A separate read or write permission for one entity family. Write permission
+does not imply read permission.
+
+**Entitlement snapshot**
+: The compiled, immutable authorization data used in multi-user mode, mapping
+identities to groups, roles, and scopes at namespace paths. Evaluation fails
+closed when the snapshot is missing, corrupt, or stale.
+
+**Single-user mode**
+: The currently runnable server deployment, authenticating with one shared API
+key.
+
+**Multi-user mode**
+: Snapshot-based per-identity authorization. `ServerConfig` validates it, but
+the `recap-server` startup path does not yet wire it up. See
+[Server Configuration](server-configuration.qmd).
+
+**Command**
+: A write operation. Commands own authorization, one database transaction,
+revision checks, idempotency, and audit. Local and remote writes use the same
+command shapes.
+
+**Request ID**
+: A stable identifier attached to each request, safe to quote in an error
+report because it exposes no internal detail.
+
+**Audit record**
+: A record of a mutation capturing request ID, actor, target, outcome, and a
+safe reason code. Audit output never contains credentials, property values, or
+parameter values.

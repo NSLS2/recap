@@ -1,5 +1,6 @@
 ---
 title: Authenticate a Remote Client
+description: Authenticate a remote client with an API key and inspect effective permissions.
 ---
 
 # Authenticate a Remote Client
@@ -8,7 +9,7 @@ Create a remote client with the API key configured for the current
 single-user server:
 
 ```python
-from recap.client import RecapClient
+from recap import RecapClient
 
 client = RecapClient.from_url(
     "https://recap.example.org",
@@ -53,5 +54,5 @@ Missing or malformed credentials fail before query or command execution. A
 valid credential with insufficient scope is authenticated but denied by the
 authorization policy.
 
-See [Authentication and Authorization](../explanation/authentication-authorization.qmd)
+See [Authentication and Authorization](../explanation/04-authentication-authorization.qmd)
 for namespace grants, scope evaluation, and cross-namespace rules.

@@ -1,5 +1,6 @@
 ---
 title: Choose Query Shape and Loading
+description: Decide between targeted includes, eager loading, and no relationship loading.
 ---
 
 # Choose Query Shape and Loading

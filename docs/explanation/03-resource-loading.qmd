@@ -1,5 +1,6 @@
 ---
 title: Resource Models and Loading
+description: How resource trees are hydrated with bounded SQL rather than one query per child.
 ---
 
 # Resource Models and Loading

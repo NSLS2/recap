@@ -1,0 +1,108 @@
+---
+title: What Is RECAP?
+description: The problem RECAP solves, what it records, and what it deliberately leaves to other tools.
+---
+
+# What Is RECAP?
+
+RECAP (Reproducible Experiment Capture and Provenance) is a Python library that
+records what happened during an experiment: which samples existed, which
+workflow ran, which settings that run used, and which results came out.
+
+It stores those facts in a database you can query later.
+
+## The problem
+
+A high-throughput experiment produces far more than data files. It produces
+samples, plates, detector outputs, processing results, instrument
+configurations, and workflow settings, plus the relationships between all of
+them.
+
+Those relationships are usually kept in filenames, spreadsheets, and lab
+notebooks. That works until someone asks a question six months later:
+
+- Which sample produced this result?
+- What temperature did we use for that batch?
+- If this input file was wrong, which published results are affected?
+
+Answering those questions by reading filenames does not scale, and the answer
+is often unrecoverable.
+
+## What RECAP does
+
+RECAP turns those relationships into structured records. You describe the
+shape of your experiment once, then record each run against that description.
+
+```text
+Sample
+  └── Sample Preparation
+        └── Prepared Sample
+              └── Data Collection
+                    └── Raw Data File
+                          └── Data Processing
+                                └── Processed Result
+```
+
+Because every link in that chain is stored, you can walk it in either
+direction: forward from a sample to everything derived from it, or backward
+from a result to the exact inputs and settings that produced it. That chain is
+called a **provenance graph**, and building it is RECAP's whole purpose.
+
+## A first taste
+
+This is a complete, working program. You are not expected to follow every line
+yet; the point is to see the shape of the thing.
+
+```python
+from recap import RecapClient
+
+with RecapClient.from_sqlite("experiment.db") as client:
+    client.create_namespace("beamline")
+    client.create_namespace("beamline/amx")
+    namespace = client.namespace("beamline/amx")
+
+    # Describe what a sample plate looks like, once.
+    with namespace.build_resource_template(
+        name="Sample Plate",
+        type_names=["container", "plate"],
+    ) as template:
+        template.add_properties({
+            "dimensions": [
+                {"name": "rows", "type": "int", "default": 8},
+                {"name": "columns", "type": "int", "default": 12},
+            ]
+        })
+
+    # Record one actual plate.
+    with namespace.build_resource(
+        name="Plate 001",
+        template_name="Sample Plate",
+    ) as builder:
+        builder.finalize()
+```
+
+The pattern that repeats everywhere in RECAP is visible here: **describe a
+shape once, then create many records from it.** A `ResourceTemplate` describes
+what a plate is; a `Resource` is one particular plate.
+
+## What RECAP does not do
+
+RECAP records experimental data and provenance. It is deliberately not:
+
+- an electronic lab notebook,
+- a laboratory inventory management system,
+- an instrument-control system,
+- a scientific analysis or computation engine.
+
+You can build any of those on top of RECAP, and RECAP tries to stay out of
+their way.
+
+## Where it runs
+
+RECAP works against a local SQLite file for single-user work, or against a
+shared server over authenticated HTTP. The code you write is the same in both
+cases; only the line that creates the client changes.
+
+---
+
+Next: [install RECAP](02-installation.qmd).

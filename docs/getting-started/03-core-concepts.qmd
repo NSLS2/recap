@@ -1,0 +1,96 @@
+---
+title: Core Concepts
+description: The five things RECAP stores, and the one distinction that explains all of them.
+---
+
+# Core Concepts
+
+RECAP has five core ideas. Learn these and the rest of the documentation reads
+easily; skip them and the API will look arbitrary.
+
+## The one distinction that matters
+
+RECAP separates **definitions** from **records**.
+
+A definition describes a shape: what a sample plate is, what steps a
+measurement involves. You write it once. A record is one real thing that
+happened: this particular plate, that particular measurement on Tuesday.
+
+Every concept below is one or the other.
+
+| Definition (written once) | Record (one per real event) |
+| --- | --- |
+| `ResourceTemplate` | `Resource` |
+| `ProcessTemplate` | `ProcessRun` |
+
+If you have used classes and instances, the relationship is familiar. The
+difference is that RECAP stores both in the database, so you can ask questions
+about the definitions as well as the records.
+
+## The five concepts
+
+**Namespace** — a folder-like path that owns everything else, such as
+`beamline/amx`. Namespaces scope your queries and, on a server, decide who can
+see what. Two different namespaces can both contain a template called
+`Sample Plate` without any conflict.
+
+**ResourceTemplate** — the blueprint for a kind of thing. It declares the
+properties that thing has, their types, and their default values. It can also
+declare child templates, so a plate template can contain a well template.
+
+**Resource** — one real trackable thing: a sample, a plate, a detector file, an
+instrument, an intermediate dataset. Anything physical, digital, or logical
+that you want to refer to later. Every resource is created from a
+`ResourceTemplate` and inherits its shape.
+
+**ProcessTemplate** — the blueprint for a workflow. It declares ordered
+**steps**, the **parameters** each step accepts, and **slots** naming the
+resources the workflow consumes and produces. Templates are versioned, so
+changing a workflow does not rewrite the history of runs that used the old one.
+
+**ProcessRun** — one real execution of a `ProcessTemplate`. It records which
+actual resources filled each slot and which actual values each parameter took.
+
+![A process run connects resources through ordered steps](../assets/process_run.png)
+
+## Slots are the joint
+
+A slot is the part worth pausing on, because it is what makes a workflow
+reusable.
+
+A `ProcessTemplate` never names a specific plate. Instead it declares a slot,
+for example an input slot named `sample`. Each `ProcessRun` then assigns a real
+resource to that slot. One template describing "prepare a sample" can therefore
+serve ten thousand runs, each pointing at a different sample.
+
+Each slot has a direction, either input or output, which is what lets RECAP
+tell consumption from production, and so build the provenance chain.
+
+## How this becomes provenance
+
+Once runs are assigning real resources to slots, the graph builds itself. A run
+records the resources it consumed and produced, so the outputs of one run are
+the inputs of the next:
+
+```text
+Sample A ──(input)──> [Prepare Sample] ──(output)──> Prepared Sample A
+                                                          │
+                                                     (input)
+                                                          ↓
+                                                  [Data Collection]
+                                                          │
+                                                     (output)
+                                                          ↓
+                                                     Raw Data File
+```
+
+Tracing a result back to its origin means walking that graph backwards. That is
+what RECAP is for, and it is why the input/output direction on every slot
+matters.
+
+---
+
+Next: [create and store your first record](04-quick-start.qmd).
+
+For the deeper treatment of namespaces, hierarchies, and the graph model, see
+[How RECAP Organizes Data](../explanation/01-data-organization.qmd).

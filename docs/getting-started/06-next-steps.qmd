@@ -1,0 +1,62 @@
+---
+title: Next Steps
+description: Where to go after the tutorial, depending on what you need next.
+---
+
+# Next Steps
+
+You have created resources, recorded a process run, and queried the result. The
+rest of the documentation is organized by what you are trying to do.
+
+## Pick your next move
+
+| If you want to... | Go to |
+| --- | --- |
+| Model your own experiment's resources | [Create a Resource Template](../how-to/resource-template.qmd) |
+| Model a multi-step workflow | [Create a Process Template](../how-to/process-template.qmd) |
+| Find and filter your records | [Query Resources](../how-to/query-resources.qmd) |
+| Trace a result back to its inputs | [Trace Provenance](../how-to/provenance-queries.qmd) |
+| Share a database with colleagues | [Set Up a RECAP Server](../how-to/setup-recap-server.qmd) |
+| Understand why RECAP is designed this way | [Explanation](../explanation/index.qmd) |
+| Look up an exact signature | [API Reference](/reference/index.html) |
+| Look up a term you have seen but not understood | [Glossary](../reference/glossary.qmd) |
+
+## How the documentation is organized
+
+The four sections answer different kinds of question, so it is worth knowing
+which one you are in.
+
+**Getting Started** (this section) teaches through a worked example. Read it in
+order, once.
+
+**[How-To Guides](../how-to/index.qmd)** are task recipes for people who
+already know the concepts. Each answers one "how do I...?" question and assumes
+you do not want a tutorial.
+
+**[Explanation](../explanation/index.qmd)** covers why RECAP works the way it
+does: the data model, the query and loading model, authentication and
+authorization, and the REST architecture. Read it when a design decision seems
+surprising and you want the reasoning.
+
+**[Reference Guides](../reference/index.qmd)** and the generated
+[API Reference](/reference/index.html) are lookup material: the glossary,
+server configuration fields, CLI flags, and exact signatures. Nobody reads
+these front to back.
+
+## Going remote
+
+The code you wrote in this tutorial works unchanged against a shared server.
+Only the client construction changes:
+
+```python
+# Local
+client = RecapClient.from_sqlite("experiment.db")
+
+# Remote
+client = RecapClient.from_url("https://recap.example.org", api_key="...")
+```
+
+Everything after that line, namespaces, builders, and queries, behaves the
+same. See [Set Up a RECAP Server](../how-to/setup-recap-server.qmd) to run one,
+or [Authenticate a Remote Client](../how-to/use-remote-authentication.qmd) to
+connect to one that already exists.

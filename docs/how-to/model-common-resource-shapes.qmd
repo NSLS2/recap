@@ -1,0 +1,76 @@
+---
+title: Model Common Resource Shapes
+description: Worked resource template examples for files, instruments, and containers.
+---
+
+# Model Common Resource Shapes
+
+Use these as starting points when deciding how to describe your own
+experimental objects. A resource can represent anything trackable: a physical
+object, a digital file, an instrument, or a person.
+
+For the mechanics of building templates, see
+[Create a Resource Template](resource-template.qmd).
+
+## A data file
+
+Files are usually described by two independent concerns: where the bytes are
+and how they were produced. Separate property groups keep those apart, so a
+checksum check does not have to know about beamline settings.
+
+```python
+with namespace.build_resource_template(
+    name="NeXus File",
+    type_names=["file", "hdf5", "nexus"],
+) as template:
+    template.add_properties({
+        "file_metadata": [
+            {"name": "path", "type": "str", "default": ""},
+            {"name": "sha256", "type": "str", "default": ""},
+        ],
+        "scan": [
+            {"name": "beamline", "type": "str", "default": ""},
+            {"name": "exposure_time", "type": "float", "default": 0.1, "unit": "s"},
+        ],
+    })
+```
+
+## An instrument
+
+Instruments are long-lived and mostly static. Give them the specifications a
+workflow might need to check, and declare units so the numbers are unambiguous.
+
+```python
+with namespace.build_resource_template(
+    name="UR5 Robot",
+    type_names=["instrument", "robot", "ur5"],
+) as template:
+    template.add_properties({
+        "specs": [
+            {"name": "reach_mm", "type": "float", "default": 850.0, "unit": "mm"},
+            {"name": "payload_kg", "type": "float", "default": 5.0, "unit": "kg"},
+        ]
+    })
+```
+
+## Choosing type names
+
+The `type_names` list is what process template slots match against, so it
+deserves some thought.
+
+Order them from general to specific, as in `["instrument", "robot", "ur5"]`. A
+slot that requires `instrument` then accepts this robot alongside every other
+instrument, while a slot that requires `ur5` accepts only this model. That lets
+one workflow be written against `instrument` and another against a specific
+model, without either having to name the template.
+
+Keep type names stable. Renaming one breaks every slot that requires it, in the
+same way renaming a class breaks its callers.
+
+## Containers and their contents
+
+When one resource physically contains others, such as a plate holding wells,
+declare that as a parent-child template relationship rather than as a property.
+Child resources get their own identity and can be assigned to process runs
+independently. See
+[Nest Resource Templates](nested-resource-templates.qmd).

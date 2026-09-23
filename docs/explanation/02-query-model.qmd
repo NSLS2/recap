@@ -1,5 +1,6 @@
 ---
 title: Query Model and Loading
+description: Why queries are immutable, why relationships are unloaded by default, and how entity identity is canonicalized.
 ---
 
 # Query Model and Loading

@@ -1,5 +1,6 @@
 ---
 title: Use Revisions and Idempotency
+description: Retry writes safely and avoid overwriting concurrent changes.
 ---
 
 # Use Revisions and Idempotency

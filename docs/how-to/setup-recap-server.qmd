@@ -1,5 +1,6 @@
 ---
 title: Set Up a RECAP Server
+description: Deploy and configure a RECAP server, then point a client at it.
 ---
 
 # Set Up a RECAP Server
@@ -86,7 +87,7 @@ your organization's standards.
 Connect to the reachable base URL from Python:
 
 ```python
-from recap.client import RecapClient
+from recap import RecapClient
 
 client = RecapClient.from_url(
     "http://localhost:8000",
@@ -95,7 +96,7 @@ client = RecapClient.from_url(
 namespace = client.namespace("beamline/amx")
 ```
 
-Once connected, follow [Quick Start: Create and Store Data Locally](quick-start-create-and-store-data-locally.qmd).
+Once connected, follow the [Quick Start](../getting-started/04-quick-start.qmd).
 Use `RecapClient.from_url()` in place of `RecapClient.from_sqlite()`; the
 namespace, builders, queries, and provenance workflow are the same.
 
@@ -133,9 +134,9 @@ print(permissions.effective_scopes)
 print(permissions.matched_namespace_paths)
 ```
 
-See [Authentication and Authorization](../explanation/authentication-authorization.qmd)
+See [Authentication and Authorization](../explanation/04-authentication-authorization.qmd)
 for policy evaluation details and
-[REST Query and Command Architecture](../explanation/rest-query-architecture.qmd)
+[REST Query and Command Architecture](../explanation/06-rest-query-architecture.qmd)
 for transport behavior.
 
 ### Multi-user authorization status

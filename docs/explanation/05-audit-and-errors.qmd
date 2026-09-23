@@ -1,5 +1,6 @@
 ---
 title: Audit and Error Semantics
+description: What RECAP records about every mutation, and what it deliberately excludes.
 ---
 
 # Audit and Error Semantics

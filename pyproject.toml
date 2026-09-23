@@ -159,6 +159,7 @@ lint = { cmd = ["pre-commit", "run", "--all-files"] }
 [tool.pixi.feature.docs.dependencies]
 python = "3.11.*"
 quarto = "*"
+ipykernel = "*"
 
 [tool.pixi.feature.docs.pypi-dependencies]
 great-docs = "*"
@@ -166,7 +167,7 @@ great-docs = "*"
 [tool.pixi.feature.docs.tasks]
 docs-build = { cmd = ["great-docs", "build"] }
 docs-preview = { cmd = ["great-docs", "preview"] }
-docs-check-links = { cmd = ["great-docs", "check-links", "--ignore", "recap\\.test"] }
+docs-check-links = 'great-docs check-links --ignore "recap\.test|nsls2\.github\.io"'
 
 [tool.pixi.feature.test.tasks]
 test = { cmd = ["pytest", "-ra", "-m", "not performance", "recap/tests"] }

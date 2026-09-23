@@ -1,5 +1,6 @@
 ---
 title: Query Templates and Namespaces
+description: Query resource templates, process templates, and namespace metadata.
 ---
 
 # Query Templates and Namespaces

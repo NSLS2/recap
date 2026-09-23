@@ -1,5 +1,6 @@
 ---
 title: Nest Resource Templates
+description: Define resource templates that contain child templates, such as a plate holding wells.
 ---
 
 # Nest Resource Templates

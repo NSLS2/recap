@@ -1,5 +1,6 @@
 ---
 title: How RECAP Organizes Data
+description: Namespaces, the definition and record split, resource hierarchies, and the provenance graph.
 ---
 
 # How RECAP Organizes Data

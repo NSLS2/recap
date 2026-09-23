@@ -1,0 +1,62 @@
+---
+title: Installation
+description: Install RECAP, choose whether you need server support, and confirm the install works.
+---
+
+# Installation
+
+## Requirements
+
+RECAP requires Python 3.10 or newer. Nothing else is needed for local use: the
+default install uses SQLite, which ships with Python.
+
+## Install
+
+```bash
+pip install pyrecap
+```
+
+That is everything you need to work with a local database, which is what the
+rest of this guide uses.
+
+## Server support
+
+You only need this if you intend to *run* a RECAP server. Connecting to someone
+else's RECAP server needs nothing beyond the base install.
+
+```bash
+pip install "pyrecap[server]"
+```
+
+The `server` extra adds FastAPI, Uvicorn, PostgreSQL support, and the
+configuration dependencies used by the `recap-server` command.
+
+## Verify
+
+```bash
+python -c "import recap; print(recap.__version__)"
+```
+
+If that prints a version number instead of a traceback, you are ready.
+
+## Check it can write a database
+
+This creates a file called `check.db` in the current directory and then removes
+it. It confirms that RECAP can create and migrate a database on your system.
+
+```bash
+python -c "
+from recap import RecapClient
+with RecapClient.from_sqlite('check.db') as client:
+    client.create_namespace('check')
+    print('ok')
+"
+rm check.db
+```
+
+`from_sqlite()` creates the database file if it does not exist and applies any
+pending schema migrations if it does.
+
+---
+
+Next: [the five ideas RECAP is built from](03-core-concepts.qmd).

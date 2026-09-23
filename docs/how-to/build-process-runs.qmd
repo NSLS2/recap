@@ -1,5 +1,6 @@
 ---
 title: Build Process Runs
+description: Instantiate a process template, assign resources to slots, and record parameter values.
 ---
 
 # Build Process Runs
@@ -10,7 +11,7 @@ record step parameters for one execution.
 ## Define slots and steps
 
 ```python
-from recap.utils.general import Direction
+from recap import Direction
 
 with namespace.build_process_template("Measure Sample", "1.0") as template:
     template.add_resource_slot("sample", "sample", Direction.input)

@@ -62,13 +62,12 @@ authors:
 
 sections:
   - title: Getting Started
-    dir: docs/getting_started
+    dir: docs/getting-started
   - title: How-To Guides
     dir: docs/how-to
     sidebar_groups:
-      - section: Quick Start
+      - section: Set Up Access
         contents:
-          - quick-start-create-and-store-data-locally.qmd
           - setup-recap-server.qmd
           - use-remote-authentication.qmd
       - section: Create Templates
@@ -77,13 +76,13 @@ sections:
           - process-template.qmd
           - nested-resource-templates.qmd
           - update-and-retire-templates.qmd
+          - model-common-resource-shapes.qmd
       - section: Create and Edit Instances
         contents:
           - build-process-runs.qmd
           - add-runtime-children.qmd
           - edit-resource-properties.qmd
           - manage-resource-lifecycle.qmd
-          - handle-errors-and-request-ids.qmd
           - use-revisions-and-idempotency.qmd
       - section: Query Experiments
         contents:
@@ -92,11 +91,15 @@ sections:
           - query-templates-and-namespaces.qmd
           - choose-query-shape-and-loading.qmd
           - provenance-queries.qmd
+      - section: Operate and Troubleshoot
+        contents:
+          - handle-errors-and-request-ids.qmd
           - performance.qmd
   - title: Explanation
     dir: docs/explanation
-  - title: Tutorials
-    dir: docs/tutorials
+  - title: Reference Guides
+    dir: docs/reference
+    navbar_after: Reference
 
 custom_pages:
   - dir: docs/assets
@@ -107,8 +110,8 @@ navbar_order:
   - Getting Started
   - How-To Guides
   - Explanation
-  - Tutorials
   - Reference
+  - Reference Guides
   - Changelog
 
 # Funding / Copyright Holder
