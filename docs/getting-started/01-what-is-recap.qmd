@@ -11,6 +11,14 @@ workflow ran, which settings that run used, and which results came out.
 
 It stores those facts in a database you can query later.
 
+::: {.callout-warning}
+## RECAP is beta software
+
+The public API and the stored data format may change without warning between
+releases, and such changes may not be backward compatible. Pin an exact version
+for anything you depend on, and expect to migrate when upgrading.
+:::
+
 ## The problem
 
 A high-throughput experiment produces far more than data files. It produces

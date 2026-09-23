@@ -80,7 +80,7 @@ sample = (
 )
 
 print(sample.name, sample.status)
-print(sample.properties.identity.values.sample_id.value)
+print(sample.properties.identity.sample_id.value)
 ```
 
 ::: {.callout-note}

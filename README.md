@@ -8,6 +8,12 @@ experiments.
 
 **Documentation: <https://nsls2.github.io/recap/>**
 
+> [!WARNING]
+> **RECAP is beta software.** The public API and the stored data format may
+> change without warning between releases, and such changes may not be
+> backward compatible. Pin an exact version for anything you depend on, and
+> expect to migrate when upgrading.
+
 ```bash
 pip install pyrecap
 ```

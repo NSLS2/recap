@@ -88,14 +88,32 @@ plate = (
 )
 
 print(plate.name)
-print(plate.properties.dimensions.values.rows.value)
-print(plate.properties.dimensions.values.columns.value)
+print(plate.properties.dimensions.rows.value)
+print(plate.properties.dimensions.columns.value)
 ```
 
 The overridden value and the inherited default both come back.
 
-Stored values are wrapped rather than bare, which is why reading one ends in
-`.value`: the wrapper also carries the unit and the attribute definition.
+Note the trailing `.value`. Each stored attribute is a small wrapper that also
+carries the unit, so `plate.properties.dimensions.rows` is the wrapper and
+`.value` is the number inside it:
+
+```{python}
+rows = plate.properties.dimensions.rows
+
+print("printed:       ", rows)
+print("rows == 16:    ", rows == 16)
+print("rows.value:    ", rows.value)
+print("rows.value==16:", rows.value == 16)
+```
+
+The wrapper prints like its value, so a bare `print()` can look correct while a
+comparison silently fails. Reach for `.value` whenever you want the number or
+string itself.
+
+Step parameters work exactly the same way. For every supported read and write
+form, see
+[Property and Parameter Access](../reference/property-and-parameter-access.qmd).
 
 ```{python}
 client.close()

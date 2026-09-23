@@ -51,11 +51,19 @@ graph directed.
 
 **Parameter**
 : A typed setting attached to a step, declared with a type, a default, and an
-optional unit. A run records the values actually used.
+optional unit. A run records the values actually used. See
+[Property and Parameter Access](property-and-parameter-access.qmd).
 
 **Property**
 : A typed value attached to a resource, declared by its template. Properties
-are organized into named groups.
+are organized into named groups. See
+[Property and Parameter Access](property-and-parameter-access.qmd).
+
+**Attribute wrapper**
+: The object returned when you read a property or parameter without a trailing
+`.value`. It holds the value alongside its `unit` and template definition. It
+renders as its value when printed but does not compare equal to it, so reading
+a bare number or string always ends in `.value`.
 
 **Property group / attribute group**
 : A named collection of related typed attributes, for example a `dimensions`

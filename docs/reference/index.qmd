@@ -10,6 +10,8 @@ workflow.
 
 - [Glossary](glossary.qmd) defines every RECAP term used across the
   documentation.
+- [Property and Parameter Access](property-and-parameter-access.qmd) lists every
+  supported way to read and write resource properties and step parameters.
 - [Server Configuration](server-configuration.qmd) lists every `ServerConfig`
   field, its default, and how YAML, environment variables, and CLI flags
   interact.

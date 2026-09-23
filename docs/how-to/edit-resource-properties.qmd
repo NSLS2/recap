@@ -5,46 +5,90 @@ description: Read and change typed property values on an existing resource.
 
 # Edit Resource Properties
 
-Resource schemas provide typed property groups and values for inspection and
-local editing. Editing a schema does not persist changes by itself; use a
-resource builder to submit the edited model.
+Property values are read through the resource schema and changed through a
+resource builder. Editing a schema you fetched from a query does not persist
+anything by itself.
+
+For the complete set of access forms, including step parameters, see
+[Property and Parameter Access](../reference/property-and-parameter-access.qmd).
 
 ## Read values
 
 ```python
-plate = namespace.query_maker().resources(load="eager").first()
-plate.build_property_model()
+plate = namespace.query_maker().resources().filter(name="Plate 001").first()
 
 rows = plate.properties.dimensions.rows.value
 unit = plate.properties.dimensions.rows.unit
 ```
 
-Attributes support dot access and bracket access. Brackets accept either the
-normalized slug or the original attribute name, and `.get(name)` returns a
-missing attribute as `None`.
+The trailing `.value` is required. Without it you get the wrapper object that
+holds the value and its unit, which prints like the value but does not compare
+equal to it.
+
+Bracket access accepts either the normalized slug or the original attribute
+name, and `.get(name)` returns `None` for a missing attribute instead of
+raising:
 
 ```python
 group = plate.properties["dimensions"]
+
 rows = group["rows"].value
 rows = group.get("rows").value
 ```
 
-## Modify and persist values
+## Change values on a mutable resource
+
+Assign the raw value inside a builder block. There is no `.value` on the
+left-hand side:
 
 ```python
 with namespace.build_resource(resource_id=plate.id) as builder:
-    model = builder.get_model()
-    model.properties.dimensions.rows = 16
-    model.properties.dimensions.rows.unit = "count"
-    builder.set_model(model)
+    builder.resource.properties.dimensions.rows = 16
 ```
 
 The builder validates values against the template and persists the aggregate on
 successful context-manager exit. An exception rolls the change back.
 
+## Change values on an active resource
+
+::: {.callout-important}
+## Active resources are frozen, and edits to them fail silently
+
+A resource becomes frozen once it is `ACTIVE`. Assigning to its properties
+raises no error and has no effect. Because queries return only active
+resources, any resource you located with a query is already frozen.
+:::
+
+Copy the resource, then edit the copy:
+
+```python
+from recap import ResourceCopyOptions
+
+copied = namespace.copy_resource(
+    source_resource_id=plate.id,
+    options=ResourceCopyOptions(name="Plate 001 Revision"),
+)
+
+with namespace.build_resource(resource_id=copied.id) as builder:
+    builder.resource.properties.dimensions.rows = 16
+    builder.finalize()
+```
+
+The copy records its origin, so lineage from the revision back to the original
+is preserved. See
+[Manage Resource Lifecycle](manage-resource-lifecycle.qmd) for the full
+copy-on-write procedure.
+
 ## Units and metadata
 
-Setting an attribute value preserves its existing unit. Set the unit explicitly
-when the update changes its meaning. Template metadata can constrain numeric
-ranges or enumerate allowed values; invalid values fail validation before the
-mutation is committed.
+Setting a value preserves the attribute's existing unit. Set the unit
+explicitly when an update changes its meaning:
+
+```python
+with namespace.build_resource(resource_id=copied.id) as builder:
+    builder.resource.properties.dimensions.rows = 16
+    builder.resource.properties.dimensions.rows.unit = "count"
+```
+
+Template metadata can constrain numeric ranges or enumerate allowed values.
+Invalid values fail validation before the mutation is committed.

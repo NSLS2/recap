@@ -19,6 +19,20 @@ pip install pyrecap
 That is everything you need to work with a local database, which is what the
 rest of this guide uses.
 
+::: {.callout-warning}
+## Pin your version
+
+RECAP is beta software. The public API and the stored data format may change
+without warning between releases, and such changes may not be backward
+compatible. For anything beyond experimentation, pin an exact version:
+
+```bash
+pip install "pyrecap==0.0.1b2"
+```
+
+Check the installed version with `python -c "import recap; print(recap.__version__)"`.
+:::
+
 ## Server support
 
 You only need this if you intend to *run* a RECAP server. Connecting to someone

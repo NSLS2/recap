@@ -72,17 +72,26 @@ Once runs are assigning real resources to slots, the graph builds itself. A run
 records the resources it consumed and produced, so the outputs of one run are
 the inputs of the next:
 
-```text
-Sample A ──(input)──> [Prepare Sample] ──(output)──> Prepared Sample A
-                                                          │
-                                                     (input)
-                                                          ↓
-                                                  [Data Collection]
-                                                          │
-                                                     (output)
-                                                          ↓
-                                                     Raw Data File
+```{mermaid}
+%%| fig-cap: "Resources and process runs alternate to form a provenance chain"
+%%| fig-cap-location: bottom
+flowchart LR
+    SampleA[Sample A]
+    Prepare([Prepare Sample])
+    Prepared[Prepared Sample A]
+    Collect([Data Collection])
+    Raw[Raw Data File]
+
+    SampleA -->|input| Prepare
+    Prepare -->|output| Prepared
+    Prepared -->|input| Collect
+    Collect -->|output| Raw
 ```
+
+Rectangles are resources and rounded boxes are process runs, so the two
+alternate along the chain. Reading it as text: `Sample A` is an input to
+`Prepare Sample`, which outputs `Prepared Sample A`; that is in turn an input to
+`Data Collection`, which outputs `Raw Data File`.
 
 Tracing a result back to its origin means walking that graph backwards. That is
 what RECAP is for, and it is why the input/output direction on every slot

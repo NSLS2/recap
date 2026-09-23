@@ -14,6 +14,14 @@ repo: https://github.com/nsls2/recap
 logo: docs/assets/recap_logo.png
 favicon: docs/assets/favicon.ico
 
+# Beta Notice
+# -----------
+# Site-wide banner. Remove this block when RECAP reaches a stable release.
+announcement:
+  content: "RECAP is beta software. The API and stored data format may change without warning between releases."
+  type: warning
+  dismissable: false
+
 # Docstring Parser
 # ----------------
 # The docstring format used in your package (numpy, google, or sphinx)

@@ -1,0 +1,270 @@
+---
+title: Property and Parameter Access
+description: Every supported way to read and write resource properties and step parameters.
+---
+
+# Property and Parameter Access
+
+Resource **properties** and step **parameters** are stored the same way and are
+read the same way. `ParameterSchema` deliberately mirrors `PropertySchema`, so
+once you know one you know the other.
+
+Writing them differs, and that difference is the main thing this page exists to
+record.
+
+```{python}
+#| include: false
+from pathlib import Path
+
+Path("access-reference.db").unlink(missing_ok=True)
+```
+
+```{python}
+#| include: false
+from recap import RecapClient, Direction
+
+client = RecapClient.from_sqlite("access-reference.db")
+client.create_namespace("ref")
+namespace = client.namespace("ref")
+
+with namespace.build_resource_template(
+    name="Plate", type_names=["container"],
+) as template:
+    template.add_properties({
+        "dimensions": [
+            {"name": "rows", "type": "int", "default": 8},
+            {"name": "temperature", "type": "float", "default": 20.0, "unit": "degC"},
+        ]
+    })
+
+with namespace.build_resource(name="Plate 001", template_name="Plate") as builder:
+    builder.resource.properties.dimensions.rows = 16
+    builder.finalize()
+
+# A second resource left mutable, used for the write examples below.
+with namespace.build_resource(name="Plate Draft", template_name="Plate") as draft:
+    draft.resource.properties.dimensions.rows = 8
+draft_id = draft.resource.id
+
+with namespace.build_process_template("Measure", "1.0") as template:
+    template.add_resource_slot("plate", "container", Direction.input)
+    (
+        template.add_step("Scan")
+        .add_parameters({
+            "acquisition": [
+                {"name": "exposure", "type": "float", "default": 0.1, "unit": "s"},
+            ]
+        })
+        .bind_slot("source", "plate")
+        .close_step()
+    )
+
+plate = namespace.query_maker().resources().filter(name="Plate 001").first()
+
+with namespace.build_process_run(
+    name="Scan 001", description="reference run",
+    template_name="Measure", version="1.0",
+) as run:
+    run.assign_resource("plate", plate)
+    params = run.get_params("Scan")
+    params.acquisition.exposure = 0.25
+    run.set_params(params)
+    run.finalize()
+
+scan = (
+    namespace.query_maker().process_runs().filter(name="Scan 001")
+    .include_steps(include_parameters=True).first()
+)
+step = scan.steps["Scan"]
+```
+
+## The shape
+
+Both follow the same four-level chain:
+
+```text
+resource.properties . <group> . <attribute> . value
+step.parameters     . <group> . <attribute> . value
+```
+
+The third level is not a bare number or string. It is a small **wrapper** that
+carries the value together with its unit and its template definition. The
+`.value` at the end is what unwraps it.
+
+## Reading
+
+```{python}
+print(plate.properties.dimensions.rows.value)      # a resource property
+print(step.parameters.acquisition.exposure.value)  # a step parameter
+```
+
+### `.values` is optional
+
+The wrapper models live under a `values` attribute, but both properties and
+parameters forward attribute access through it, so you can leave it out. These
+are equivalent:
+
+```{python}
+print(plate.properties.dimensions.rows.value)
+print(plate.properties.dimensions.values.rows.value)
+```
+
+Prefer the short form. The long form is only useful when you want the values
+model itself, for example to call `.keys()` on it.
+
+### `.value` is not optional
+
+Omitting `.value` gives you the wrapper, not the value. The wrapper renders as
+its value when printed, so this mistake survives a `print()` and fails at the
+first comparison:
+
+```{python}
+rows = plate.properties.dimensions.rows
+
+print("printed:       ", rows)
+print("rows == 16:    ", rows == 16)
+print("rows.value:    ", rows.value)
+print("rows.value==16:", rows.value == 16)
+```
+
+::: {.callout-warning}
+## The wrapper prints like the value but is not equal to it
+
+If a comparison, arithmetic operation, or function call behaves oddly, check
+whether a `.value` is missing.
+:::
+
+### The wrapper carries the unit
+
+This is why the wrapper exists:
+
+```{python}
+print(plate.properties.dimensions.temperature.unit)
+print(step.parameters.acquisition.exposure.unit)
+```
+
+### Dotted access and bracket access
+
+| Form | Accepts | Missing attribute |
+| --- | --- | --- |
+| `properties.dimensions.rows` | slug only | `AttributeError` |
+| `properties["dimensions"]["rows"]` | slug or original name | `KeyError` |
+| `properties["dimensions"].get("rows")` | slug or original name | returns `None` |
+
+Dotted access needs the slug, so a group named `"Sample Temperature"` is
+`properties.sample_temperature`. Bracket access accepts either, which makes it
+the right choice when names are not valid Python identifiers or are built at
+runtime.
+
+```{python}
+group = plate.properties["dimensions"]
+
+print(group["rows"].value)
+print(group.get("rows").value)
+print(group.get("not_a_real_attribute"))
+```
+
+## Writing properties
+
+Assign the **raw value** to the attribute, inside a resource builder block.
+There is no `.value` on the left-hand side:
+
+```{python}
+with namespace.build_resource(resource_id=draft_id) as builder:
+    builder.resource.properties.dimensions.rows = 24
+```
+
+Reading it back confirms the change was saved. Note that a mutable resource is
+not returned by queries, so it is read through a builder rather than
+`query_maker()`:
+
+```{python}
+with namespace.build_resource(resource_id=draft_id) as check:
+    print(check.get_model(update=True).properties.dimensions.rows.value)
+```
+
+Bracket forms work identically and accept original names:
+
+```text
+builder.resource.properties["dimensions"]["rows"] = 24
+builder.resource.properties["dimensions"].values["rows"] = 24
+```
+
+The builder validates against the template and saves once, on clean exit. If
+the block raises, nothing is written.
+
+::: {.callout-important}
+## Writes to an active resource are silently ignored
+
+A resource is frozen once it becomes `ACTIVE`, and an attempted edit does
+**not** raise. It simply has no effect:
+
+```{python}
+print("before:", plate.status)
+
+with namespace.build_resource(resource_id=plate.id) as builder:
+    builder.resource.properties.dimensions.rows = 9999
+
+check = namespace.query_maker().resources().filter(name="Plate 001").first()
+print("after: ", check.properties.dimensions.rows.value, "(9999 discarded)")
+```
+
+Since queries only return active resources, any resource you *found* by
+querying is already frozen. To change one, copy it first, as described in
+[Manage Resource Lifecycle](../how-to/manage-resource-lifecycle.qmd).
+:::
+
+## Writing parameters
+
+Parameters are **not** written by assigning through a loaded process run. Use
+`get_params()` and `set_params()` inside the `build_process_run` block:
+
+```python
+with namespace.build_process_run(...) as run:
+    params = run.get_params("Scan")
+    params.acquisition.exposure = 0.25
+    run.set_params(params)
+```
+
+The model returned by `get_params()` holds the same wrappers, so you assign raw
+values and read them back with `.value`:
+
+```{python}
+print(step.parameters.acquisition.exposure.value)
+```
+
+::: {.callout-important}
+## In-place parameter edits do not persist
+
+Assigning through a queried process run mutates only the in-memory copy. The
+statement below succeeds and changes nothing in the database:
+
+```text
+scan.steps["Scan"].parameters.acquisition.exposure = 5.0   # no effect
+```
+
+`set_params()` is the only supported way to record parameter values.
+:::
+
+## Summary
+
+| | Properties | Parameters |
+| --- | --- | --- |
+| Read | `resource.properties.<g>.<a>.value` | `step.parameters.<g>.<a>.value` |
+| Unit | `....<a>.unit` | `....<a>.unit` |
+| `.values` level | optional | optional |
+| `.value` suffix | required | required |
+| Write | assign on `builder.resource.properties` | `get_params()` / `set_params()` |
+| Write window | while `MUTABLE` only | inside `build_process_run` |
+
+```{python}
+#| include: false
+client.close()
+Path("access-reference.db").unlink(missing_ok=True)
+```
+
+---
+
+Related: [Edit Resource Properties](../how-to/edit-resource-properties.qmd),
+[Build Process Runs](../how-to/build-process-runs.qmd),
+[Manage Resource Lifecycle](../how-to/manage-resource-lifecycle.qmd).
