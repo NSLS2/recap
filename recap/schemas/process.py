@@ -10,13 +10,11 @@ This module defines the top-level provenance objects:
   reference types used to avoid circular serialisation.
 """
 
-import warnings
 from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
 from recap.schemas.common import (
     SIMPLE_FIELD,
     LoadAwareMixin,
@@ -147,6 +145,8 @@ class ProcessRunSchema(LoadAwareMixin, NamespaceOwnedFields):
     assigned_resources: dict[str, ResourceAssignmentSchema] = {}
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
     _relation_fields = frozenset({"template", "steps", "assigned_resources"})
+    # ``assigned_resources`` is populated via ``include('resources')``.
+    _include_hints = {"assigned_resources": "resources"}
 
     @field_validator("assigned_resources", mode="before")
     @classmethod
@@ -164,35 +164,6 @@ class ProcessRunSchema(LoadAwareMixin, NamespaceOwnedFields):
     ) -> "ProcessRunSchema":
         LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
         return self
-
-    def is_loaded(self, relation: str) -> bool:
-        private = getattr(self, "__pydantic_private__", None) or {}
-        return private.get("_loaded_relations", {}).get(relation, False)
-
-    def require_loaded(self, relation: str) -> None:
-        self._handle_unloaded(relation, f"include('{relation}')")
-
-    def _handle_unloaded(self, field_name: str, include_hint: str) -> None:
-        private = getattr(self, "__pydantic_private__", None) or {}
-        if private.get("_loaded_relations", {}).get(field_name, True):
-            return
-        message = (
-            f"'{field_name}' was not loaded for ProcessRunSchema; "
-            f"use {include_hint} or load='eager'."
-        )
-        on_unloaded = private.get("_on_unloaded", "warn")
-        warned = private.setdefault("_warned_unloaded", set())
-        if on_unloaded == "raise":
-            raise UnloadedFieldError(message)
-        if on_unloaded == "warn" and field_name not in warned:
-            warnings.warn(message, UnloadedFieldWarning, stacklevel=3)
-            warned.add(field_name)
-
-    def __getattribute__(self, name: str):
-        if name in object.__getattribute__(self, "_relation_fields"):
-            hint = "resources" if name == "assigned_resources" else name
-            self._handle_unloaded(name, f"include('{hint}')")
-        return super().__getattribute__(name)
 
 
 ProcessTemplateRef = ProcessTemplateSchema  # noqa: F811

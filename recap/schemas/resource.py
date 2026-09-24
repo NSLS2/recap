@@ -12,7 +12,6 @@ This module defines the data models for the core RECAP resource hierarchy:
   :class:`ResourceSlotSchema`, :class:`ResourceRef`, :class:`ResourceAssignmentSchema`.
 """
 
-import warnings
 from typing import Annotated, Any, Literal
 
 try:
@@ -25,7 +24,6 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from recap.db.resource import Property
-from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
     AttributeTemplateValidator,
@@ -499,35 +497,6 @@ class ResourceSchema(LoadAwareMixin, NamespaceOwnedFields):
     ) -> "ResourceSchema":
         LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
         return self
-
-    def is_loaded(self, relation: str) -> bool:
-        private = getattr(self, "__pydantic_private__", None) or {}
-        return private.get("_loaded_relations", {}).get(relation, False)
-
-    def require_loaded(self, relation: str) -> None:
-        self._handle_unloaded(relation, f"include('{relation}')")
-
-    def _handle_unloaded(self, field_name: str, include_hint: str) -> None:
-        private = getattr(self, "__pydantic_private__", None) or {}
-        loaded_relations = private.get("_loaded_relations", {})
-        if loaded_relations.get(field_name, True):
-            return
-        message = (
-            f"'{field_name}' was not loaded for ResourceSchema; "
-            f"use {include_hint} or load='eager'."
-        )
-        on_unloaded = private.get("_on_unloaded", "warn")
-        warned = private.setdefault("_warned_unloaded", set())
-        if on_unloaded == "raise":
-            raise UnloadedFieldError(message)
-        if on_unloaded == "warn" and field_name not in warned:
-            warnings.warn(message, UnloadedFieldWarning, stacklevel=3)
-            warned.add(field_name)
-
-    def __getattribute__(self, name: str):
-        if name in object.__getattribute__(self, "_relation_fields"):
-            self._handle_unloaded(name, f"include('{name}')")
-        return super().__getattribute__(name)
 
     @model_validator(mode="after")
     def build_property_model(self) -> "ResourceSchema":

@@ -19,6 +19,14 @@ from recap.exceptions import UnloadedFieldError, UnloadedFieldWarning
 from recap.lifecycle import LifecycleStatus
 from recap.utils.general import make_slug
 
+# Bound ``__get__`` of pydantic's private-store slot descriptor. Reading through
+# it bypasses ``BaseModel.__getattr__`` (avoiding recursion via
+# ``__getattribute__``) and raises a plain ``AttributeError`` when the slot is
+# unset (e.g. mid-construct). Bound at module load so the ``__getattribute__``
+# fast path can read the private dict with a single call and no attribute
+# lookup of its own.
+_get_pydantic_private = BaseModel.__dict__["__pydantic_private__"].__get__
+
 
 @runtime_checkable
 class LoadAware(Protocol):
@@ -40,6 +48,11 @@ class LoadAwareMixin:
     """Track selectively loaded relation fields and guard their access."""
 
     _relation_fields: ClassVar[frozenset[str]] = frozenset()
+    # Per-relation override for the ``include('...')`` hint shown when an
+    # unloaded relation is accessed. Defaults to the field name; subclasses
+    # override where the query keyword differs (e.g. ``assigned_resources``
+    # is loaded via ``include('resources')``).
+    _include_hints: ClassVar[dict[str, str]] = {}
 
     @property
     def _loaded_relations(self) -> dict[str, bool]:
@@ -66,6 +79,13 @@ class LoadAwareMixin:
         private["_loaded_relations"] = dict(loaded_relations)
         private["_on_unloaded"] = on_unloaded
         private["_warned_unloaded"] = set()
+        # Cache whether any relation is explicitly unloaded. The access guard
+        # in ``__getattribute__`` only ever fires when a relation flag is
+        # ``False``; when none are, the guard is pure overhead and can be
+        # skipped. Recomputed here at the single write site for _loaded_relations.
+        private["_has_unloaded_relations"] = any(
+            value is False for value in loaded_relations.values()
+        )
         return self
 
     def is_loaded(self, relation: str) -> bool:
@@ -93,9 +113,22 @@ class LoadAwareMixin:
             warned.add(field_name)
 
     def __getattribute__(self, name: str):
+        # Fast path: if nothing is unloaded, the relation guard can never fire,
+        # so skip the frozenset lookup + membership test entirely. Read the
+        # private store via the slot descriptor to avoid re-entering this method.
+        try:
+            private = _get_pydantic_private(self)
+        except AttributeError:
+            private = None
+        if not (private and private.get("_has_unloaded_relations")):
+            return super().__getattribute__(name)
         relation_fields = object.__getattribute__(self, "_relation_fields")
         if name in relation_fields:
-            object.__getattribute__(self, "_handle_unloaded")(name, f"include('{name}')")
+            hints = object.__getattribute__(self, "_include_hints")
+            hint = hints.get(name, name)
+            object.__getattribute__(self, "_handle_unloaded")(
+                name, f"include('{hint}')"
+            )
         return super().__getattribute__(name)
 
 SIMPLE_FIELD = "simple_field"
