@@ -31,6 +31,9 @@ from recap.schemas.step import (
 
 IdentityKey = tuple[str, UUID]
 
+# Sentinel distinguishing "not yet cached" from a cached ``None`` family.
+_MISSING = object()
+
 
 def _loaded_relations(model: BaseModel) -> dict[str, bool]:
     private = getattr(model, "__pydantic_private__", None) or {}
@@ -61,11 +64,26 @@ _ENTITY_FAMILIES: tuple[tuple[type[BaseModel], str], ...] = (
 
 
 class IdentityMap:
+    # Concrete model type -> entity family. Populated lazily by ``_family``.
+    # Keyed on exact type so the ``_ENTITY_FAMILIES`` isinstance ordering is
+    # resolved once per class instead of per value visited.
+    _family_cache: dict[type, str | None] = {}
+
     def __init__(self) -> None:
         self._models: dict[IdentityKey, BaseModel] = {}
         self._lock = RLock()
         self._canonical_merge_pairs: set[tuple[int, int]] = set()
         self._canonicalizing: set[int] = set()
+        # id() of canonical instances whose relations are already fully
+        # canonicalized. Lets ``_canonicalize_relations`` skip re-walking a
+        # shared subtree once per parent that references it. Invalidated
+        # whenever a canonical object is mutated by a merge.
+        self._canonicalized: set[int] = set()
+        # id() -> cached structural signature for canonical instances only.
+        # A canonical object's signature is stable between mutations, so
+        # equal-revision re-query comparisons reuse it instead of re-hashing
+        # the whole graph. Same lifetime/invalidation as ``_canonicalized``.
+        self._signature_cache: dict[int, Any] = {}
 
     def get(self, key: IdentityKey) -> BaseModel | None:
         with self._lock:
@@ -89,6 +107,8 @@ class IdentityMap:
             self._models.clear()
             self._canonical_merge_pairs.clear()
             self._canonicalizing.clear()
+            self._canonicalized.clear()
+            self._signature_cache.clear()
 
     def _intern(self, model: BaseModel, *, authoritative: bool = False) -> BaseModel:
         family = self._family(model)
@@ -109,6 +129,20 @@ class IdentityMap:
         self._merge(current, model, authoritative=authoritative)
         return current
 
+    def _is_canonical_instance(self, model: BaseModel) -> bool:
+        family = self._family(model)
+        if family is None:
+            return False
+        model_id = getattr(model, "id", None)
+        if not isinstance(model_id, UUID):
+            return False
+        return self._models.get((family, model_id)) is model
+
+    def _invalidate_canonicalized(self, model: BaseModel) -> None:
+        """Force ``model`` to be re-walked next time; call before mutating it."""
+        self._canonicalized.discard(id(model))
+        self._signature_cache.pop(id(model), None)
+
     def _merge(
         self,
         current: BaseModel,
@@ -116,6 +150,7 @@ class IdentityMap:
         *,
         authoritative: bool = False,
     ) -> None:
+        self._invalidate_canonicalized(current)
         if (
             isinstance(current, NamespaceRef)
             and not isinstance(current, NamespaceSchema)
@@ -132,19 +167,23 @@ class IdentityMap:
             if incoming_revision == current_revision:
                 if authoritative:
                     self._canonicalize_relations(incoming)
+                    self._invalidate_canonicalized(current)
                     self._merge_loaded_relations(current, incoming)
                     self._copy_fields(current, incoming)
                     self._canonicalize_relations(current)
                     return
                 if self._equivalent_with_repeated_array_values(current, incoming):
+                    self._invalidate_canonicalized(current)
                     self._copy_fields(current, incoming)
                     self._canonicalize_relations(current)
                     return
                 self._raise_on_scalar_conflict(current, incoming)
                 self._canonicalize_relations(incoming)
+                self._invalidate_canonicalized(current)
                 self._merge_loaded_relations(current, incoming)
                 return
             self._canonicalize_relations(incoming)
+            self._invalidate_canonicalized(current)
             if authoritative:
                 self._merge_authoritative_relations(current, incoming)
             else:
@@ -162,6 +201,7 @@ class IdentityMap:
             and isinstance(incoming_date, datetime)
             and incoming_date > current_date
         ):
+            self._invalidate_canonicalized(current)
             self._merge_loaded_relations(current, incoming)
             self._copy_fields(current, incoming)
 
@@ -205,8 +245,7 @@ class IdentityMap:
                 ),
             )
 
-    @classmethod
-    def _raise_on_scalar_conflict(cls, current: BaseModel, incoming: BaseModel) -> None:  # noqa: C901
+    def _raise_on_scalar_conflict(self, current: BaseModel, incoming: BaseModel) -> None:  # noqa: C901
         relation_fields = getattr(type(current), "_relation_fields", frozenset())
         for name in sorted(relation_fields):
             if not (
@@ -217,9 +256,9 @@ class IdentityMap:
             current_value = current.__dict__.get(name)
             incoming_value = incoming.__dict__.get(name)
             if (
-                not cls._empty_relation_value(current_value)
-                and not cls._empty_relation_value(incoming_value)
-                and cls._relation_conflicts(current_value, incoming_value)
+                not self._empty_relation_value(current_value)
+                and not self._empty_relation_value(incoming_value)
+                and self._relation_conflicts(current_value, incoming_value)
             ):
                 raise IdentityMergeConflict(
                     f"Conflicting {type(current).__name__} identity {current.id} "
@@ -252,8 +291,8 @@ class IdentityMap:
                 if (
                     current_loaded
                     and incoming_loaded
-                    and cls._relation_signature(current_value)
-                    != cls._relation_signature(incoming_value)
+                    and self._relation_signature(current_value)
+                    != self._relation_signature(incoming_value)
                 ):
                     raise IdentityMergeConflict(
                         f"Conflicting {type(current).__name__} identity {current.id} "
@@ -266,51 +305,109 @@ class IdentityMap:
                     f"at equal revision: {name}"
                 )
 
-    @classmethod
     def _relation_signature(
-        cls, value: Any, _seen: set[tuple[str, UUID]] | None = None
+        self,
+        value: Any,
     ) -> Any:
-        if _seen is None:
-            _seen = set()
+        # Per-call memo of ``id(obj) -> signature`` for self-contained
+        # identity-bearing models. A shared subtree (e.g. one well template
+        # referenced by every well) is hashed once per call instead of once
+        # per referencing parent. Safe because objects are immutable for the
+        # duration of a signature computation.
+        return self._relation_signature_inner(value, set(), set(), {})
+
+    def _relation_signature_inner(  # noqa: C901
+        self,
+        value: Any,
+        _seen: set[tuple[str, UUID]],
+        _cycle_hits: set[tuple[str, UUID]],
+        _memo: dict[int, Any],
+    ) -> Any:
         if isinstance(value, BaseModel):
-            family = cls._family(value)
+            family = self._family(value)
             model_id = getattr(value, "id", None)
             if family is not None and isinstance(model_id, UUID):
                 identity = (family, model_id)
                 if identity in _seen:
+                    # Record the back-edge so callers up the stack know their
+                    # subtree signature is context-dependent (not cacheable).
+                    _cycle_hits.add(identity)
                     return ("cycle", identity)
+                obj_key = id(value)
+                # Reuse a persisted signature for the canonical instance (state
+                # is stable between mutations; its id() stays valid for the
+                # map's lifetime), or a within-call memo for any repeated
+                # self-contained object.
+                is_canonical = self._models.get(identity) is value
+                if is_canonical:
+                    cached = self._signature_cache.get(obj_key)
+                    if cached is not None:
+                        return cached
+                memoized = _memo.get(obj_key)
+                if memoized is not None:
+                    return memoized
                 _seen.add(identity)
                 relation_fields = getattr(type(value), "_relation_fields", frozenset())
+                sub_cycles: set[tuple[str, UUID]] = set()
                 scalar_state = tuple(
-                    (name, cls._relation_signature(value.__dict__.get(name), _seen))
+                    (
+                        name,
+                        self._relation_signature_inner(
+                            value.__dict__.get(name), _seen, sub_cycles, _memo
+                        ),
+                    )
                     for name in sorted(value.model_fields_set - relation_fields)
                     if name not in {"create_date", "modified_date"}
                 )
                 relation_state = tuple(
-                    (name, cls._relation_signature(value.__dict__.get(name), _seen))
+                    (
+                        name,
+                        self._relation_signature_inner(
+                            value.__dict__.get(name), _seen, sub_cycles, _memo
+                        ),
+                    )
                     for name in sorted(relation_fields)
                     if _loaded_relations(value).get(name) is True
                 )
                 _seen.remove(identity)
-                return family, model_id, scalar_state, relation_state
+                signature = (family, model_id, scalar_state, relation_state)
+                # This subtree is context-dependent iff it contained a back-edge
+                # to a *proper ancestor* (still on the stack). Cycles that
+                # resolved within this subtree (== identity, already removed)
+                # do not leak. Only cache/propagate when self-contained.
+                external_cycles = sub_cycles - {identity}
+                if external_cycles:
+                    _cycle_hits |= external_cycles
+                else:
+                    _memo[obj_key] = signature
+                    if is_canonical:
+                        self._signature_cache[obj_key] = signature
+                return signature
             return tuple(
-                (name, cls._relation_signature(getattr(value, name), _seen))
+                (
+                    name,
+                    self._relation_signature_inner(
+                        getattr(value, name), _seen, _cycle_hits, _memo
+                    ),
+                )
                 for name in value.model_fields_set
             )
         if isinstance(value, dict):
             return tuple(
                 sorted(
-                    (key, cls._relation_signature(item, _seen))
+                    (key, self._relation_signature_inner(item, _seen, _cycle_hits, _memo))
                     for key, item in value.items()
                 )
             )
         if isinstance(value, list):
-            return tuple(cls._relation_signature(item, _seen) for item in value)
+            return tuple(
+                self._relation_signature_inner(item, _seen, _cycle_hits, _memo)
+                for item in value
+            )
         return value
 
-    @classmethod
     def _relation_conflicts(  # noqa: C901
-        cls,
+        self,
         current: Any,
         incoming: Any,
         _seen: set[tuple[int, int]] | None = None,
@@ -346,7 +443,7 @@ class IdentityMap:
                 if isinstance(left, BaseModel | list | dict) or isinstance(
                     right, BaseModel | list | dict
                 ):
-                    if cls._relation_conflicts(left, right, _seen):
+                    if self._relation_conflicts(left, right, _seen):
                         return True
                 elif left != right:
                     return True
@@ -354,7 +451,7 @@ class IdentityMap:
                 if (
                     _loaded_relations(current).get(name) is True
                     and _loaded_relations(incoming).get(name) is True
-                    and cls._relation_conflicts(
+                    and self._relation_conflicts(
                         current.__dict__.get(name), incoming.__dict__.get(name), _seen
                     )
                 ):
@@ -366,56 +463,61 @@ class IdentityMap:
             return any(
                 key in incoming
                 and key in current
-                and cls._relation_conflicts(current[key], incoming[key], _seen)
+                and self._relation_conflicts(current[key], incoming[key], _seen)
                 for key in current.keys() & incoming.keys()
             )
         if isinstance(current, list) and isinstance(incoming, list):
             if not current or not incoming:
                 return False
-            current_by_key = {cls._value_key(item): item for item in current}
-            incoming_by_key = {cls._value_key(item): item for item in incoming}
+            current_by_key = {self._value_key(item): item for item in current}
+            incoming_by_key = {self._value_key(item): item for item in incoming}
             if not (
                 set(current_by_key).issubset(incoming_by_key)
                 or set(incoming_by_key).issubset(current_by_key)
             ):
                 return True
             return any(
-                cls._relation_conflicts(
+                self._relation_conflicts(
                     current_by_key[key], incoming_by_key[key], _seen
                 )
                 for key in current_by_key.keys() & incoming_by_key.keys()
             )
         return current != incoming
 
-    @classmethod
-    def _value_key(cls, value: Any) -> Any:
+    def _value_key(self, value: Any) -> Any:
         if isinstance(value, BaseModel):
             model_id = getattr(value, "id", None)
             if isinstance(model_id, UUID):
-                return cls._family(value), model_id
-        return cls._relation_signature(value)
+                return self._family(value), model_id
+        return self._relation_signature(value)
 
-    @classmethod
     def _equivalent_with_repeated_array_values(
-        cls, current: Any, incoming: Any
+        self, current: Any, incoming: Any
     ) -> bool:
         """Recognize stale hydrated array wrappers without hiding real conflicts."""
-        left = cls._relation_signature(current)
-        right = cls._relation_signature(incoming)
+        left = self._relation_signature(current)
+        right = self._relation_signature(incoming)
         if left == right:
             return True
-        return cls._dedupe_repeated_sequences(left) == cls._dedupe_repeated_sequences(
+        return self._dedupe_repeated_sequences(left) == self._dedupe_repeated_sequences(
             right
         )
 
-    @classmethod
-    def _dedupe_repeated_sequences(cls, value: Any) -> Any:
+    def _dedupe_repeated_sequences(self, value: Any) -> Any:
         if isinstance(value, tuple):
-            items = tuple(cls._dedupe_repeated_sequences(item) for item in value)
-            for size in range(1, len(items) // 2 + 1):
-                if len(items) % size == 0 and items == items[:size] * (
-                    len(items) // size
-                ):
+            items = tuple(self._dedupe_repeated_sequences(item) for item in value)
+            n = len(items)
+            if n < 2:
+                return items
+            # Collapse a tuple that is a whole-number repetition of a shorter
+            # block to that block. Only sizes that divide ``n`` can tile it, so
+            # iterate divisors (O(d(n))) and verify each candidate period by
+            # element comparison with an early exit -- no per-size tuple
+            # rebuild. Same result as the original divisor scan.
+            for size in range(1, n // 2 + 1):
+                if n % size != 0:
+                    continue
+                if all(items[i] == items[i % size] for i in range(size, n)):
                     return items[:size]
             return items
         return value
@@ -424,20 +526,19 @@ class IdentityMap:
     def _empty_relation_value(value: Any) -> bool:
         return value is None or value == {} or value == []
 
-    @classmethod
-    def _relation_is_extension(cls, base: Any, candidate: Any) -> bool:
+    def _relation_is_extension(self, base: Any, candidate: Any) -> bool:
         if isinstance(base, BaseModel) and isinstance(candidate, BaseModel):
-            return cls._model_is_compatible_extension(base, candidate)
+            return self._model_is_compatible_extension(base, candidate)
         if isinstance(base, dict) and isinstance(candidate, dict):
             if not set(base).issubset(candidate):
                 return False
             return all(
-                cls._model_is_compatible_extension(base[key], candidate[key])
+                self._model_is_compatible_extension(base[key], candidate[key])
                 for key in base
             )
         if isinstance(base, list) and isinstance(candidate, list):
             candidate_by_id = {
-                (cls._family(item), getattr(item, "id", None)): item
+                (self._family(item), getattr(item, "id", None)): item
                 for item in candidate
                 if isinstance(item, BaseModel)
             }
@@ -447,34 +548,33 @@ class IdentityMap:
                         return False
                     continue
                 match = candidate_by_id.get(
-                    (cls._family(item), getattr(item, "id", None))
+                    (self._family(item), getattr(item, "id", None))
                 )
-                if match is None or not cls._model_is_compatible_extension(item, match):
+                if match is None or not self._model_is_compatible_extension(item, match):
                     return False
             return True
         return False
 
-    @classmethod
-    def _model_is_compatible_extension(cls, base: Any, candidate: Any) -> bool:  # noqa: C901
+    def _model_is_compatible_extension(self, base: Any, candidate: Any) -> bool:  # noqa: C901
         if not isinstance(base, BaseModel) or not isinstance(candidate, BaseModel):
             return base == candidate
         if type(base) is not type(candidate):
             return False
         relation_fields = getattr(type(base), "_relation_fields", frozenset())
-        if cls._family(base) is None:
+        if self._family(base) is None:
             for name in base.model_fields_set & candidate.model_fields_set:
                 left = base.__dict__.get(name)
                 right = candidate.__dict__.get(name)
                 if isinstance(left, BaseModel) and isinstance(right, BaseModel):
                     if not (
-                        cls._model_is_compatible_extension(left, right)
-                        or cls._model_is_compatible_extension(right, left)
+                        self._model_is_compatible_extension(left, right)
+                        or self._model_is_compatible_extension(right, left)
                     ):
                         return False
                 elif isinstance(left, list | dict) or isinstance(right, list | dict):
                     if not (
-                        cls._relation_is_extension(left, right)
-                        or cls._relation_is_extension(right, left)
+                        self._relation_is_extension(left, right)
+                        or self._relation_is_extension(right, left)
                     ):
                         return False
                 elif left != right:
@@ -492,7 +592,7 @@ class IdentityMap:
             if isinstance(left, BaseModel | list | dict) or isinstance(
                 right, BaseModel | list | dict
             ):
-                if cls._relation_signature(left) != cls._relation_signature(right):
+                if self._relation_signature(left) != self._relation_signature(right):
                     return False
             elif name == "status":
                 continue
@@ -506,10 +606,10 @@ class IdentityMap:
                 left = base.__dict__.get(name)
                 right = candidate.__dict__.get(name)
                 if (
-                    not cls._empty_relation_value(left)
-                    and not cls._empty_relation_value(right)
-                    and not cls._relation_is_extension(left, right)
-                    and not cls._relation_is_extension(right, left)
+                    not self._empty_relation_value(left)
+                    and not self._empty_relation_value(right)
+                    and not self._relation_is_extension(left, right)
+                    and not self._relation_is_extension(right, left)
                 ):
                     return False
         return True
@@ -518,19 +618,37 @@ class IdentityMap:
         if not isinstance(model, BaseModel):
             return
         model_key = id(model)
+        # Already fully canonicalized (and still the canonical stored
+        # instance): skip re-walking. This is what keeps a shared subtree
+        # from being re-traversed once per referencing parent.
+        if model_key in self._canonicalized:
+            return
         if model_key in self._canonicalizing:
             return
         self._canonicalizing.add(model_key)
         try:
+            loaded = _loaded_relations(model)
+            model_dict = model.__dict__
             for name in model.model_fields_set:
-                if _loaded_relations(model).get(name) is False:
+                if loaded.get(name) is False:
                     continue
-                value = model.__dict__.get(name)
+                value = model_dict.get(name)
+                # Only models/containers can carry interned identities; scalar
+                # fields (ids, names, dates) never do, so skip the dispatch.
+                if not isinstance(value, (BaseModel, list, dict)):
+                    continue
                 canonical = self._canonicalize_value(value)
                 if canonical is not value:
+                    # Relation state changed: drop any cached signature so a
+                    # later equal-revision comparison recomputes it.
+                    self._signature_cache.pop(model_key, None)
                     setattr(model, name, canonical)
         finally:
             self._canonicalizing.remove(model_key)
+        # Only memoize instances retained as canonical in ``_models``; their
+        # id() stays valid for the map's lifetime, so no id-reuse hazard.
+        if self._is_canonical_instance(model):
+            self._canonicalized.add(model_key)
 
     def _merge_loaded_relations(self, current: BaseModel, incoming: BaseModel) -> None:
         current_flags = _loaded_relations(current)
@@ -620,9 +738,12 @@ class IdentityMap:
             if family is not None and isinstance(model_id, UUID):
                 existing = self._models.get((family, model_id))
                 if existing is not None:
+                    if existing is value:
+                        return existing
                     pair = (id(existing), id(value))
                     if pair not in self._canonical_merge_pairs:
                         self._canonical_merge_pairs.add(pair)
+                        self._invalidate_canonicalized(existing)
                         try:
                             self._merge_loaded_relations(existing, value)
                         finally:
@@ -636,8 +757,18 @@ class IdentityMap:
             return {key: self._canonicalize_value(item) for key, item in value.items()}
         return value
 
+    @classmethod
+    def _family(cls, model: BaseModel) -> str | None:
+        model_type = type(model)
+        cache = cls._family_cache
+        family = cache.get(model_type, _MISSING)
+        if family is _MISSING:
+            family = cls._resolve_family(model)
+            cache[model_type] = family
+        return family
+
     @staticmethod
-    def _family(model: BaseModel) -> str | None:
+    def _resolve_family(model: BaseModel) -> str | None:
         if isinstance(model, NamespaceContext):
             return None
         for model_type, family in _ENTITY_FAMILIES:
