@@ -65,7 +65,9 @@ def test_create_and_patch_resource(api_client, idempotency_headers, monkeypatch)
     monkeypatch.setattr(CommandRegistry, "by_name", by_name)
     updated = api_client.patch(
         f"/api/v1/resources/{resource.json()['id']}",
-        headers=idempotency_headers("resource-2", **{"If-Match": resource.headers["ETag"]}),
+        headers=idempotency_headers(
+            "resource-2", **{"If-Match": resource.headers["ETag"]}
+        ),
         json={"name": "plate-2"},
     )
     assert updated.status_code == 200
@@ -96,7 +98,9 @@ def test_create_resource_replays_sequentially_with_same_idempotency_key(
     headers = idempotency_headers("resource-replay")
     payload = {"name": "plate-1", "template_id": template.json()["id"]}
     first = api_client.post("/api/v1/resources/beamline", headers=headers, json=payload)
-    replay = api_client.post("/api/v1/resources/beamline", headers=headers, json=payload)
+    replay = api_client.post(
+        "/api/v1/resources/beamline", headers=headers, json=payload
+    )
 
     assert first.status_code == replay.status_code == 201
     first_body = first.json()
@@ -141,7 +145,9 @@ def test_create_resource_response_preserves_dynamic_properties(
     assert first.json()["properties"]["measurements"]["values"]["mass"]["value"] == 2.5
 
 
-def test_copy_resource_uses_destination_namespace_in_body(api_client, idempotency_headers):
+def test_copy_resource_uses_destination_namespace_in_body(
+    api_client, idempotency_headers
+):
     namespace = api_client.put(
         "/api/v1/namespaces/beamline",
         headers=idempotency_headers("namespace-copy"),

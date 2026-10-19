@@ -37,9 +37,15 @@ class QueryRequest(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_legacy_schema_name(cls, value: Any) -> Any:
-        if isinstance(value, Mapping) and "entity" not in value and "schema_name" in value:
+        if (
+            isinstance(value, Mapping)
+            and "entity" not in value
+            and "schema_name" in value
+        ):
             schema_name = value["schema_name"]
-            schema = SCHEMAS_BY_NAME.get(schema_name) or LEGACY_SCHEMAS_BY_NAME.get(schema_name)
+            schema = SCHEMAS_BY_NAME.get(schema_name) or LEGACY_SCHEMAS_BY_NAME.get(
+                schema_name
+            )
             if schema is not None:
                 value = dict(value)
                 if schema in SCHEMA_ENTITY_KEYS:
@@ -92,9 +98,15 @@ class QueryResult(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_legacy_schema_name(cls, value: Any) -> Any:
-        if isinstance(value, Mapping) and "entity" not in value and "schema_name" in value:
+        if (
+            isinstance(value, Mapping)
+            and "entity" not in value
+            and "schema_name" in value
+        ):
             schema_name = value["schema_name"]
-            schema = SCHEMAS_BY_NAME.get(schema_name) or LEGACY_SCHEMAS_BY_NAME.get(schema_name)
+            schema = SCHEMAS_BY_NAME.get(schema_name) or LEGACY_SCHEMAS_BY_NAME.get(
+                schema_name
+            )
             if schema is not None:
                 value = dict(value)
                 if schema in SCHEMA_ENTITY_KEYS:
@@ -107,7 +119,9 @@ class QueryResult(BaseModel):
                     value["projection"] = "full"
             elif value["schema_name"] in LEGACY_SCHEMA_KEYS:
                 value = dict(value)
-                value["entity"], value["projection"] = LEGACY_SCHEMA_KEYS[value["schema_name"]]
+                value["entity"], value["projection"] = LEGACY_SCHEMA_KEYS[
+                    value["schema_name"]
+                ]
             elif value["schema_name"] in LEGACY_SCHEMAS_BY_NAME:
                 value = dict(value)
                 value["entity"] = value["schema_name"]
@@ -119,7 +133,11 @@ class QueryResult(BaseModel):
         try:
             schema_for(self.entity, self.projection)
         except ValueError:
-            if self.schema_name in LEGACY_SCHEMAS_BY_NAME and self.entity == self.schema_name and self.projection == "full":
+            if (
+                self.schema_name in LEGACY_SCHEMAS_BY_NAME
+                and self.entity == self.schema_name
+                and self.projection == "full"
+            ):
                 return self
             raise
         return self
@@ -173,7 +191,10 @@ def _serialize_value(
             for key, item in value.items()
         }
     if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return [_serialize_value(item, tag_scalars=tag_scalars, _seen=_seen) for item in value]
+        return [
+            _serialize_value(item, tag_scalars=tag_scalars, _seen=_seen)
+            for item in value
+        ]
     if isinstance(value, UUID):
         return str(value)
     if isinstance(value, datetime):
@@ -260,9 +281,7 @@ def _restore_metadata(value: Any, payload: Any) -> None:
 
 def _restore_model_metadata(value: BaseModel, payload: Mapping[str, Any]) -> None:
     metadata = payload.get("__recap__")
-    if isinstance(value, LoadAware) and isinstance(
-        metadata, Mapping
-    ):
+    if isinstance(value, LoadAware) and isinstance(metadata, Mapping):
         loaded_relations = dict(metadata.get("loaded_relations", {}))
         on_unloaded = metadata.get("on_unloaded", "warn")
         if loaded_relations or on_unloaded != "warn":

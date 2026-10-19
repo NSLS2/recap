@@ -193,7 +193,9 @@ def test_copy_resource_rejects_parent_from_another_namespace(client):
         session.flush()
         foreign_parent_id = foreign_parent.id
 
-    with pytest.raises(ValueError, match="Parent resource belongs to another namespace"):
+    with pytest.raises(
+        ValueError, match="Parent resource belongs to another namespace"
+    ):
         client.namespace(setup["source_namespace_path"]).copy_resource(
             setup["source_id"], ResourceCopyOptions(parent_id=foreign_parent_id)
         )

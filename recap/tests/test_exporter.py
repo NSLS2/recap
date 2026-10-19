@@ -139,4 +139,6 @@ def test_export_rejects_scalar_count_results(query_and_backend):
 
 def test_export_protocol_is_format_neutral():
     source = inspect.getsource(importlib.import_module(Exporter.__module__)).lower()
-    assert all(term not in source for term in ("json-ld", "rdf", "semantic", "ro-crate"))
+    assert all(
+        term not in source for term in ("json-ld", "rdf", "semantic", "ro-crate")
+    )

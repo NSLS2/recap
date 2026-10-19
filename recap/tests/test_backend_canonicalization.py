@@ -79,7 +79,9 @@ class _FakeBackendBase:
     def create_namespace(self, path, metadata, context):
         return NamespaceContext(id=uuid4(), path=path)
 
-    def update_namespace(self, namespace_id, expected_revision, metadata, status, context, *, etag=None):
+    def update_namespace(
+        self, namespace_id, expected_revision, metadata, status, context, *, etag=None
+    ):
         return _namespace(namespace_id, revision=expected_revision + 1)
 
     def list_child_namespaces(self, parent_path):
@@ -165,7 +167,9 @@ def test_nested_resource_and_direct_resource_query_share_identity():
         return _resource(child_id, name="child", namespace_id=direct_child.namespace_id)
 
     backend = _client_backend(_LocalFakeBackend(result_factory))
-    nested = backend.query(ResourceSchema, object(), namespace_path="beamline")[0].children["child"]
+    nested = backend.query(ResourceSchema, object(), namespace_path="beamline")[
+        0
+    ].children["child"]
     direct = backend.query(ResourceSchema, object(), namespace_path="beamline")[0]
 
     assert nested is direct

@@ -9,17 +9,16 @@ from fastapi.testclient import TestClient
 
 from recap.adapter.rest import RESTAdapter
 from recap.client import RecapClient
+from recap.dsl.query import QuerySpec
 from recap.exceptions import (
     RecapAuthenticationError,
     RecapConflictError,
     RecapNotFoundError,
 )
 from recap.schemas.namespace import NamespaceContext
-from recap.schemas.resource import ResourceCopyOptions
-from recap.server.app import create_app
-from recap.dsl.query import QuerySpec
 from recap.schemas.process import ProcessTemplateSchema
-from recap.schemas.resource import ResourceTemplateSchema
+from recap.schemas.resource import ResourceCopyOptions, ResourceTemplateSchema
+from recap.server.app import create_app
 
 
 @pytest.fixture(params=["local", "remote"], ids=["local", "remote"])
@@ -105,17 +104,21 @@ def test_template_finalization_is_deferred_until_clean_exit(command_client, kind
 
 
 @pytest.mark.parametrize("kind", ["process", "resource"])
-def test_template_nested_context_commits_once_and_exception_can_retry(command_client, kind):
-    builder = make_template_builder(client=command_client, kind=kind, name=f"Nested-{kind}")
+def test_template_nested_context_commits_once_and_exception_can_retry(
+    command_client, kind
+):
+    builder = make_template_builder(
+        client=command_client, kind=kind, name=f"Nested-{kind}"
+    )
     if kind == "process":
         builder.add_step("Collect")
     else:
         builder.prop_group("meta").add_attribute("code", "str", "", "").close_group()
-    with builder:
+    with builder:  # noqa
         with builder:
             pass
     revision = builder.template.revision
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError):  # noqa
         with builder:
             builder.finalize()
             raise RuntimeError("retry")
@@ -132,7 +135,9 @@ def test_new_builders_keep_provisional_ids_after_commit(command_client):
         process_template_id = process_template.template.id
     assert process_template.template.id == process_template_id
 
-    with scoped.build_resource_template(name="ID RT", type_names=["sample"]) as resource_template:
+    with scoped.build_resource_template(
+        name="ID RT", type_names=["sample"]
+    ) as resource_template:
         resource_template_id = resource_template.template.id
     assert resource_template.template.id == resource_template_id
 
@@ -331,7 +336,7 @@ def test_stale_resource_write_preserves_first_mutation(command_client):
     second_model = second.get_model()
     second_model.name = "second"
     second.set_model(second_model)
-    with pytest.raises(RecapConflictError):
+    with pytest.raises(RecapConflictError):  # noqa
         with second:
             pass
 

@@ -47,7 +47,15 @@ def _seed_metadata_graph(db_session):
         "source": "header"
     }
     db_session.add_all(
-        [namespace, resource_type, resource_template, process_template, step_template, resource, run]
+        [
+            namespace,
+            resource_type,
+            resource_template,
+            process_template,
+            step_template,
+            resource,
+            run,
+        ]
     )
     db_session.flush()
     return resource, run
@@ -84,9 +92,9 @@ def test_property_and_parameter_metadata_survive_direct_and_embedded_hydration(
     assert not direct.is_loaded("children")
     assert embedded.is_loaded("steps")
     assert not embedded.is_loaded("assigned_resources")
-    assert embedded.steps["Collect"].parameters["Exposure"].values.dwell.metadata_json == {
-        "source": "header"
-    }
+    assert embedded.steps["Collect"].parameters[
+        "Exposure"
+    ].values.dwell.metadata_json == {"source": "header"}
 
     result = QueryResult(
         entity="resource", projection="full", items=[serialize_model(direct)]

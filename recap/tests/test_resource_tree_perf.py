@@ -138,4 +138,6 @@ def test_load_eager_resource_tree_is_multi_root_bounded(client):
     by_name = {tree.name: tree for tree in trees}
     assert {tree.name for tree in trees} == {root.name for root in roots}
     assert all(_walk_depth(by_name[root.name]) == 3 for root in roots)
-    assert counter["n"] <= 19, f"multi-root hydration exceeded batch bound: {counter['n']}"
+    assert counter["n"] <= 19, (
+        f"multi-root hydration exceeded batch bound: {counter['n']}"
+    )

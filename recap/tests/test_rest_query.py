@@ -145,7 +145,9 @@ def test_rest_count_permissions_and_namespace_context(
     ],
     ids=("query", "count", "permissions", "context"),
 )
-def test_rest_namespace_routes_reject_noncanonical_paths(api_client, auth_header, request_call):
+def test_rest_namespace_routes_reject_noncanonical_paths(
+    api_client, auth_header, request_call
+):
     response = request_call(api_client, auth_header)
 
     assert response.status_code == 422
@@ -271,12 +273,16 @@ def test_rest_query_requires_authentication(api_client):
                 "spec": {},
             },
         ),
-        lambda client: client.get("/api/v1/permissions", params={"namespace_path": "test"}),
+        lambda client: client.get(
+            "/api/v1/permissions", params={"namespace_path": "test"}
+        ),
         lambda client: client.get("/api/v1/namespaces/context/test"),
     ],
     ids=("count", "permissions", "namespace-context"),
 )
-def test_rest_security_routes_require_authentication_and_request_id(request_call, api_client):
+def test_rest_security_routes_require_authentication_and_request_id(
+    request_call, api_client
+):
     response = request_call(api_client)
 
     assert response.status_code == 401
@@ -308,12 +314,16 @@ def test_rest_security_routes_require_authentication_and_request_id(request_call
     ],
     ids=("count", "permissions", "namespace-context"),
 )
-def test_rest_security_routes_replace_caller_request_id(request_call, api_client, auth_header):
+def test_rest_security_routes_replace_caller_request_id(
+    request_call, api_client, auth_header
+):
     response = request_call(api_client, {**auth_header, "X-Request-ID": "caller-id"})
 
     assert response.headers["X-Request-ID"] != "caller-id"
     if response.status_code != 200:
-        assert response.headers["X-Request-ID"] == response.json()["error"]["request_id"]
+        assert (
+            response.headers["X-Request-ID"] == response.json()["error"]["request_id"]
+        )
 
 
 def test_rest_query_request_id_is_server_generated(api_client, auth_header):
@@ -364,7 +374,12 @@ def test_canonical_alias_query_uses_stable_entity_and_projection():
     "payload",
     [
         {"entity": "unknown", "projection": "full", "namespace_path": "x", "spec": {}},
-        {"entity": "resource", "projection": "other", "namespace_path": "x", "spec": {}},
+        {
+            "entity": "resource",
+            "projection": "other",
+            "namespace_path": "x",
+            "spec": {},
+        },
     ],
 )
 def test_query_request_rejects_unknown_wire_keys(payload):
@@ -454,7 +469,10 @@ def test_query_service_rejects_invalid_spec():
     from unittest.mock import Mock
 
     request = QueryRequest(
-        entity="resource", projection="full", namespace_path="beamline", spec={"unknown": True}
+        entity="resource",
+        projection="full",
+        namespace_path="beamline",
+        spec={"unknown": True},
     )
 
     with pytest.raises(RecapValidationError):

@@ -48,9 +48,15 @@ def test_create_namespace_uses_registered_route_and_hydrates_response():
     from recap.adapter.rest import RESTAdapter
     from recap.schemas.namespace import NamespaceContext
 
-    resource = NamespaceContext(id=uuid4(), path="beamline/amx", revision=7, metadata={"beamline": "amx"})
+    resource = NamespaceContext(
+        id=uuid4(), path="beamline/amx", revision=7, metadata={"beamline": "amx"}
+    )
     transport = _transport(
-        {**_namespace_body(resource.id), "revision": 7, "metadata": {"beamline": "amx"}},
+        {
+            **_namespace_body(resource.id),
+            "revision": 7,
+            "metadata": {"beamline": "amx"},
+        },
         etag='"7"',
         request_id="req-1",
     )
@@ -93,7 +99,8 @@ def test_request_preserves_transport_request_id():
     from recap.adapter.rest import RESTAdapter
 
     adapter = RESTAdapter(
-        "https://recap.test", _transport=_transport({"ok": True}, request_id="request-4")
+        "https://recap.test",
+        _transport=_transport({"ok": True}, request_id="request-4"),
     )
 
     result = adapter._request("GET", "/api/v1/status")
@@ -110,7 +117,12 @@ def test_update_and_copy_preserve_if_match_routes_and_generated_idempotency_keys
     adapter = RESTAdapter("https://recap.test", _transport=transport)
 
     adapter.update_namespace(
-        namespace_id, 1, {"owner": "amx"}, None, SimpleNamespace(idempotency_key=None), etag='"1"'
+        namespace_id,
+        1,
+        {"owner": "amx"},
+        None,
+        SimpleNamespace(idempotency_key=None),
+        etag='"1"',
     )
     adapter.copy_resource(source, "beamline/amx", changes={"name": "copy"})
 
@@ -157,7 +169,9 @@ def test_execute_hydrates_copy_resource():
     ResourceSchema.model_validate = classmethod(lambda cls, value: result)
     try:
         returned = adapter.execute(
-            CopyResource(source_resource_id=source, destination_namespace_path="beamline/amx"),
+            CopyResource(
+                source_resource_id=source, destination_namespace_path="beamline/amx"
+            ),
             SimpleNamespace(idempotency_key="idem-copy"),
         )
     finally:
@@ -183,7 +197,10 @@ def test_execute_lifecycle_uses_status_route_and_if_match_header():
     from recap.schemas.resource import ResourceTemplateSchema
 
     command = SetLifecycleStatus(
-        object_type="resource_template", object_id=uuid4(), expected_revision=3, status="ACTIVE"
+        object_type="resource_template",
+        object_id=uuid4(),
+        expected_revision=3,
+        status="ACTIVE",
     )
     transport = _transport({"id": str(command.object_id), "revision": 4})
     original = ResourceTemplateSchema.model_validate
@@ -209,14 +226,19 @@ def test_execute_update_resource_hydrates_dynamic_properties():
     from recap.tests.transport_factories import full_resource
 
     resource = full_resource()
-    command = UpdateResource(resource_id=resource.id, expected_revision=1, name=resource.name)
+    command = UpdateResource(
+        resource_id=resource.id, expected_revision=1, name=resource.name
+    )
     transport = _transport(serialize_model(resource))
 
     returned = RESTAdapter("https://recap.test", _transport=transport).execute(
         command, SimpleNamespace(idempotency_key="resource-update")
     )
 
-    assert returned.properties.measurements.values.captured_at.value == resource.properties.measurements.values.captured_at.value
+    assert (
+        returned.properties.measurements.values.captured_at.value
+        == resource.properties.measurements.values.captured_at.value
+    )
     assert transport.request.call_args.kwargs["headers"] == {
         "If-Match": '"1"',
         "Idempotency-Key": "resource-update",
@@ -229,7 +251,9 @@ def test_execute_update_resource_keeps_revision_out_of_request_body():
     from recap.tests.transport_factories import minimal_resource
 
     resource = minimal_resource()
-    command = UpdateResource(resource_id=resource.id, expected_revision=1, name="renamed")
+    command = UpdateResource(
+        resource_id=resource.id, expected_revision=1, name="renamed"
+    )
     transport = _transport(serialize_model(resource))
 
     RESTAdapter("https://recap.test", _transport=transport).execute(
@@ -283,7 +307,9 @@ def test_list_child_namespaces_uses_get_without_write_headers():
     from recap.adapter.rest import RESTAdapter
 
     transport = _transport(["amx", "fmx"])
-    result = RESTAdapter("https://recap.test", _transport=transport).list_child_namespaces("beamline")
+    result = RESTAdapter(
+        "https://recap.test", _transport=transport
+    ).list_child_namespaces("beamline")
 
     transport.request.assert_called_once_with(
         "GET",
@@ -306,25 +332,34 @@ def test_read_operations_send_wire_payloads_and_no_idempotency_headers():
         "groups": [],
         "roles": [],
     }
-    transport = _transport(
-        {"entity": "resource", "projection": "full", "items": []}
-    )
+    transport = _transport({"entity": "resource", "projection": "full", "items": []})
     transport.request.side_effect = [
-        HTTPResult({"entity": "resource", "projection": "full", "items": []}, None, None),
+        HTTPResult(
+            {"entity": "resource", "projection": "full", "items": []}, None, None
+        ),
         HTTPResult(4, None, None),
         HTTPResult(permissions, None, None),
         HTTPResult(_namespace_body(), '"1"', None),
     ]
     adapter = RESTAdapter("https://recap.test", _transport=transport)
 
-    assert adapter.query(
-        ResourceSchema, QuerySpec(filters={"name": "sample"}), namespace_path="beamline/amx"
-    ) == []
-    assert adapter.count(ResourceSchema, QuerySpec(), namespace_path="beamline/amx") == 4
+    assert (
+        adapter.query(
+            ResourceSchema,
+            QuerySpec(filters={"name": "sample"}),
+            namespace_path="beamline/amx",
+        )
+        == []
+    )
+    assert (
+        adapter.count(ResourceSchema, QuerySpec(), namespace_path="beamline/amx") == 4
+    )
     assert isinstance(adapter.permissions("beamline/amx"), ActorPermissions)
     adapter.get_namespace_context("beamline/amx station")
 
-    query_call, count_call, permissions_call, context_call = transport.request.call_args_list
+    query_call, count_call, permissions_call, context_call = (
+        transport.request.call_args_list
+    )
     assert query_call.kwargs["json"]["namespace_path"] == "beamline/amx"
     assert query_call.kwargs["json"]["entity"] == "resource"
     assert query_call.kwargs["json"]["projection"] == "full"
@@ -413,7 +448,9 @@ def test_rest_propagates_normalized_error_metadata(code, error_type):
     )
 
     with pytest.raises(error_type) as caught:
-        RESTAdapter("https://recap.test", _transport=transport).list_child_namespaces("beamline")
+        RESTAdapter("https://recap.test", _transport=transport).list_child_namespaces(
+            "beamline"
+        )
 
     error = caught.value
     assert error.code == code
@@ -428,12 +465,22 @@ def test_rest_propagates_normalized_error_metadata(code, error_type):
 @pytest.mark.parametrize(
     ("status_code", "response_code", "expected_code", "error_type"),
     [
-        (401, "authentication_required", "authentication_required", RecapAuthenticationError),
+        (
+            401,
+            "authentication_required",
+            "authentication_required",
+            RecapAuthenticationError,
+        ),
         (403, "permission_denied", "permission_denied", RecapPermissionDeniedError),
         (404, "not_found", "not_found", RecapNotFoundError),
         (422, "validation_error", "validation_error", RecapValidationError),
         (409, "conflict", "conflict", RecapConflictError),
-        (503, "service_unavailable", "service_unavailable", RecapServiceUnavailableError),
+        (
+            503,
+            "service_unavailable",
+            "service_unavailable",
+            RecapServiceUnavailableError,
+        ),
         (500, "internal_error", "internal_error", RecapInternalError),
         (418, "future_error", "request_error", RecapRequestError),
     ],
@@ -458,9 +505,10 @@ def test_rest_classifies_real_http_error_responses(
             "GET", "https://recap.test/api/v1/namespaces/children/beamline"
         ),
     )
-    with patch.object(transport._client, "request", return_value=response), pytest.raises(
-        error_type
-    ) as caught:
+    with (
+        patch.object(transport._client, "request", return_value=response),
+        pytest.raises(error_type) as caught,
+    ):
         RESTAdapter("https://recap.test", _transport=transport).list_child_namespaces(
             "beamline"
         )
@@ -478,11 +526,14 @@ def test_rest_classifies_real_transport_failure():
     from recap.adapter.rest import RESTAdapter
 
     transport = HTTPTransport("secret")
-    with patch.object(
-        transport._client,
-        "request",
-        side_effect=httpx2.ConnectError("secret connection failure"),
-    ), pytest.raises(RecapConnectionError) as caught:
+    with (
+        patch.object(
+            transport._client,
+            "request",
+            side_effect=httpx2.ConnectError("secret connection failure"),
+        ),
+        pytest.raises(RecapConnectionError) as caught,
+    ):
         RESTAdapter("https://recap.test", _transport=transport).list_child_namespaces(
             "beamline"
         )

@@ -245,7 +245,9 @@ class IdentityMap:
                 ),
             )
 
-    def _raise_on_scalar_conflict(self, current: BaseModel, incoming: BaseModel) -> None:  # noqa: C901
+    def _raise_on_scalar_conflict(  # noqa: C901
+        self, current: BaseModel, incoming: BaseModel
+    ) -> None:
         relation_fields = getattr(type(current), "_relation_fields", frozenset())
         for name in sorted(relation_fields):
             if not (
@@ -395,7 +397,10 @@ class IdentityMap:
         if isinstance(value, dict):
             return tuple(
                 sorted(
-                    (key, self._relation_signature_inner(item, _seen, _cycle_hits, _memo))
+                    (
+                        key,
+                        self._relation_signature_inner(item, _seen, _cycle_hits, _memo),
+                    )
                     for key, item in value.items()
                 )
             )
@@ -550,7 +555,9 @@ class IdentityMap:
                 match = candidate_by_id.get(
                     (self._family(item), getattr(item, "id", None))
                 )
-                if match is None or not self._model_is_compatible_extension(item, match):
+                if match is None or not self._model_is_compatible_extension(
+                    item, match
+                ):
                     return False
             return True
         return False
@@ -635,7 +642,7 @@ class IdentityMap:
                 value = model_dict.get(name)
                 # Only models/containers can carry interned identities; scalar
                 # fields (ids, names, dates) never do, so skip the dispatch.
-                if not isinstance(value, (BaseModel, list, dict)):
+                if not isinstance(value, (BaseModel | list | dict)):
                     continue
                 canonical = self._canonicalize_value(value)
                 if canonical is not value:

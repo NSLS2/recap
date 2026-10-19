@@ -24,7 +24,9 @@ class HTTPResult:
 
 class HTTPTransport:
     def __init__(self, api_key: str | SecretStr | None, *, timeout: float = 30.0):
-        self._api_key = api_key if isinstance(api_key, SecretStr) else SecretStr(api_key or "")
+        self._api_key = (
+            api_key if isinstance(api_key, SecretStr) else SecretStr(api_key or "")
+        )
         self._client = httpx.Client(timeout=timeout)
         self._closed = False
 
@@ -99,7 +101,10 @@ class HTTPTransport:
                 or not code
                 or not isinstance(message, str)
                 or not message
-                or (envelope_request_id is not None and not isinstance(envelope_request_id, str))
+                or (
+                    envelope_request_id is not None
+                    and not isinstance(envelope_request_id, str)
+                )
             ):
                 raise error_from_code(
                     "request_error",

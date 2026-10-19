@@ -68,6 +68,7 @@ def create_app(
     database_config = _DatabaseConfiguration(database_url)
     apply_migrations(database_url)
     engine, session_factory = create_engine_and_session_factory(database_config)
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:

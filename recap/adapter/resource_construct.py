@@ -195,9 +195,8 @@ class ResourceSchemaHydrator:
                 }
                 loaded_now["children"] = True
 
-            if (
-                requested["attribute_group_templates"]
-                and not schema.is_loaded("attribute_group_templates")
+            if requested["attribute_group_templates"] and not schema.is_loaded(
+                "attribute_group_templates"
             ):
                 schema.attribute_group_templates = [
                     self._construct_attribute_group_template(group)

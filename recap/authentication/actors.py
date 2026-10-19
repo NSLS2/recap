@@ -8,9 +8,7 @@ def single_user_actor(
     return RequestActor(
         actor_id="single-user",
         kind=ActorKind.USER,
-        identities=(
-            ProviderIdentity(provider=provider, subject="single-user"),
-        ),
+        identities=(ProviderIdentity(provider=provider, subject="single-user"),),
         credential_scopes=frozenset(Scope),
         namespace_restrictions=None,
         credential_fingerprint=credential_fingerprint,

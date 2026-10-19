@@ -74,7 +74,9 @@ class StepTemplateSchema(LoadAwareMixin, CommonFields):
     _relation_fields = frozenset({"attribute_group_templates", "resource_slots"})
 
     def set_loaded_relations(self, loaded_relations, *, on_unloaded="warn"):
-        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
+        LoadAwareMixin.set_loaded_relations(
+            self, loaded_relations, on_unloaded=on_unloaded
+        )
         return self
 
 
@@ -368,7 +370,9 @@ class StepSchema(LoadAwareMixin, CommonFields):
     _relation_fields = frozenset({"template", "parameters", "children", "resources"})
 
     def set_loaded_relations(self, loaded_relations, *, on_unloaded="warn"):
-        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
+        LoadAwareMixin.set_loaded_relations(
+            self, loaded_relations, on_unloaded=on_unloaded
+        )
         return self
 
     def generate_child(self):

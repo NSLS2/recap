@@ -849,7 +849,9 @@ class ProcessRunBuilder:
         if step_schema is None:
             raise NoResultFound("Step not found with name: {step_name} ")
         if isinstance(step_schema.parameters, dict) and not step_schema.parameters:
-            self._steps = list(self._reload_process_run(self.process_run.id).steps.values())
+            self._steps = list(
+                self._reload_process_run(self.process_run.id).steps.values()
+            )
             step_schema = next(
                 (step for step in self._steps if step.name == step_name), step_schema
             )

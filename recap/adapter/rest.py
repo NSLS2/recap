@@ -48,11 +48,15 @@ class RESTAdapter:
             raise TypeError("api_key is required when transport is not provided")
         self._base_url = base_url.rstrip("/")
         self._transport = (
-            _transport if _transport is not None else HTTPTransport(api_key, timeout=timeout)
+            _transport
+            if _transport is not None
+            else HTTPTransport(api_key, timeout=timeout)
         )
 
     def __repr__(self) -> str:
-        return f"RESTAdapter(base_url={self._base_url!r}, transport={self._transport!r})"
+        return (
+            f"RESTAdapter(base_url={self._base_url!r}, transport={self._transport!r})"
+        )
 
     def close(self) -> None:
         self._transport.close()
@@ -77,7 +81,9 @@ class RESTAdapter:
         headers: dict[str, str] = {}
         if etag is not None:
             headers["If-Match"] = etag
-        if idempotent and (idempotency_key is not None or method in {"PUT", "POST", "PATCH"}):
+        if idempotent and (
+            idempotency_key is not None or method in {"PUT", "POST", "PATCH"}
+        ):
             headers["Idempotency-Key"] = idempotency_key or token_urlsafe(18)
         url = f"{self._base_url}{path}"
         request_kwargs = {"json": body, "headers": headers}
@@ -131,7 +137,10 @@ class RESTAdapter:
     ) -> list[SchemaT]:
         request = QueryRequest.from_query(schema, spec, namespace_path=namespace_path)
         response = self._request(
-            "POST", "/api/v1/query", body=request.model_dump(mode="json"), idempotent=False
+            "POST",
+            "/api/v1/query",
+            body=request.model_dump(mode="json"),
+            idempotent=False,
         )
         try:
             result = QueryResult.model_validate(response.entity)
@@ -140,7 +149,8 @@ class RESTAdapter:
             raise
         except (KeyError, TypeError, ValueError, ValidationError):
             raise RecapProtocolError(
-                "Malformed REST query response", url=f"{self._base_url}/api/v1/query",
+                "Malformed REST query response",
+                url=f"{self._base_url}/api/v1/query",
                 request_id=response.request_id,
             ) from None
 
@@ -149,30 +159,39 @@ class RESTAdapter:
     ) -> int:
         request = QueryRequest.from_query(schema, spec, namespace_path=namespace_path)
         response = self._request(
-            "POST", "/api/v1/query/count", body=request.model_dump(mode="json"), idempotent=False
+            "POST",
+            "/api/v1/query/count",
+            body=request.model_dump(mode="json"),
+            idempotent=False,
         )
         if not isinstance(response.entity, int) or isinstance(response.entity, bool):
             raise RecapProtocolError(
-                "Malformed REST count response", url=f"{self._base_url}/api/v1/query/count",
+                "Malformed REST count response",
+                url=f"{self._base_url}/api/v1/query/count",
                 request_id=response.request_id,
             )
         return response.entity
 
     def permissions(self, namespace_path: str) -> ActorPermissions:
         response = self._request(
-            "GET", "/api/v1/permissions", params={"namespace_path": namespace_path},
+            "GET",
+            "/api/v1/permissions",
+            params={"namespace_path": namespace_path},
             idempotent=False,
         )
         try:
             return ActorPermissions.model_validate(response.entity)
         except (TypeError, ValueError, ValidationError):
             raise RecapProtocolError(
-                "Malformed REST permissions response", url=f"{self._base_url}/api/v1/permissions",
+                "Malformed REST permissions response",
+                url=f"{self._base_url}/api/v1/permissions",
                 request_id=response.request_id,
             ) from None
 
     def get_namespace_context(self, path: str) -> NamespaceContext:
-        encoded = "/".join(quote(segment, safe="") for segment in path.strip("/").split("/"))
+        encoded = "/".join(
+            quote(segment, safe="") for segment in path.strip("/").split("/")
+        )
         route = f"/api/v1/namespaces/context/{encoded}"
         response = self._request("GET", route, idempotent=False)
         try:
@@ -182,7 +201,8 @@ class RESTAdapter:
             return context
         except (TypeError, ValueError, ValidationError):
             raise RecapProtocolError(
-                "Malformed REST namespace context response", url=f"{self._base_url}{route}",
+                "Malformed REST namespace context response",
+                url=f"{self._base_url}{route}",
                 request_id=response.request_id,
             ) from None
 

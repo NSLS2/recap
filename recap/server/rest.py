@@ -154,9 +154,7 @@ def namespace_context(
     path = _canonical_namespace_path(namespace_path)
     if not _policy(request).can_discover_namespace(actor, path):
         raise AuthorizationDenied(conceal=True)
-    context = _query_service(request).backend.get_namespace_context(
-        path
-    )
+    context = _query_service(request).backend.get_namespace_context(path)
     response.headers["ETag"] = f'"{context.revision}"'
     return context
 
@@ -177,9 +175,7 @@ def create_namespace(
         CommandRegistration, Depends(command_registration("create_namespace"))
     ],
 ) -> NamespaceSchema:
-    command = registration.decode_command(
-        {"namespace_path": namespace_path}, {}, body
-    )
+    command = registration.decode_command({"namespace_path": namespace_path}, {}, body)
     result = CommandService(request.app.state.session_factory).execute(
         command, _context(request, actor, idempotency_key)
     )
@@ -251,9 +247,7 @@ def create_process_template(
         CommandRegistration, Depends(command_registration("create_process_template"))
     ],
 ) -> ProcessTemplateSchema:
-    command = registration.decode_command(
-        {"namespace_path": namespace_path}, {}, body
-    )
+    command = registration.decode_command({"namespace_path": namespace_path}, {}, body)
     result = CommandService(request.app.state.session_factory).execute(
         command, _context(request, actor, idempotency_key)
     )
@@ -298,9 +292,7 @@ def create_resource_template(
         CommandRegistration, Depends(command_registration("create_resource_template"))
     ],
 ) -> ResourceTemplateSchema:
-    command = registration.decode_command(
-        {"namespace_path": namespace_path}, {}, body
-    )
+    command = registration.decode_command({"namespace_path": namespace_path}, {}, body)
     result = CommandService(request.app.state.session_factory).execute(
         command, _context(request, actor, idempotency_key)
     )
@@ -369,9 +361,7 @@ def create_resource(
         CommandRegistration, Depends(command_registration("create_resource"))
     ],
 ) -> ResourceSchema:
-    command = registration.decode_command(
-        {"namespace_path": namespace_path}, {}, body
-    )
+    command = registration.decode_command({"namespace_path": namespace_path}, {}, body)
     result = CommandService(request.app.state.session_factory).execute(
         command,
         _context(request, actor, idempotency_key),
@@ -418,9 +408,7 @@ def create_process_run(
         CommandRegistration, Depends(command_registration("create_process_run"))
     ],
 ) -> ProcessRunSchema:
-    command = registration.decode_command(
-        {"namespace_path": namespace_path}, {}, body
-    )
+    command = registration.decode_command({"namespace_path": namespace_path}, {}, body)
     result = CommandService(request.app.state.session_factory).execute(
         command, _context(request, actor, idempotency_key)
     )

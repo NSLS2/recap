@@ -35,6 +35,7 @@ def draft(labels=None):
         ],
     }
 
+
 def test_post_and_patch_process_template_routes(
     api_client, idempotency_headers, create_namespace
 ):
@@ -55,7 +56,9 @@ def test_post_and_patch_process_template_routes(
 
     updated = api_client.patch(
         f"/api/v1/process-templates/{created.json()['id']}",
-        headers=idempotency_headers("template-2", **{"If-Match": created.headers["ETag"]}),
+        headers=idempotency_headers(
+            "template-2", **{"If-Match": created.headers["ETag"]}
+        ),
         json=draft(["updated"]),
     )
     assert updated.status_code == 200

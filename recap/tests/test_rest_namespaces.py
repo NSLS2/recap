@@ -148,8 +148,11 @@ def test_nested_namespace_requires_explicit_parent(api_client, idempotency_heade
 def test_list_namespace_children_route_returns_relative_direct_children(
     api_client, auth_header, idempotency_headers
 ):
-    for path, key in (("beamlines", "ns-1"), ("beamlines/amx", "ns-2"),
-                      ("beamlines/amx/proposals", "ns-3")):
+    for path, key in (
+        ("beamlines", "ns-1"),
+        ("beamlines/amx", "ns-2"),
+        ("beamlines/amx/proposals", "ns-3"),
+    ):
         response = api_client.put(
             f"/api/v1/namespaces/{path}",
             headers=idempotency_headers(key),
@@ -157,7 +160,9 @@ def test_list_namespace_children_route_returns_relative_direct_children(
         )
         assert response.status_code == 201
 
-    response = api_client.get("/api/v1/namespaces/children/beamlines", headers=auth_header)
+    response = api_client.get(
+        "/api/v1/namespaces/children/beamlines", headers=auth_header
+    )
 
     assert response.status_code == 200
     assert response.json() == ["amx"]

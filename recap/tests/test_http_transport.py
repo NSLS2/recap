@@ -74,9 +74,10 @@ def test_transport_uses_custom_timeout():
 )
 def test_request_error_becomes_connection_error_without_secret(error):
     transport = HTTPTransport("secret")
-    with patch.object(transport._client, "request", side_effect=error), pytest.raises(
-        RecapConnectionError
-    ) as caught:
+    with (
+        patch.object(transport._client, "request", side_effect=error),
+        pytest.raises(RecapConnectionError) as caught,
+    ):
         transport.request("GET", EXAMPLE_URL)
 
     assert "secret" not in str(caught.value)
@@ -84,7 +85,8 @@ def test_request_error_becomes_connection_error_without_secret(error):
 
 
 @pytest.mark.parametrize(
-    "authorization", ["Authorization", "authorization", "AUTHORIZATION", "aUtHoRiZaTiOn"]
+    "authorization",
+    ["Authorization", "authorization", "AUTHORIZATION", "aUtHoRiZaTiOn"],
 )
 def test_caller_authorization_cannot_override_transport_auth(authorization):
     transport = HTTPTransport("owned-secret")
@@ -107,9 +109,10 @@ def test_secret_is_absent_from_repr_and_protocol_errors():
     transport = HTTPTransport(SecretStr("secret"))
     response = make_response(200, content=b"secret malformed")
 
-    with patch.object(transport._client, "request", return_value=response), pytest.raises(
-        RecapProtocolError
-    ) as caught:
+    with (
+        patch.object(transport._client, "request", return_value=response),
+        pytest.raises(RecapProtocolError) as caught,
+    ):
         transport.request("GET", EXAMPLE_URL)
 
     assert "secret" not in repr(transport)
@@ -146,9 +149,10 @@ def test_status_error_uses_public_error_category(code, error_type):
     )
     transport = HTTPTransport("secret")
 
-    with patch.object(transport._client, "request", return_value=response), pytest.raises(
-        error_type
-    ) as caught:
+    with (
+        patch.object(transport._client, "request", return_value=response),
+        pytest.raises(error_type) as caught,
+    ):
         transport.request("GET", EXAMPLE_URL)
 
     assert caught.value.status_code == 409
@@ -163,9 +167,10 @@ def test_header_request_id_wins_over_envelope():
     )
     transport = HTTPTransport(None)
 
-    with patch.object(transport._client, "request", return_value=response), pytest.raises(
-        RecapConflictError
-    ) as caught:
+    with (
+        patch.object(transport._client, "request", return_value=response),
+        pytest.raises(RecapConflictError) as caught,
+    ):
         transport.request("GET", EXAMPLE_URL)
 
     assert caught.value.request_id == "header-id"
@@ -179,9 +184,10 @@ def test_empty_header_request_id_wins_over_envelope():
     )
     transport = HTTPTransport(None)
 
-    with patch.object(transport._client, "request", return_value=response), pytest.raises(
-        RecapConflictError
-    ) as caught:
+    with (
+        patch.object(transport._client, "request", return_value=response),
+        pytest.raises(RecapConflictError) as caught,
+    ):
         transport.request("GET", EXAMPLE_URL)
 
     assert caught.value.request_id == ""
@@ -200,9 +206,10 @@ def test_unknown_error_code_falls_back_to_request_error():
     )
     transport = HTTPTransport("secret")
 
-    with patch.object(transport._client, "request", return_value=response), pytest.raises(
-        RecapRequestError
-    ) as caught:
+    with (
+        patch.object(transport._client, "request", return_value=response),
+        pytest.raises(RecapRequestError) as caught,
+    ):
         transport.request("GET", EXAMPLE_URL)
 
     assert type(caught.value) is RecapRequestError
@@ -224,9 +231,10 @@ def test_external_error_fields_are_redacted_before_construction():
     )
     transport = HTTPTransport(secret)
 
-    with patch.object(transport._client, "request", return_value=response), pytest.raises(
-        RecapConflictError
-    ) as caught:
+    with (
+        patch.object(transport._client, "request", return_value=response),
+        pytest.raises(RecapConflictError) as caught,
+    ):
         transport.request("GET", url)
 
     assert caught.value.url == "https://" + "**********.example/**********"
@@ -234,14 +242,17 @@ def test_external_error_fields_are_redacted_before_construction():
     assert caught.value.request_id == "header-**********"
 
 
-@pytest.mark.parametrize("body", [None, {}, {"error": {}}, {"error": "bad"}, {"error": {"code": "conflict"}}])
+@pytest.mark.parametrize(
+    "body", [None, {}, {"error": {}}, {"error": "bad"}, {"error": {"code": "conflict"}}]
+)
 def test_malformed_status_body_becomes_safe_request_error(body):
     response = make_response(500, body)
     transport = HTTPTransport("secret")
 
-    with patch.object(transport._client, "request", return_value=response), pytest.raises(
-        RecapRequestError
-    ) as caught:
+    with (
+        patch.object(transport._client, "request", return_value=response),
+        pytest.raises(RecapRequestError) as caught,
+    ):
         transport.request("GET", EXAMPLE_URL)
 
     assert caught.value.message == "Malformed error response"
@@ -252,9 +263,10 @@ def test_malformed_success_json_becomes_protocol_error():
     response = make_response(200, content=b"not json secret")
     transport = HTTPTransport("secret")
 
-    with patch.object(transport._client, "request", return_value=response), pytest.raises(
-        RecapProtocolError
-    ) as caught:
+    with (
+        patch.object(transport._client, "request", return_value=response),
+        pytest.raises(RecapProtocolError) as caught,
+    ):
         transport.request("GET", EXAMPLE_URL)
 
     assert "not json secret" not in str(caught.value)

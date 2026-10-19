@@ -36,6 +36,7 @@ class NamespaceContext(NamespaceRef):
             self.etag = f'"{self.revision}"'
         return self
 
+
 class NamespaceSchema(CommonFields):
     """Persisted namespace with lifecycle, hierarchy, and metadata fields."""
 

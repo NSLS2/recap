@@ -465,11 +465,14 @@ def test_failed_resource_upgrade_clears_guard_and_preserves_unloaded_flag(db_ses
         on_unloaded="raise",
     )[0]
 
-    with patch.object(
-        hydrator,
-        "_construct_property_schema",
-        side_effect=RuntimeError("property hydration failed"),
-    ), pytest.raises(RuntimeError, match="property hydration failed"):
+    with (
+        patch.object(
+            hydrator,
+            "_construct_property_schema",
+            side_effect=RuntimeError("property hydration failed"),
+        ),
+        pytest.raises(RuntimeError, match="property hydration failed"),
+    ):
         hydrator.construct_many(
             [parent],
             include_template=False,

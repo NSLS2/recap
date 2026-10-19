@@ -102,7 +102,9 @@ class AttributeGroupTemplateSchema(LoadAwareMixin, CommonFields):
     _relation_fields = frozenset({"attribute_templates"})
 
     def set_loaded_relations(self, loaded_relations, *, on_unloaded="warn"):
-        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
+        LoadAwareMixin.set_loaded_relations(
+            self, loaded_relations, on_unloaded=on_unloaded
+        )
         return self
 
 

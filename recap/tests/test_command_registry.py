@@ -147,7 +147,9 @@ def test_lifecycle_response_decoder_rejects_unknown_object_type():
 
 
 def test_pilot_command_registry_rejects_unexpected_registered_types():
-    with pytest.raises(CommandValidationError, match="Unexpected command registrations"):
+    with pytest.raises(
+        CommandValidationError, match="Unexpected command registrations"
+    ):
         COMMAND_REGISTRY.validate_complete({UpdateResource})
 
 
@@ -204,11 +206,11 @@ def test_namespace_commands_have_registrations_and_complete_expected_set():
             CreateProcessTemplate,
             CreateProcessRun,
             UpdateResourceTemplate,
-        UpdateProcessTemplate,
-        UpdateProcessRun,
-        CreateNamespace,
-        UpdateNamespace,
-        SetLifecycleStatus,
+            UpdateProcessTemplate,
+            UpdateProcessRun,
+            CreateNamespace,
+            UpdateNamespace,
+            SetLifecycleStatus,
         }
     )
 
@@ -272,14 +274,38 @@ def test_namespace_response_decoder_preserves_etag():
 
 def test_resource_registry_covers_create_copy_and_templates():
     expected = {
-        CreateResource: ("POST", "/api/v1/resources/{namespace_path:path}", CreateResourceRequest, ResourceSchema),
-        CopyResource: ("POST", "/api/v1/resources/{source_resource_id}/copies", CopyResourceRequest, ResourceSchema),
-        CreateResourceTemplate: ("POST", "/api/v1/resource-templates/{namespace_path:path}", ResourceTemplateDraft, ResourceTemplateSchema),
-        UpdateResourceTemplate: ("PATCH", "/api/v1/resource-templates/{template_id}", ResourceTemplateDraft, ResourceTemplateSchema),
+        CreateResource: (
+            "POST",
+            "/api/v1/resources/{namespace_path:path}",
+            CreateResourceRequest,
+            ResourceSchema,
+        ),
+        CopyResource: (
+            "POST",
+            "/api/v1/resources/{source_resource_id}/copies",
+            CopyResourceRequest,
+            ResourceSchema,
+        ),
+        CreateResourceTemplate: (
+            "POST",
+            "/api/v1/resource-templates/{namespace_path:path}",
+            ResourceTemplateDraft,
+            ResourceTemplateSchema,
+        ),
+        UpdateResourceTemplate: (
+            "PATCH",
+            "/api/v1/resource-templates/{template_id}",
+            ResourceTemplateDraft,
+            ResourceTemplateSchema,
+        ),
     }
     for command_type, values in expected.items():
         registration = COMMAND_REGISTRY.by_type(command_type)
-        assert (registration.method, registration.route_template, registration.request_model) == values[:3]
+        assert (
+            registration.method,
+            registration.route_template,
+            registration.request_model,
+        ) == values[:3]
         assert registration.decode_response is not None
 
 
@@ -363,11 +389,20 @@ def test_resource_template_codecs_unwrap_draft_and_use_if_match():
     draft = ResourceTemplateDraft(name="sample", version="1", type_names=[])
     create = CreateResourceTemplate(namespace_path="beamline", draft=draft)
     encoded = COMMAND_REGISTRY.by_command(create).encode_request(create)
-    assert encoded.body == {"name": "sample", "version": "1", "labels": [], "type_names": [], "property_groups": [], "children": []}
+    assert encoded.body == {
+        "name": "sample",
+        "version": "1",
+        "labels": [],
+        "type_names": [],
+        "property_groups": [],
+        "children": [],
+    }
     assert encoded.path == "/api/v1/resource-templates/beamline"
 
     template_id = uuid4()
-    update = UpdateResourceTemplate(template_id=template_id, expected_revision=3, draft=draft)
+    update = UpdateResourceTemplate(
+        template_id=template_id, expected_revision=3, draft=draft
+    )
     encoded = COMMAND_REGISTRY.by_command(update).encode_request(update)
     assert encoded.body == draft.model_dump(mode="json")
     assert encoded.etag == '"3"'
@@ -421,10 +456,18 @@ def test_process_template_codecs_unwrap_draft_and_use_if_match():
     draft = ProcessTemplateDraft(name="screen", version="1")
     create = CreateProcessTemplate(namespace_path="beamline/amx", draft=draft)
     encoded = COMMAND_REGISTRY.by_command(create).encode_request(create)
-    assert encoded.body == {"name": "screen", "version": "1", "labels": [], "resource_slots": [], "steps": []}
+    assert encoded.body == {
+        "name": "screen",
+        "version": "1",
+        "labels": [],
+        "resource_slots": [],
+        "steps": [],
+    }
     assert encoded.path == "/api/v1/process-templates/beamline/amx"
 
-    update = UpdateProcessTemplate(template_id=uuid4(), expected_revision=3, draft=draft)
+    update = UpdateProcessTemplate(
+        template_id=uuid4(), expected_revision=3, draft=draft
+    )
     encoded = COMMAND_REGISTRY.by_command(update).encode_request(update)
     assert encoded.body == draft.model_dump(mode="json")
     assert encoded.etag == '"3"'
@@ -433,9 +476,7 @@ def test_process_template_codecs_unwrap_draft_and_use_if_match():
 
 def test_process_run_codecs_keep_revision_in_if_match_only():
     template_id = uuid4()
-    draft = ProcessRunDraft(
-        name="run-1", description="first", template_id=template_id
-    )
+    draft = ProcessRunDraft(name="run-1", description="first", template_id=template_id)
     create = CreateProcessRun(namespace_path="beamline/amx", draft=draft)
     encoded = COMMAND_REGISTRY.by_command(create).encode_request(create)
     assert encoded.body == {
@@ -510,7 +551,9 @@ def test_process_run_route_decoder_reads_if_match_and_forbids_unknown_body_field
 
 
 def test_service_dispatches_process_run_via_registered_handler(monkeypatch):
-    command = UpdateProcessRun(process_run_id=uuid4(), expected_revision=1, description="x")
+    command = UpdateProcessRun(
+        process_run_id=uuid4(), expected_revision=1, description="x"
+    )
     result = object()
     calls = []
 
@@ -520,11 +563,13 @@ def test_service_dispatches_process_run_via_registered_handler(monkeypatch):
 
     monkeypatch.setattr(CommandService, "update_process_run", handler)
     assert CommandService(None).execute(command, context=object()) is result
-    assert calls == [{
-        "process_run_id": command.process_run_id,
-        "expected_revision": 1,
-        "description": "x",
-        "status": None,
-        "assignments": None,
-        "steps": None,
-    }]
+    assert calls == [
+        {
+            "process_run_id": command.process_run_id,
+            "expected_revision": 1,
+            "description": "x",
+            "status": None,
+            "assignments": None,
+            "steps": None,
+        }
+    ]

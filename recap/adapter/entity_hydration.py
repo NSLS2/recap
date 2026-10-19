@@ -106,7 +106,9 @@ class EntityHydrationContext:
     ) -> AttributeTemplateSchema:
         cached = self.attr_template_cache.get(template.id)
         if cached is None:
-            cached = AttributeTemplateSchema.model_validate(template, from_attributes=True)
+            cached = AttributeTemplateSchema.model_validate(
+                template, from_attributes=True
+            )
             self.attr_template_cache[template.id] = cached
         return cached
 
@@ -127,10 +129,14 @@ class EntityHydrationContext:
         cached.set_loaded_relations({"attribute_templates": True})
         return cached
 
-    def construct_resource_type(self, resource_type: ResourceType) -> ResourceTypeSchema:
+    def construct_resource_type(
+        self, resource_type: ResourceType
+    ) -> ResourceTypeSchema:
         cached = self.resource_type_cache.get(resource_type.id)
         if cached is None:
-            cached = ResourceTypeSchema.model_validate(resource_type, from_attributes=True)
+            cached = ResourceTypeSchema.model_validate(
+                resource_type, from_attributes=True
+            )
             self.resource_type_cache[resource_type.id] = cached
         return cached
 
@@ -214,7 +220,8 @@ class EntityHydrationContext:
         try:
             if not schema.is_loaded("resource_slots"):
                 schema.resource_slots = [
-                    self.construct_resource_slot(item) for item in template.resource_slots
+                    self.construct_resource_slot(item)
+                    for item in template.resource_slots
                 ]
                 loaded_now["resource_slots"] = True
             if not schema.is_loaded("step_templates"):
@@ -259,8 +266,12 @@ class EntityHydrationContext:
         values_model = self.build_param_values_model(group)
         value_fields = {
             at.slug: AttributeValueSchema.model_construct(
-                value=param._values[at.name].value if at.name in param._values else None,
-                unit=param._values[at.name].unit if at.name in param._values else at.unit,
+                value=param._values[at.name].value
+                if at.name in param._values
+                else None,
+                unit=param._values[at.name].unit
+                if at.name in param._values
+                else at.unit,
                 metadata_json=(
                     param._values[at.name].metadata_json
                     if at.name in param._values

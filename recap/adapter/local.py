@@ -507,7 +507,8 @@ class LocalBackend(
                 params[param.template.slug] = (
                     values_model,
                     Field(
-                        default_factory=lambda vm=values_model, values=raw_values: vm.model_validate(values),
+                        default_factory=lambda vm=values_model,
+                        values=raw_values: vm.model_validate(values),
                         alias=param.template.name,
                     ),
                 )
@@ -730,8 +731,8 @@ class LocalBackend(
         subtree_ids = [
             value if isinstance(value, UUID) else UUID(str(value))
             for value in session.execute(
-            text(
-                """
+                text(
+                    """
                 WITH RECURSIVE resource_subtree(id) AS (
                     SELECT id FROM resource WHERE id IN :root_ids
                     UNION ALL
@@ -741,18 +742,22 @@ class LocalBackend(
                 )
                 SELECT id FROM resource_subtree
                 """
-            ).bindparams(
-                bindparam(
-                    "root_ids",
-                    expanding=True,
-                    type_=Resource.__table__.c.id.type,
-                )
-            ),
-            {"root_ids": root_ids},
-            ).scalars().all()
+                ).bindparams(
+                    bindparam(
+                        "root_ids",
+                        expanding=True,
+                        type_=Resource.__table__.c.id.type,
+                    )
+                ),
+                {"root_ids": root_ids},
+            )
+            .scalars()
+            .all()
         ]
-        stmt = select(Resource).where(Resource.id.in_(subtree_ids)).options(
-            *self._resource_subtree_loaders()
+        stmt = (
+            select(Resource)
+            .where(Resource.id.in_(subtree_ids))
+            .options(*self._resource_subtree_loaders())
         )
         return list(session.scalars(stmt).unique())
 
@@ -1039,7 +1044,8 @@ class LocalBackend(
                     include_steps=include_steps,
                     include_step_parameters=include_step_parameters,
                     include_resources=include_resources,
-                    include_template=spec.load_mode == "eager" or "template" in spec.preloads,
+                    include_template=spec.load_mode == "eager"
+                    or "template" in spec.preloads,
                     full=spec.load_mode == "eager",
                     on_unloaded=spec.on_unloaded or "warn",
                     children_map=children_map,
@@ -1095,7 +1101,8 @@ class LocalBackend(
                             **{
                                 name: value
                                 for name, value in obj.__dict__.items()
-                                if name in schema.model_fields and name not in relation_fields
+                                if name in schema.model_fields
+                                and name not in relation_fields
                             }
                         ),
                         schema,

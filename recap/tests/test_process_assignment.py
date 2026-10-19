@@ -63,7 +63,8 @@ def test_assign_resource_prevents_duplicate_slot_usage(client):
         builder.assign_resource("slot-z", res1)
         run_id = builder.process_run.id
 
-    with pytest.raises(ValueError, match="already occupied"), client.build_process_run(
-        process_run_id=run_id
-    ) as builder:
-            builder.assign_resource("slot-z", res2)
+    with (
+        pytest.raises(ValueError, match="already occupied"),
+        client.build_process_run(process_run_id=run_id) as builder,
+    ):
+        builder.assign_resource("slot-z", res2)

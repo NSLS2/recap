@@ -83,7 +83,9 @@ def _normalize_expand(expand: bool | None, load: LoadInput) -> LoadMode:
             stacklevel=3,
         )
         if load not in ("none", "eager"):
-            raise ValueError("expand=True cannot be combined with deprecated load='full'")
+            raise ValueError(
+                "expand=True cannot be combined with deprecated load='full'"
+            )
         return "eager"
     return _normalize_load(load)
 
@@ -480,7 +482,9 @@ class BaseQuery(Generic[SchemaT]):
         exporter = default_exporter_registry.get(format)
         items = self._execute()
         if any(not isinstance(item, BaseModel) for item in items):
-            raise TypeError("Export requires BaseModel entity results, not scalar counts")
+            raise TypeError(
+                "Export requires BaseModel entity results, not scalar counts"
+            )
         return exporter.export(ExportContext(query=self, items=items), destination)
 
 

@@ -36,7 +36,9 @@ def benchmark(
 ) -> None:
     models, local_seconds = timed(lambda: query_factory().all(), repeats)
     _, schema_seconds = timed(
-        lambda: [schema.model_validate(model.model_dump(mode="python")) for model in models],
+        lambda: [
+            schema.model_validate(model.model_dump(mode="python")) for model in models
+        ],
         repeats,
     )
     payload, dump_seconds = timed(
@@ -54,9 +56,7 @@ def benchmark(
         else list(transport_models),
         repeats,
     )
-    _, identity_seconds = timed(
-        lambda: _merge_canonical(transport_models), repeats
-    )
+    _, identity_seconds = timed(lambda: _merge_canonical(transport_models), repeats)
     count = len(models)
     print(
         f"{label}: count={count} "
@@ -107,9 +107,7 @@ def _benchmark_client(client: RecapClient) -> RecapClient:
     with scoped.build_process_template(process_name, "1.0") as template:
         template.add_step("Collect")
         template.activate()
-    with scoped.build_process_run(
-        "run-0", "benchmark", process_name, "1.0"
-    ) as run:
+    with scoped.build_process_run("run-0", "benchmark", process_name, "1.0") as run:
         run.finalize()
     return scoped
 

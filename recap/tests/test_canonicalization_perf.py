@@ -112,9 +112,7 @@ def _well(i: int, template: ResourceTemplateSchema) -> ResourceSchema:
 def _make_plate(well_count: int) -> ResourceSchema:
     """A plate whose wells all share one canonical well template."""
     template = _make_well_template()
-    wells = {
-        f"well-{i:02d}": _well(i, template) for i in range(well_count)
-    }
+    wells = {f"well-{i:02d}": _well(i, template) for i in range(well_count)}
     plate = ResourceSchema.model_construct(
         id=uuid4(),
         create_date=datetime(2026, 1, 1),
@@ -360,4 +358,3 @@ def test_requery_signature_hashing_is_occurrence_independent():
         f"{requeries} re-queries "
         f"({(large - small) / (extra_wells * requeries):.1f} per well per re-query)"
     )
-

@@ -315,19 +315,21 @@ def test_resource_round_trip_preserves_hydrated_array_override_and_metadata():
     )
     resource = minimal_resource()
     resource.template.attribute_group_templates = [group]
-    resource.properties = {"Measurements": PropertySchema(
-        id=uuid4(),
-        create_date=STAMP,
-        modified_date=STAMP,
-        template=group,
-        values={
-            "Samples": {
-                "value": [1, 1],
-                "unit": "mL",
-                "metadata_json": {"sample": "override"},
-            }
-        },
-    )}
+    resource.properties = {
+        "Measurements": PropertySchema(
+            id=uuid4(),
+            create_date=STAMP,
+            modified_date=STAMP,
+            template=group,
+            values={
+                "Samples": {
+                    "value": [1, 1],
+                    "unit": "mL",
+                    "metadata_json": {"sample": "override"},
+                }
+            },
+        )
+    }
     resource.set_loaded_relations({"children": True, "properties": True})
 
     payload = serialize_model(resource)
@@ -343,9 +345,7 @@ def test_resource_round_trip_preserves_hydrated_array_override_and_metadata():
 
     [rehydrated] = hydrate_result(
         ResourceSchema,
-        QueryResult(
-            schema_name="ResourceSchema", items=[serialize_model(hydrated)]
-        ),
+        QueryResult(schema_name="ResourceSchema", items=[serialize_model(hydrated)]),
     )
     assert rehydrated.properties.measurements.values.samples.value == [1, 1]
 

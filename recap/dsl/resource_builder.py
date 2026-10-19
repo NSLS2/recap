@@ -344,7 +344,8 @@ class ResourceBuilder:
             and (
                 self._draft is None
                 or self._resource is None
-                or getattr(self._draft, "name", None) == getattr(self._resource, "name", None)
+                or getattr(self._draft, "name", None)
+                == getattr(self._resource, "name", None)
             )
         )
         if unchanged and self._pending_lifecycle() is None:
@@ -529,7 +530,7 @@ class ResourceBuilder:
         source: UUID | ResourceSchema,
     ) -> "ResourceBuilder": ...
 
-    def add_child(
+    def add_child(  # noqa
         self,
         name: str | UUID | ResourceSchema | None = None,
         template_name: str | None = None,
@@ -537,7 +538,7 @@ class ResourceBuilder:
         *,
         source: UUID | ResourceSchema | None = None,
     ) -> "ResourceBuilder":
-        if isinstance(name, (UUID, ResourceSchema)):
+        if isinstance(name, (UUID | ResourceSchema)):
             if source is not None:
                 raise TypeError("Provide either positional source or source=, not both")
             source = name
@@ -547,9 +548,7 @@ class ResourceBuilder:
                 raise TypeError("Copied child cannot include name")
             if template_name is not None or template_version != "1.0":
                 raise TypeError("Copied child accepts exactly one source argument")
-            source_id = (
-                source.id if isinstance(source, ResourceSchema) else source
-            )
+            source_id = source.id if isinstance(source, ResourceSchema) else source
             source = self._reload_resource(source_id)
             if not isinstance(source, ResourceSchema) or not isinstance(
                 source.template, ResourceTemplateSchema
@@ -560,6 +559,7 @@ class ResourceBuilder:
             copied.parent = self.resource
             copied.copied_from_id = source_id
             if not copied.children:
+
                 def clone_children(parent, children):
                     result = {}
                     for child_name, child in children.items():
@@ -592,7 +592,9 @@ class ResourceBuilder:
             child_builder.name = copied.name
             child_builder.template_name = copied.template.name
             child_builder.template_version = copied.template.version
-            child_builder._initial_properties_payload = child_builder._resource_properties_payload(copied)
+            child_builder._initial_properties_payload = (
+                child_builder._resource_properties_payload(copied)
+            )
             self._register_child(child_builder)
             self._children.append(child_builder)
             return child_builder

@@ -1,4 +1,3 @@
-
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -43,18 +42,25 @@ for entity, schema in (
 ):
     QUERY_SCHEMA_KEYS[(entity, "ref")] = schema
 
-QUERY_ENTITY_KEYS = {schema: entity for schema, (entity, _) in SCHEMA_QUERY_KEYS.items()}
+QUERY_ENTITY_KEYS = {
+    schema: entity for schema, (entity, _) in SCHEMA_QUERY_KEYS.items()
+}
 
 QUERY_PROJECTION_SCHEMAS: dict[str, dict[str, type[BaseModel]]] = {
     "namespace": {"full": NamespaceSchema, "ref": NamespaceSchema},
-    "resource_template": {"full": ResourceTemplateSchema, "ref": ResourceTemplateSchema},
+    "resource_template": {
+        "full": ResourceTemplateSchema,
+        "ref": ResourceTemplateSchema,
+    },
     "resource": {"full": ResourceSchema, "ref": ResourceSchema},
     "process_template": {"full": ProcessTemplateSchema, "ref": ProcessTemplateSchema},
     "process_run": {"full": ProcessRunSchema, "ref": ProcessRunSchema},
 }
 
 SCHEMA_ENTITY_KEYS = QUERY_ENTITY_KEYS
-SCHEMA_PROJECTIONS = {schema: projection for schema, (_, projection) in SCHEMA_QUERY_KEYS.items()}
+SCHEMA_PROJECTIONS = {
+    schema: projection for schema, (_, projection) in SCHEMA_QUERY_KEYS.items()
+}
 SCHEMAS_BY_NAME = {schema.__name__: schema for schema in SCHEMA_QUERY_KEYS}
 LEGACY_SCHEMAS_BY_NAME = {
     AttributeGroupTemplateSchema.__name__: AttributeGroupTemplateSchema,
@@ -135,21 +141,35 @@ class SchemaRegistry:
 
 SCHEMA_REGISTRY = SchemaRegistry(
     (
-        SchemaRegistration("namespace", NamespaceSchema, Namespace, _validate_model, ()),
         SchemaRegistration(
-            "resource_template", ResourceTemplateSchema, ResourceTemplate,
-            _validate_model, ("types", "children", "attribute_group_templates"),
+            "namespace", NamespaceSchema, Namespace, _validate_model, ()
         ),
         SchemaRegistration(
-            "resource", ResourceSchema, Resource, ResourceSchemaHydrator,
+            "resource_template",
+            ResourceTemplateSchema,
+            ResourceTemplate,
+            _validate_model,
+            ("types", "children", "attribute_group_templates"),
+        ),
+        SchemaRegistration(
+            "resource",
+            ResourceSchema,
+            Resource,
+            ResourceSchemaHydrator,
             ("template", "properties", "children"),
         ),
         SchemaRegistration(
-            "process_template", ProcessTemplateSchema, ProcessTemplate,
-            _validate_model, ("step_templates", "resource_slots"),
+            "process_template",
+            ProcessTemplateSchema,
+            ProcessTemplate,
+            _validate_model,
+            ("step_templates", "resource_slots"),
         ),
         SchemaRegistration(
-            "process_run", ProcessRunSchema, ProcessRun, ProcessRunSchemaHydrator,
+            "process_run",
+            ProcessRunSchema,
+            ProcessRun,
+            ProcessRunSchemaHydrator,
             ("template", "steps", "steps.parameters", "resources"),
         ),
     )
@@ -163,4 +183,6 @@ def schema_for(entity: str, projection: str) -> type[BaseModel]:
             raise KeyError(projection)
         return registration.model
     except KeyError as exc:
-        raise ValueError(f"Unknown query entity/projection: {entity}/{projection}") from exc
+        raise ValueError(
+            f"Unknown query entity/projection: {entity}/{projection}"
+        ) from exc

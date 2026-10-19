@@ -197,7 +197,9 @@ def test_builder_changes_defaults_to_empty_fields_and_no_lifecycle():
     assert changes.lifecycle is None
 
 
-def test_all_builders_require_context_for_save_and_expose_serializable_empty_changes(client):
+def test_all_builders_require_context_for_save_and_expose_serializable_empty_changes(
+    client,
+):
     client.create_namespace("builder-contracts")
     scoped = client.namespace("builder-contracts")
     with scoped.build_resource_template(

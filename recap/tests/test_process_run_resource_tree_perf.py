@@ -184,13 +184,17 @@ def test_process_run_resource_hydration_is_breadth_independent(db_session):
     db_session.add(namespace)
     db_session.flush()
     runs = [
-        _seed_run_with_resource_chain(db_session, name=f"breadth-{index}", depth=3, namespace=namespace)
+        _seed_run_with_resource_chain(
+            db_session, name=f"breadth-{index}", depth=3, namespace=namespace
+        )
         for index in range(4)
     ]
     target = db_session.get_bind()
-    query = make_query(db_session, namespace).process_runs(
-        on_unloaded="raise"
-    ).include(["steps", "steps.parameters", "resources"])
+    query = (
+        make_query(db_session, namespace)
+        .process_runs(on_unloaded="raise")
+        .include(["steps", "steps.parameters", "resources"])
+    )
 
     with count_statements(target) as baseline_counter:
         make_query(db_session, namespace).process_runs().filter(id=runs[0].id).include(

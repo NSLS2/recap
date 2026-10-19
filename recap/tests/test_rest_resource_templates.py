@@ -12,6 +12,7 @@ def draft(name="plate", version="1.0"):
         "children": [{"name": "well", "version": "1.0", "type_names": ["well"]}],
     }
 
+
 def test_post_and_patch_resource_template_aggregate(
     api_client, idempotency_headers, create_namespace
 ):
@@ -27,7 +28,9 @@ def test_post_and_patch_resource_template_aggregate(
 
     updated = api_client.patch(
         f"/api/v1/resource-templates/{created.json()['id']}",
-        headers=idempotency_headers("template-2", **{"If-Match": created.headers["ETag"]}),
+        headers=idempotency_headers(
+            "template-2", **{"If-Match": created.headers["ETag"]}
+        ),
         json=draft("plate-updated"),
     )
     assert updated.status_code == 200

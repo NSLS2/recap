@@ -16,7 +16,6 @@ from recap.commands.errors import CommandConflictError
 from recap.commands.models import (
     CommandContext,
     CreateProcessTemplate,
-    UpdateProcessTemplate,
 )
 from recap.commands.service import CommandService
 from recap.db.audit import MutationAudit

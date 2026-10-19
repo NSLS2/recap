@@ -25,7 +25,9 @@ class QueryService:
         self.backend = backend
 
     @classmethod
-    def legacy_request(cls, schema_name: str, namespace_path: str, spec: Any) -> QueryRequest:
+    def legacy_request(
+        cls, schema_name: str, namespace_path: str, spec: Any
+    ) -> QueryRequest:
         try:
             schema = SCHEMAS_BY_NAME[schema_name]
         except KeyError as exc:
@@ -44,7 +46,10 @@ class QueryService:
         return QueryResult(
             entity=request.entity,
             projection=request.projection,
-            items=[self._serialize_item(item, request.entity, request.projection) for item in items],
+            items=[
+                self._serialize_item(item, request.entity, request.projection)
+                for item in items
+            ],
         )
 
     @staticmethod
@@ -54,10 +59,52 @@ class QueryService:
             return payload
         fields = {
             "namespace": {"id", "path"},
-            "resource_template": {"id", "name", "slug", "version", "labels", "types", "namespace_id", "status", "revision", "create_date", "modified_date"},
-            "resource": {"id", "name", "copied_from_id", "template", "namespace_id", "status", "revision", "create_date", "modified_date"},
-            "process_template": {"id", "name", "version", "labels", "namespace_id", "status", "revision", "create_date", "modified_date"},
-            "process_run": {"id", "name", "description", "template", "namespace_id", "status", "revision", "create_date", "modified_date"},
+            "resource_template": {
+                "id",
+                "name",
+                "slug",
+                "version",
+                "labels",
+                "types",
+                "namespace_id",
+                "status",
+                "revision",
+                "create_date",
+                "modified_date",
+            },
+            "resource": {
+                "id",
+                "name",
+                "copied_from_id",
+                "template",
+                "namespace_id",
+                "status",
+                "revision",
+                "create_date",
+                "modified_date",
+            },
+            "process_template": {
+                "id",
+                "name",
+                "version",
+                "labels",
+                "namespace_id",
+                "status",
+                "revision",
+                "create_date",
+                "modified_date",
+            },
+            "process_run": {
+                "id",
+                "name",
+                "description",
+                "template",
+                "namespace_id",
+                "status",
+                "revision",
+                "create_date",
+                "modified_date",
+            },
         }[entity]
         return {key: value for key, value in payload.items() if key in fields}
 
@@ -65,17 +112,23 @@ class QueryService:
         schema = self._schema(request)
         spec = self._spec(request, schema)
         if policy is None:
-            items = self.backend.query(schema, spec, namespace_path=request.namespace_path)
+            items = self.backend.query(
+                schema, spec, namespace_path=request.namespace_path
+            )
         else:
             authorization = AuthorizedQuery.from_policy(
                 policy, actor, namespace_path=request.namespace_path
             )
             if not spec.include_mutable:
                 authorization = authorization.for_read()
-            items = self.backend.query_authorized(schema, spec, authorization=authorization)
+            items = self.backend.query_authorized(
+                schema, spec, authorization=authorization
+            )
         return items
 
-    def legacy_query(self, schema_name: str, namespace_path: str, spec: Any, *, backend=None) -> QueryResult:
+    def legacy_query(
+        self, schema_name: str, namespace_path: str, spec: Any, *, backend=None
+    ) -> QueryResult:
         request = self.legacy_request(schema_name, namespace_path, spec)
         service = self if backend is None else QueryService(backend)
         return service.query(request, actor=None, policy=None).model_copy(
@@ -86,17 +139,23 @@ class QueryService:
         schema = self._schema(request)
         spec = self._spec(request, schema)
         if policy is None:
-            value = self.backend.count(schema, spec, namespace_path=request.namespace_path)
+            value = self.backend.count(
+                schema, spec, namespace_path=request.namespace_path
+            )
         else:
             authorization = AuthorizedQuery.from_policy(
                 policy, actor, namespace_path=request.namespace_path
             )
             if not spec.include_mutable:
                 authorization = authorization.for_read()
-            value = self.backend.count_authorized(schema, spec, authorization=authorization)
+            value = self.backend.count_authorized(
+                schema, spec, authorization=authorization
+            )
         return self.parse_count(value)
 
-    def legacy_count(self, schema_name: str, namespace_path: str, spec: Any, *, backend=None) -> int:
+    def legacy_count(
+        self, schema_name: str, namespace_path: str, spec: Any, *, backend=None
+    ) -> int:
         request = self.legacy_request(schema_name, namespace_path, spec)
         service = self if backend is None else QueryService(backend)
         return service.count(request, actor=None, policy=None)
@@ -147,7 +206,11 @@ class QueryService:
             filters = dict(spec.filters)
             for key, value in filters.items():
                 annotation = QueryService._terminal_annotation(schema, key.split("__"))
-                if value is not None and annotation is not None and QueryService._contains_uuid(annotation):
+                if (
+                    value is not None
+                    and annotation is not None
+                    and QueryService._contains_uuid(annotation)
+                ):
                     filters[key] = TypeAdapter(annotation).validate_python(value)
             spec = spec.model_copy(update={"filters": filters})
             validate_query = getattr(self.backend, "validate_query", None)
@@ -159,7 +222,9 @@ class QueryService:
 
     @staticmethod
     def _contains_uuid(annotation: Any) -> bool:
-        return annotation is UUID or any(QueryService._contains_uuid(arg) for arg in get_args(annotation))
+        return annotation is UUID or any(
+            QueryService._contains_uuid(arg) for arg in get_args(annotation)
+        )
 
     @staticmethod
     def _terminal_annotation(annotation: Any, path: list[str]) -> Any | None:
@@ -171,11 +236,20 @@ class QueryService:
             return QueryService._terminal_annotation(args[0], path) if args else None
         if origin in (UnionType, Union):
             return next(
-                (result for arg in get_args(annotation) if arg is not type(None)
-                 for result in [QueryService._terminal_annotation(arg, path)] if result is not None),
+                (
+                    result
+                    for arg in get_args(annotation)
+                    if arg is not type(None)
+                    for result in [QueryService._terminal_annotation(arg, path)]
+                    if result is not None
+                ),
                 None,
             )
         if isinstance(annotation, type) and issubclass(annotation, BaseModel):
             field = annotation.model_fields.get(path[0])
-            return QueryService._terminal_annotation(field.annotation, path[1:]) if field else None
+            return (
+                QueryService._terminal_annotation(field.annotation, path[1:])
+                if field
+                else None
+            )
         return None

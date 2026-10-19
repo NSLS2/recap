@@ -185,7 +185,9 @@ class PropertySchema(CommonFields):
                 default=raw_value,
             )
             coerced[name] = {
-                "value": raw_value if attr_tmpl.value_type == "array" else validator.default,
+                "value": raw_value
+                if attr_tmpl.value_type == "array"
+                else validator.default,
                 "unit": attr_tmpl.unit if raw_unit is None else raw_unit,
                 "metadata_json": raw_metadata,
             }
@@ -361,11 +363,17 @@ class ResourceTemplateSchema(LoadAwareMixin, NamespaceOwnedFields):
     types: list[ResourceTypeSchema] = Field(default_factory=list)
     parent: ResourceTemplateRef | None = Field(default=None, exclude=True)
     children: dict[str, Self] = Field(default_factory=dict)
-    attribute_group_templates: list[AttributeGroupTemplateSchema] = Field(default_factory=list)
-    _relation_fields = frozenset({"parent", "children", "types", "attribute_group_templates"})
+    attribute_group_templates: list[AttributeGroupTemplateSchema] = Field(
+        default_factory=list
+    )
+    _relation_fields = frozenset(
+        {"parent", "children", "types", "attribute_group_templates"}
+    )
 
     def set_loaded_relations(self, loaded_relations, *, on_unloaded="warn"):
-        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
+        LoadAwareMixin.set_loaded_relations(
+            self, loaded_relations, on_unloaded=on_unloaded
+        )
         return self
 
     @field_validator("parent", mode="before")
@@ -456,7 +464,7 @@ class ResourceSchema(LoadAwareMixin, NamespaceOwnedFields):
     @field_validator("parent", mode="before")
     @classmethod
     def _coerce_parent_reference(cls, value):
-        if value is None or isinstance(value, (dict, ResourceSchema)):
+        if value is None or isinstance(value, (dict | ResourceSchema)):
             return value
         return {
             "id": value.id,
@@ -473,7 +481,7 @@ class ResourceSchema(LoadAwareMixin, NamespaceOwnedFields):
     @field_validator("template", mode="before")
     @classmethod
     def _coerce_template_reference(cls, value):
-        if value is None or isinstance(value, (dict, ResourceTemplateSchema)):
+        if value is None or isinstance(value, (dict | ResourceTemplateSchema)):
             return value
         return {
             "id": value.id,
@@ -495,7 +503,9 @@ class ResourceSchema(LoadAwareMixin, NamespaceOwnedFields):
         *,
         on_unloaded: Literal["silent", "warn", "raise"] = "warn",
     ) -> "ResourceSchema":
-        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
+        LoadAwareMixin.set_loaded_relations(
+            self, loaded_relations, on_unloaded=on_unloaded
+        )
         return self
 
     @model_validator(mode="after")
@@ -512,7 +522,6 @@ class ResourceSchema(LoadAwareMixin, NamespaceOwnedFields):
         """
         if isinstance(self.properties, BaseModel):
             return self
-
 
         prop_fields: list[tuple[str, str]] = []
         prop_values: dict[str, PropertySchema] = {}
@@ -531,7 +540,6 @@ class ResourceSchema(LoadAwareMixin, NamespaceOwnedFields):
             # hydrated. Revalidating them here can coerce mutable array values
             # repeatedly instead of preserving them.
             self.properties = model.model_construct(**prop_values)
-
 
         return self
 

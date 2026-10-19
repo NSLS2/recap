@@ -113,8 +113,12 @@ class CommandRegistry:
         if len(set(names)) != len(names):
             raise ValueError("Duplicate command registration name")
         self._registrations = registrations
-        self._by_type = {registration.command_type: registration for registration in registrations}
-        self._by_name = {registration.name: registration for registration in registrations}
+        self._by_type = {
+            registration.command_type: registration for registration in registrations
+        }
+        self._by_name = {
+            registration.name: registration for registration in registrations
+        }
 
     def by_type(self, command_type: type[CommandModel]) -> CommandRegistration:
         try:
@@ -131,7 +135,9 @@ class CommandRegistry:
         try:
             return self._by_name[name]
         except KeyError as exc:
-            raise CommandValidationError(f"No command registration named {name}") from exc
+            raise CommandValidationError(
+                f"No command registration named {name}"
+            ) from exc
 
     def all(self) -> tuple[CommandRegistration, ...]:
         return self._registrations
@@ -144,7 +150,9 @@ class CommandRegistry:
         if missing or unexpected:
             details = []
             if missing:
-                names = ", ".join(sorted(command_type.__name__ for command_type in missing))
+                names = ", ".join(
+                    sorted(command_type.__name__ for command_type in missing)
+                )
                 details.append(f"Missing command registrations: {names}")
             if unexpected:
                 names = ", ".join(
@@ -182,7 +190,9 @@ def _decode_update_resource(
     )
 
 
-def _decode_resource_response(entity: Any, etag: str | None = None, **_: Any) -> ResourceSchema:
+def _decode_resource_response(
+    entity: Any, etag: str | None = None, **_: Any
+) -> ResourceSchema:
     if isinstance(entity, dict):
         _prepare_dynamic_models(entity)
     return ResourceSchema.model_validate(entity)
@@ -306,7 +316,9 @@ def _decode_update_resource_template(
     )
 
 
-def _decode_resource_template_response(entity: Any, etag: str | None = None, **_: Any) -> ResourceTemplateSchema:
+def _decode_resource_template_response(
+    entity: Any, etag: str | None = None, **_: Any
+) -> ResourceTemplateSchema:
     return ResourceTemplateSchema.model_validate(entity)
 
 
@@ -327,7 +339,9 @@ def _decode_create_process_template(
     path_params: Mapping[str, Any], headers: Mapping[str, Any], body: BaseModel
 ) -> CreateProcessTemplate:
     draft = _draft(body, ProcessTemplateDraft)
-    return CreateProcessTemplate(namespace_path=str(path_params["namespace_path"]), draft=draft)
+    return CreateProcessTemplate(
+        namespace_path=str(path_params["namespace_path"]), draft=draft
+    )
 
 
 def _encode_update_process_template(command: CommandModel) -> EncodedRequest:
@@ -368,7 +382,9 @@ def _decode_create_process_run(
     path_params: Mapping[str, Any], headers: Mapping[str, Any], body: BaseModel
 ) -> CreateProcessRun:
     draft = _draft(body, ProcessRunDraft)
-    return CreateProcessRun(namespace_path=str(path_params["namespace_path"]), draft=draft)
+    return CreateProcessRun(
+        namespace_path=str(path_params["namespace_path"]), draft=draft
+    )
 
 
 def _encode_update_process_run(command: CommandModel) -> EncodedRequest:
@@ -395,11 +411,15 @@ def _decode_update_process_run(
     )
 
 
-def _decode_process_template_response(entity: Any, etag: str | None = None, **_: Any) -> ProcessTemplateSchema:
+def _decode_process_template_response(
+    entity: Any, etag: str | None = None, **_: Any
+) -> ProcessTemplateSchema:
     return ProcessTemplateSchema.model_validate(entity)
 
 
-def _decode_process_run_response(entity: Any, etag: str | None = None, **_: Any) -> ProcessRunSchema:
+def _decode_process_run_response(
+    entity: Any, etag: str | None = None, **_: Any
+) -> ProcessRunSchema:
     return ProcessRunSchema.model_validate(entity)
 
 
@@ -484,7 +504,9 @@ def _decode_lifecycle_status(
         object_type=str(path_params["object_type"]),
         object_id=_path_uuid(path_params, "object_id"),
         expected_revision=_expected_revision(headers),
-        status=data["status"].value if isinstance(data["status"], LifecycleStatus) else data["status"],
+        status=data["status"].value
+        if isinstance(data["status"], LifecycleStatus)
+        else data["status"],
     )
 
 

@@ -142,8 +142,13 @@ class TestArrayDefaultRoundTrip:
                 "measurements", "array", "", [1]
             ).close_group()
 
-        with client.build_resource("ArrayRepeatedDefault-R", "ArrayRepeatedDefault-T") as builder:
+        with client.build_resource(
+            "ArrayRepeatedDefault-R", "ArrayRepeatedDefault-T"
+        ) as builder:
             model = builder.get_model()
             model.properties.data.values.measurements.value = [1, 1]
             builder.set_model(model)
-            assert builder.get_model().properties.data.values.measurements.value == [1, 1]
+            assert builder.get_model().properties.data.values.measurements.value == [
+                1,
+                1,
+            ]

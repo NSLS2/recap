@@ -6,16 +6,22 @@ from recap.lifecycle import LifecycleStatus
 
 
 def test_resource_context_exception_keeps_property_draft_for_retry(client):
-    with client.build_resource_template(name="RBM-retry-T", type_names=["container"]) as template:
-        template.prop_group("details").add_attribute("serial", "str", "", "initial").close_group()
+    with client.build_resource_template(
+        name="RBM-retry-T", type_names=["container"]
+    ) as template:
+        template.prop_group("details").add_attribute(
+            "serial", "str", "", "initial"
+        ).close_group()
     builder = client.build_resource("RBM-retry-R", "RBM-retry-T")
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError):  # noqa
         with builder:
             builder.resource.properties.details.values.serial.value = "retry"
             builder.finalize()
             raise RuntimeError("stop")
 
-    assert builder.changes().fields["properties"]["details"]["serial"]["value"] == "retry"
+    assert (
+        builder.changes().fields["properties"]["details"]["serial"]["value"] == "retry"
+    )
     assert builder.changes().lifecycle is LifecycleStatus.ACTIVE
     with builder:
         pass
@@ -24,8 +30,12 @@ def test_resource_context_exception_keeps_property_draft_for_retry(client):
 
 
 def test_resource_finalization_saves_draft_before_copy(client):
-    with client.build_resource_template(name="RBM-finalize-T", type_names=["container"]) as template:
-        template.prop_group("details").add_attribute("serial", "str", "", "initial").close_group()
+    with client.build_resource_template(
+        name="RBM-finalize-T", type_names=["container"]
+    ) as template:
+        template.prop_group("details").add_attribute(
+            "serial", "str", "", "initial"
+        ).close_group()
     with client.build_resource("RBM-finalize-R", "RBM-finalize-T") as builder:
         builder.resource.properties.details.values.serial.value = "new"
         builder.finalize()
@@ -88,8 +98,12 @@ def test_resource_template_builder_set_model_handles_same_and_mismatch(client):
 
 
 def test_resource_template_builder_set_model_persists_detached_edits(client):
-    with client.build_resource_template(name="RTM-edit", type_names=["container"]) as builder:
-        builder.prop_group("details").add_attribute("serial", "str", "", "old").close_group()
+    with client.build_resource_template(
+        name="RTM-edit", type_names=["container"]
+    ) as builder:
+        builder.prop_group("details").add_attribute(
+            "serial", "str", "", "old"
+        ).close_group()
         template_id = builder.template.id
 
     with client.build_resource_template(resource_template_id=template_id) as builder:
@@ -101,7 +115,10 @@ def test_resource_template_builder_set_model_persists_detached_edits(client):
     with client.build_resource_template(resource_template_id=template_id) as builder:
         refreshed = builder.get_model(update=True)
     assert refreshed.name == "RTM-edited"
-    assert refreshed.attribute_group_templates[0].attribute_templates[0].default_value == "new"
+    assert (
+        refreshed.attribute_group_templates[0].attribute_templates[0].default_value
+        == "new"
+    )
 
 
 def test_process_template_builder_set_model_handles_mismatch(client):
@@ -125,19 +142,29 @@ def test_process_template_builder_set_model_handles_mismatch(client):
 
 def test_process_template_builder_set_model_persists_detached_edits(client):
     with client.build_process_template("PTM-edit", "1.0") as builder:
-        builder.add_step("A").param_group("Inputs").add_attribute("Voltage", "int", "", 0).close_group()
+        builder.add_step("A").param_group("Inputs").add_attribute(
+            "Voltage", "int", "", 0
+        ).close_group()
         template_id = builder.template.id
 
     with client.build_process_template(process_template_id=template_id) as builder:
         model = builder.get_model(update=True)
         model.name = "PTM-edited"
-        model.step_templates["A"].attribute_group_templates[0].attribute_templates[0].default_value = 42
+        model.step_templates["A"].attribute_group_templates[0].attribute_templates[
+            0
+        ].default_value = 42
         builder.set_model(model)
 
     with client.build_process_template(process_template_id=template_id) as builder:
         refreshed = builder.get_model(update=True)
     assert refreshed.name == "PTM-edited"
-    assert refreshed.step_templates["A"].attribute_group_templates[0].attribute_templates[0].default_value == 42
+    assert (
+        refreshed.step_templates["A"]
+        .attribute_group_templates[0]
+        .attribute_templates[0]
+        .default_value
+        == 42
+    )
 
 
 def test_process_run_builder_set_model_handles_mismatch(client):
@@ -198,7 +225,9 @@ def test_resource_builder_add_child_persists_and_links(client, recwarn):
     assert child.template.name == "AC-Child"
     assert "AC-Leaf" in parent.children
     assert parent.children["AC-Leaf"].id == child.id
-    assert not [warning for warning in recwarn if warning.category.__name__ == "SAWarning"]
+    assert not [
+        warning for warning in recwarn if warning.category.__name__ == "SAWarning"
+    ]
 
 
 def test_resource_builder_add_child_accepts_keyword_name(client):
@@ -206,9 +235,7 @@ def test_resource_builder_add_child_accepts_keyword_name(client):
         name="AC-Keyword-Parent", type_names=["container"]
     ):
         pass
-    with client.build_resource_template(
-        name="AC-Keyword-Child", type_names=["sample"]
-    ):
+    with client.build_resource_template(name="AC-Keyword-Child", type_names=["sample"]):
         pass
 
     with client.build_resource("AC-Keyword-Root", "AC-Keyword-Parent") as builder:
@@ -224,9 +251,7 @@ def test_resource_builder_add_child_accepts_keyword_source(client):
         name="AC-Source-Parent", type_names=["container"]
     ):
         pass
-    with client.build_resource_template(
-        name="AC-Source-Child", type_names=["sample"]
-    ):
+    with client.build_resource_template(name="AC-Source-Child", type_names=["sample"]):
         pass
     source = client.create_resource("AC-Source-Leaf", "AC-Source-Child")
     with client.build_resource(resource_id=source.id) as source_builder:
@@ -254,7 +279,7 @@ def test_resource_builder_add_child_rejects_invalid_keyword_combinations(
     ):
         pass
 
-    with client.build_resource("AC-Invalid-Root", "AC-Invalid-Parent") as builder:
+    with client.build_resource("AC-Invalid-Root", "AC-Invalid-Parent") as builder:  # noqa
         with pytest.raises(TypeError):
             builder.add_child(**kwargs)
 

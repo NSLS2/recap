@@ -78,7 +78,9 @@ def test_process_run_create_update_finalize_and_replay(tmp_path):
             json={"description": "finished", "status": "ACTIVE"},
         )
         assert updated.status_code == 200
-        assert updated.request.content == b'{"description":"finished","status":"ACTIVE"}'
+        assert (
+            updated.request.content == b'{"description":"finished","status":"ACTIVE"}'
+        )
         assert "expected_revision" not in updated.request.content.decode()
         assert updated.json()["description"] == "finished"
         assert updated.json()["status"] == "ACTIVE"
@@ -93,7 +95,9 @@ def test_process_run_create_update_finalize_and_replay(tmp_path):
 
 
 def test_process_run_update_rejects_revision_in_json(tmp_path):
-    with TestClient(create_app(tmp_path / "revision-body.db", api_key="secret")) as client:
+    with TestClient(
+        create_app(tmp_path / "revision-body.db", api_key="secret")
+    ) as client:
         auth = {"Authorization": "Apikey secret"}
         client.put(
             "/api/v1/namespaces/n",

@@ -86,8 +86,7 @@ class AuthorizedQuery:
             namespace_path=self.namespace_path,
             permissions=self.permissions.model_copy(
                 update={
-                    "effective_scopes": self.permissions.effective_scopes
-                    & read_scopes
+                    "effective_scopes": self.permissions.effective_scopes & read_scopes
                 }
             ),
         )

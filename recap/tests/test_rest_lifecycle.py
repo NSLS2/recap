@@ -1,7 +1,9 @@
 import pytest
 
 
-def _seed_lifecycle_entity(api_client, idempotency_headers, create_namespace, object_type):
+def _seed_lifecycle_entity(
+    api_client, idempotency_headers, create_namespace, object_type
+):
     create_namespace()
     if object_type == "resource_template":
         response = api_client.post(

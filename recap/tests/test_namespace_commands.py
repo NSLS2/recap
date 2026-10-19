@@ -170,11 +170,7 @@ def test_create_replay_returns_exact_result_without_duplicate_mutation(command_s
     assert len(audit.records) == 2
     with factory() as session:
         assert (
-            len(
-                session.scalars(
-                    select(Namespace).where(Namespace.path != "")
-                ).all()
-            )
+            len(session.scalars(select(Namespace).where(Namespace.path != "")).all())
             == 2
         )
 

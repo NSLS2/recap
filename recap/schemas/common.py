@@ -56,15 +56,21 @@ class LoadAwareMixin:
 
     @property
     def _loaded_relations(self) -> dict[str, bool]:
-        return (getattr(self, "__pydantic_private__", None) or {}).get("_loaded_relations", {})
+        return (getattr(self, "__pydantic_private__", None) or {}).get(
+            "_loaded_relations", {}
+        )
 
     @property
     def _on_unloaded(self) -> Literal["silent", "warn", "raise"]:
-        return (getattr(self, "__pydantic_private__", None) or {}).get("_on_unloaded", "warn")
+        return (getattr(self, "__pydantic_private__", None) or {}).get(
+            "_on_unloaded", "warn"
+        )
 
     @property
     def _warned_unloaded(self) -> set[str]:
-        return (getattr(self, "__pydantic_private__", None) or {}).setdefault("_warned_unloaded", set())
+        return (getattr(self, "__pydantic_private__", None) or {}).setdefault(
+            "_warned_unloaded", set()
+        )
 
     def set_loaded_relations(
         self,
@@ -130,6 +136,7 @@ class LoadAwareMixin:
                 name, f"include('{hint}')"
             )
         return super().__getattribute__(name)
+
 
 SIMPLE_FIELD = "simple_field"
 NormalizedLabels = Annotated[

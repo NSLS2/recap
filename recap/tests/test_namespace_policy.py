@@ -229,9 +229,7 @@ def test_namespace_read_grant_discovers_descendants():
     identity = ProviderIdentity(provider="pam", subject="alice")
     namespace_policy = policy(grant(identity, "beamlines", Scope.NAMESPACE_READ))
 
-    assert namespace_policy.can_discover_namespace(
-        actor(identity), "beamlines/amx"
-    )
+    assert namespace_policy.can_discover_namespace(actor(identity), "beamlines/amx")
 
 
 def test_leaf_grant_discovers_only_required_ancestor_prefixes():

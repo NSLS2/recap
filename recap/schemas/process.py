@@ -74,7 +74,9 @@ class ProcessTemplateSchema(LoadAwareMixin, NamespaceOwnedFields):
     _relation_fields = frozenset({"step_templates", "resource_slots"})
 
     def set_loaded_relations(self, loaded_relations, *, on_unloaded="warn"):
-        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
+        LoadAwareMixin.set_loaded_relations(
+            self, loaded_relations, on_unloaded=on_unloaded
+        )
         return self
 
 
@@ -162,7 +164,9 @@ class ProcessRunSchema(LoadAwareMixin, NamespaceOwnedFields):
         *,
         on_unloaded: Literal["silent", "warn", "raise"] = "warn",
     ) -> "ProcessRunSchema":
-        LoadAwareMixin.set_loaded_relations(self, loaded_relations, on_unloaded=on_unloaded)
+        LoadAwareMixin.set_loaded_relations(
+            self, loaded_relations, on_unloaded=on_unloaded
+        )
         return self
 
 
