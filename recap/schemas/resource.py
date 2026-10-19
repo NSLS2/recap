@@ -26,7 +26,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from recap.db.resource import Property
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
-    AttributeTemplateValidator,
     AttributeValueSchema,
 )
 from recap.schemas.common import (
@@ -37,7 +36,7 @@ from recap.schemas.common import (
     NormalizedLabels,
 )
 from recap.utils.dsl import build_param_values_model, build_property_groups_model
-from recap.utils.general import Direction
+from recap.utils.general import Direction, from_json_value, validate_enum_value
 
 
 def _attr_metadata(vt: Any) -> dict | None:
@@ -146,8 +145,7 @@ class PropertySchema(CommonFields):
         """Type-coerce all stored values against the attribute templates.
 
         Iterates over every attribute in ``template.attribute_templates``,
-        runs the value through
-        :class:`~recap.schemas.attribute.AttributeTemplateValidator`, and
+        runs the value through shared null-aware Python conversion, and
         rebuilds ``values`` with the coerced results.  Raises
         :class:`ValueError` if any unknown keys are present.
         """
@@ -177,17 +175,13 @@ class PropertySchema(CommonFields):
                 raw_unit = None
                 raw_metadata = {}
 
-            validator = AttributeTemplateValidator(
-                name=attr_tmpl.name,
-                type=attr_tmpl.value_type,
-                unit=attr_tmpl.unit,
-                metadata=_attr_metadata(attr_tmpl),
-                default=raw_value,
-            )
+            value = from_json_value(attr_tmpl.value_type, raw_value)
+            if attr_tmpl.value_type == "enum":
+                validate_enum_value(value, _attr_metadata(attr_tmpl), name=name)
             coerced[name] = {
                 "value": raw_value
                 if attr_tmpl.value_type == "array"
-                else validator.default,
+                else value,
                 "unit": attr_tmpl.unit if raw_unit is None else raw_unit,
                 "metadata_json": raw_metadata,
             }

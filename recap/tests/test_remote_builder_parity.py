@@ -39,6 +39,132 @@ def seed_command_namespace(client):
     return scoped
 
 
+@pytest.mark.parametrize("kind", ["resource", "process"])
+@pytest.mark.parametrize("null_default", [False, True], ids=["clear", "default"])
+def test_null_values_round_trip_save_query_reopen(
+    command_client, tmp_path, kind, null_default
+):
+    scoped = seed_command_namespace(command_client)
+    defaults = {
+        "int": 0,
+        "float": 0.0,
+        "bool": False,
+        "str": "None",
+        "datetime": "2024-01-01T00:00:00",
+        "array": [],
+        "enum": "known",
+    }
+    definitions = [
+        {
+            "name": f"value_{value_type}",
+            "type": value_type,
+            "default": None if null_default else default,
+            "unit": "unit",
+            "metadata": (
+                {"choices": ["known"]}
+                if value_type == "enum"
+                else {"min": 0, "max": 10}
+                if value_type in {"int", "float"}
+                else {}
+            ),
+        }
+        for value_type, default in defaults.items()
+    ]
+    if kind == "resource":
+        with scoped.build_resource_template(
+            name="Nullable", type_names=["sample"]
+        ) as template:
+            template.add_properties({"Measurements": definitions})
+        group_template = template.template.attribute_group_templates[0]
+        with scoped.build_resource("sample", "Nullable") as builder:
+            pass
+        instance = builder.resource
+    else:
+        with scoped.build_process_template("Nullable", "1.0") as template:
+            (
+                template.add_step("Collect")
+                .add_parameters({"Measurements": definitions})
+                .close_step()
+            )
+        group_template = template.template.step_templates[
+            "Collect"
+        ].attribute_group_templates[0]
+        with scoped.build_process_run("run", "", "Nullable", "1.0") as builder:
+            pass
+        instance = builder.get_model(update=True)
+
+    if null_default:
+        assert all(
+            attribute.default_value is None
+            for attribute in group_template.attribute_templates
+        )
+
+    def values_of(model):
+        return (
+            model.properties["Measurements"].values
+            if kind == "resource"
+            else model.steps["Collect"].parameters["Measurements"].values
+        )
+
+    if not null_default:
+        with builder:
+            model = (
+                builder.get_model()
+                if kind == "resource"
+                else builder.get_params("Collect")
+            )
+            values = (
+                values_of(model) if kind == "resource" else model["Measurements"].values
+            )
+            for definition in definitions:
+                attribute = getattr(values, definition["name"])
+                assert attribute.value is not None
+                attribute.value = None
+                attribute.unit = "override"
+            if kind == "resource":
+                builder.set_model(model)
+            else:
+                builder.set_params(model)
+        instance = builder.resource if kind == "resource" else builder.process_run
+
+    def assert_nulls(model):
+        assert model.id == instance.id
+        for definition in definitions:
+            attribute = getattr(values_of(model), definition["name"])
+            assert attribute.value is None
+            assert attribute.unit == ("unit" if null_default else "override")
+
+    assert_nulls(instance)
+    with builder:
+        builder.finalize()
+
+    def query(client):
+        maker = client.namespace("beamline/amx").query_maker()
+        family = (
+            maker.resources(load="eager")
+            if kind == "resource"
+            else maker.process_runs(load="eager")
+        )
+        results = family.filter(id=instance.id).all()
+        assert len(results) == 1
+        return results[0]
+
+    first = query(command_client)
+    assert_nulls(first)
+    second = query(command_client)
+    assert_nulls(second)
+    assert second is first
+
+    command_client.close()
+    db_path = tmp_path / (
+        "local-commands.db"
+        if (tmp_path / "local-commands.db").exists()
+        else "rest-loopback.db"
+    )
+    with RecapClient.from_sqlite(db_path) as reopened:
+        assert_nulls(query(reopened))
+
+
 def make_template_builder(client, kind, name="Deferred"):
     scoped = seed_command_namespace(client)
     if kind == "process":

@@ -26,7 +26,7 @@ from pydantic import (
 )
 
 from recap.schemas.common import SIMPLE_FIELD, CommonFields, LoadAwareMixin
-from recap.utils.general import CONVERTERS
+from recap.utils.general import from_json_value, validate_enum_value
 
 TypeName = Literal["int", "float", "bool", "str", "datetime", "array", "enum"]
 
@@ -192,8 +192,7 @@ class AttributeTemplateValidator(BaseModel):
     def coerce_default(cls, v: Any, info: ValidationInfo) -> Any:
         """Coerce *default* to the Python type declared by *type*.
 
-        Looks up a converter function for the declared type and applies it to
-        *v*.  For ``enum`` types the result is additionally cast to ``str``.
+        Preserves null; otherwise applies the shared Python value converter.
 
         Raises:
             ValueError: If ``type`` is not yet resolved, is unsupported, or
@@ -202,16 +201,10 @@ class AttributeTemplateValidator(BaseModel):
         t = info.data.get("type")
         if t is None:
             raise ValueError("`type` must be provided before `default`")
-        conv = CONVERTERS.get(t)
-        if conv is None:
-            raise ValueError(f"Unsupported type: {t!r}")
         try:
-            coerced = conv(v)
+            return from_json_value(t, v)
         except Exception as e:
             raise ValueError(f"`default` not coercible to {t}: {e}") from e
-        if t == "enum":
-            coerced = str(coerced)
-        return coerced
 
     @model_validator(mode="after")
     def enforce_enum_choices(self) -> "AttributeTemplateValidator":
@@ -224,11 +217,5 @@ class AttributeTemplateValidator(BaseModel):
         if self.type != "enum":
             return self
 
-        choices = (self.metadata or {}).get("choices")
-        if not choices:
-            raise ValueError("enum attributes require metadata.choices to be set")
-        if self.default is not None and str(self.default) not in choices:
-            raise ValueError(
-                f"default must be one of {', '.join(choices)} (got {self.default})"
-            )
+        validate_enum_value(self.default, self.metadata, name="default")
         return self

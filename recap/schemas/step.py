@@ -22,7 +22,6 @@ from pydantic import BaseModel, Field, model_validator
 from recap.db.step import Parameter
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
-    AttributeTemplateValidator,
     AttributeValueSchema,
 )
 from recap.schemas.common import SIMPLE_FIELD, CommonFields, LoadAwareMixin, StepStatus
@@ -31,6 +30,7 @@ from recap.utils.dsl import (
     build_param_values_model,
     build_step_parameters_model,
 )
+from recap.utils.general import from_json_value, validate_enum_value
 
 
 def _attr_metadata(vt: Any) -> dict | None:
@@ -201,8 +201,7 @@ class ParameterSchema(CommonFields):
         """Type-coerce all stored parameter values against the attribute templates.
 
         Iterates over every attribute in ``template.attribute_templates``,
-        runs the value through
-        :class:`~recap.schemas.attribute.AttributeTemplateValidator`, and
+        runs the value through shared null-aware Python conversion, and
         rebuilds ``values`` with the coerced results.  Raises
         :class:`ValueError` if any unknown keys are present.
         """
@@ -223,7 +222,6 @@ class ParameterSchema(CommonFields):
                 f"{', '.join(sorted(unknown_keys))}"
             )
 
-        # 2) coerce each value using your AttributeTemplateValidator
         coerced: dict[str, Any] = {}
         for name, raw_value in values_dict.items():
             attr_tmpl = tmpl_by_name[name]
@@ -235,17 +233,11 @@ class ParameterSchema(CommonFields):
                 raw_unit = None
                 raw_metadata = {}
 
-            # Reuse your validator to perform type coercion & checks
-            # Note: we shove `raw_value` into 'default' to leverage coerce_default()
-            validator = AttributeTemplateValidator(
-                name=attr_tmpl.name,
-                type=attr_tmpl.value_type,
-                unit=attr_tmpl.unit,
-                metadata=_attr_metadata(attr_tmpl),
-                default=raw_value,
-            )
+            value = from_json_value(attr_tmpl.value_type, raw_value)
+            if attr_tmpl.value_type == "enum":
+                validate_enum_value(value, _attr_metadata(attr_tmpl), name=name)
             coerced[name] = {
-                "value": validator.default,  # already converted by coerce_default
+                "value": value,
                 "unit": attr_tmpl.unit if raw_unit is None else raw_unit,
                 "metadata_json": raw_metadata,
             }

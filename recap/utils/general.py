@@ -90,6 +90,17 @@ CONVERTERS = {
 }
 
 
+def validate_enum_value(
+    value: Any, metadata: dict[str, Any] | None, *, name: str = "value"
+) -> None:
+    """Require enum choices and validate membership for non-null values."""
+    choices = (metadata or {}).get("choices")
+    if not choices:
+        raise ValueError("enum attributes require metadata.choices to be set")
+    if value is not None and str(value) not in choices:
+        raise ValueError(f"{name} must be one of {', '.join(choices)} (got {value})")
+
+
 def to_json_compatible(value_type: str, value: Any) -> Any:
     """
     Coerce a raw value to the declared type and then make it JSON-serializable.

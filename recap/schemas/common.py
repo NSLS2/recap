@@ -238,7 +238,9 @@ class Attribute(BaseModel):
             ValueError: If ``default_value`` is not an instance of the Python
                 type mapped to ``value_type`` in :data:`TYPE_MAP`.
         """
-        if not isinstance(self.default_value, TYPE_MAP[self.value_type]):
+        if self.default_value is not None and not isinstance(
+            self.default_value, TYPE_MAP[self.value_type]
+        ):
             raise ValueError(
                 f"default_value must be {TYPE_MAP[self.value_type].__name__}",
                 f"got {type(self.default_value).__name__} instead.",

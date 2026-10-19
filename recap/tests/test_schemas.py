@@ -13,6 +13,84 @@ from recap.schemas.resource import PropertySchema
 from recap.schemas.step import ParameterSchema
 
 
+@pytest.mark.parametrize("value_type", list(ValueType))
+@pytest.mark.parametrize("explicit", [False, True])
+def test_attribute_template_null_defaults(value_type, explicit):
+    definition = {"name": "value", "type": value_type.value}
+    if explicit:
+        definition["default"] = None
+    if value_type == ValueType.ENUM:
+        definition["metadata"] = {"choices": ["known"]}
+    assert AttributeTemplateValidator(**definition).default is None
+
+
+@pytest.mark.parametrize("value_type", list(ValueType))
+def test_internal_attribute_accepts_null_default(value_type):
+    assert Attribute(
+        name="value", slug="value", value_type=value_type, default_value=None
+    ).default_value is None
+
+
+@pytest.mark.parametrize("schema_type", [PropertySchema, ParameterSchema])
+@pytest.mark.parametrize("value_type", list(ValueType))
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_stored_null_values_preserve_units_and_metadata(
+    schema_type, value_type, wrapped
+):
+    metadata = {"choices": ["known"]} if value_type == ValueType.ENUM else {}
+    attribute = _attribute_template_schema(
+        "Value", value_type.value, None, unit="unit", metadata=metadata
+    )
+    stamp = _now()
+    raw = (
+        {"value": None, "unit": "override", "metadata_json": {"source": "test"}}
+        if wrapped
+        else None
+    )
+    schema = schema_type(
+        id=uuid4(),
+        create_date=stamp,
+        modified_date=stamp,
+        template=_attribute_group_schema("Values", [attribute]),
+        values={"Value": raw},
+    )
+    assert schema.value.value is None
+    assert schema.value.unit == ("override" if wrapped else "unit")
+    assert schema.value.metadata_json == ({"source": "test"} if wrapped else {})
+    schema.validate_and_coerce_values()
+    assert schema.value.value is None
+
+
+@pytest.mark.parametrize("schema_type", [PropertySchema, ParameterSchema])
+@pytest.mark.parametrize("value_type", ["int", "float"])
+def test_nullable_numeric_bounds(schema_type, value_type):
+    attribute = _attribute_template_schema(
+        "Value", value_type, 5, metadata={"min": 0, "max": 10}
+    )
+    stamp = _now()
+    fields = dict(
+        id=uuid4(),
+        create_date=stamp,
+        modified_date=stamp,
+        template=_attribute_group_schema("Values", [attribute]),
+    )
+    schema = schema_type(**fields, values={"Value": None})
+    assert schema.value.value is None
+    for value in [0, 10, None]:
+        schema.value = value
+        assert schema.value.value == value
+    for value in [-1, 11]:
+        with pytest.raises(ValueError):
+            schema_type(**fields, values={"Value": value})
+        with pytest.raises(ValueError):
+            schema.value = value
+
+
+def test_enum_null_default_requires_choices():
+    with pytest.raises(ValueError, match="require metadata.choices"):
+        AttributeTemplateValidator(name="value", type="enum", default=None)
+
+
 def _now():
     return datetime.now(UTC)
 

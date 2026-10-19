@@ -107,6 +107,10 @@ def test_enum_attribute_value_rejects_invalid_choice(db_session):
     assert av.value == "u"
     with pytest.raises(ValueError):
         av.value = "x"
+    av.value = None
+    db_session.flush()
+    assert av.value is None
+    assert av.value_json is None
 
 
 def test_resource_template_builder_reuses_existing_group(client):

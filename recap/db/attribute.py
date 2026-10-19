@@ -12,7 +12,12 @@ from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from recap.utils.general import from_json_value, make_slug, to_json_compatible
+from recap.utils.general import (
+    from_json_value,
+    make_slug,
+    to_json_compatible,
+    validate_enum_value,
+)
 
 if TYPE_CHECKING:
     from recap.db.resource import ResourceTemplate
@@ -154,14 +159,9 @@ class AttributeValue(TimestampMixin, Base):
 
         vt = self.template.value_type
         if vt == "enum":
-            choices = (self.template.metadata_json or {}).get("choices")
-            if not choices:
-                raise ValueError("enum attributes require metadata.choices to be set")
-            if str(value) not in choices:
-                raise ValueError(
-                    f"{self.template.name} must be one of {', '.join(choices)}"
-                )
-            value = str(value)
+            validate_enum_value(
+                value, self.template.metadata_json, name=self.template.name
+            )
         self.value_json = to_json_compatible(vt, value)
 
     @hybrid_property
