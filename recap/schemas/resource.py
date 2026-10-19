@@ -179,9 +179,7 @@ class PropertySchema(CommonFields):
             if attr_tmpl.value_type == "enum":
                 validate_enum_value(value, _attr_metadata(attr_tmpl), name=name)
             coerced[name] = {
-                "value": raw_value
-                if attr_tmpl.value_type == "array"
-                else value,
+                "value": raw_value if attr_tmpl.value_type == "array" else value,
                 "unit": attr_tmpl.unit if raw_unit is None else raw_unit,
                 "metadata_json": raw_metadata,
             }

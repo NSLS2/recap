@@ -26,9 +26,12 @@ def test_attribute_template_null_defaults(value_type, explicit):
 
 @pytest.mark.parametrize("value_type", list(ValueType))
 def test_internal_attribute_accepts_null_default(value_type):
-    assert Attribute(
-        name="value", slug="value", value_type=value_type, default_value=None
-    ).default_value is None
+    assert (
+        Attribute(
+            name="value", slug="value", value_type=value_type, default_value=None
+        ).default_value
+        is None
+    )
 
 
 @pytest.mark.parametrize("schema_type", [PropertySchema, ParameterSchema])
