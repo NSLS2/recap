@@ -510,6 +510,7 @@ class ProcessRunBuilder:
     Clean context-manager exit commits and exception exit rolls back local work;
     command-backed remote builders submit validated drafts. UUID loading,
     ``on_existing``, lifecycle methods, and validation errors are preserved.
+    Edits to a finalized run create a copy unless ``in_place=True``.
     """
 
     def __init__(  # noqa: C901
@@ -525,6 +526,7 @@ class ProcessRunBuilder:
         on_existing: Literal["silent", "warn", "raise"] = "warn",
         command_context: CommandContext,
         template_id: UUID | None = None,
+        in_place: bool = False,
     ):
         if command_context is None:
             raise ValueError("ProcessRunBuilder requires command context")
@@ -538,6 +540,7 @@ class ProcessRunBuilder:
             raise ValueError("on_existing must be one of: 'silent', 'warn', 'raise'")
         self.on_existing = on_existing
         self._command_context = command_context
+        self._in_place = in_place
         self._template_id = template_id
         self._process_template = None
         self._submitted = False
@@ -691,7 +694,11 @@ class ProcessRunBuilder:
                     },
                 ),
             )
-        elif needs_data and self._process_run.status is not LifecycleStatus.MUTABLE:
+        elif (
+            needs_data
+            and self._process_run.status is not LifecycleStatus.MUTABLE
+            and not self._in_place
+        ):
             command = CopyProcessRun(
                 source_process_run_id=self._process_run.id,
                 destination_namespace_path=self.namespace_context.path,
@@ -710,6 +717,7 @@ class ProcessRunBuilder:
                 description=description,
                 assignments=assignments or None,
                 steps=steps or None,
+                in_place=self._in_place,
             )
         if needs_data:
             result = self.backend._execute(command, self._command_context)

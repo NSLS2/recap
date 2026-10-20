@@ -61,6 +61,7 @@ class ResourceBuilder:
         on_existing: Literal["create", "silent", "warn", "raise"] = "warn",
         command_context: CommandContext,
         transaction: BuilderTransactionState | None = None,
+        in_place: bool = False,
     ):
         if command_context is None:
             raise ValueError("ResourceBuilder requires command context")
@@ -77,6 +78,7 @@ class ResourceBuilder:
             )
         self.on_existing = on_existing
         self._command_context = command_context
+        self._in_place = in_place
         self._transaction = transaction or BuilderTransactionState()
         self.backend = backend
         self._submitted = False
@@ -376,7 +378,9 @@ class ResourceBuilder:
                     parent_id=self._parent_id(),
                     properties=properties,
                 )
-        elif self._resource.status is not LifecycleStatus.MUTABLE:
+        elif (
+            self._resource.status is not LifecycleStatus.MUTABLE and not self._in_place
+        ):
             command = CopyResource(
                 source_resource_id=self._resource.id,
                 destination_namespace_path=self.namespace_context.path,
@@ -395,6 +399,7 @@ class ResourceBuilder:
                 if self._draft is not None
                 else self._resource.name,
                 properties=properties,
+                in_place=self._in_place,
             )
         result = self.backend._execute(command, self._command_context)
         if not isinstance(result, ResourceSchema):

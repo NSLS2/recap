@@ -397,17 +397,26 @@ class RecapClient:
 
     @overload
     def build_process_run(
-        self, name: str, description: str, template_name: str, version: str
+        self,
+        name: str,
+        description: str,
+        template_name: str,
+        version: str,
+        *,
+        in_place: bool = False,
     ) -> ProcessRunBuilder: ...
 
     @overload
-    def build_process_run(self, *, process_run_id: UUID) -> ProcessRunBuilder: ...
+    def build_process_run(
+        self, *, process_run_id: UUID, in_place: bool = False
+    ) -> ProcessRunBuilder: ...
 
     def build_process_run(
         self,
         *args,
         process_run_id: UUID | None = None,
         on_existing: Literal["silent", "warn", "raise"] = "warn",
+        in_place: bool = False,
         **kwargs,
     ) -> ProcessRunBuilder:
         """Open a builder for a :class:`~recap.dsl.process_builder.ProcessRunBuilder`.
@@ -439,6 +448,10 @@ class RecapClient:
                 positional arguments must not be provided.
             on_existing: Controls behavior when run already exists:
                 ``"warn"`` (default), ``"raise"``, or ``"silent"``.
+            in_place: When ``True``, edits to a finalized (``ACTIVE``) run
+                are applied to that run directly instead of creating a
+                copy. The revision still increments. Archived runs cannot
+                be edited. Defaults to ``False``.
 
         Returns:
             A :class:`~recap.dsl.process_builder.ProcessRunBuilder` context
@@ -465,6 +478,7 @@ class RecapClient:
                 version=None,
                 process_run_id=process_run_id,
                 on_existing=on_existing,
+                in_place=in_place,
             )
 
         if args:
@@ -496,6 +510,7 @@ class RecapClient:
             command_context=self._command_context(),
             version=version,
             on_existing=on_existing,
+            in_place=in_place,
         )
 
     @overload
@@ -601,10 +616,14 @@ class RecapClient:
         template_name: str,
         template_version: str = "1.0",
         parent: "ResourceSchema | UUID | None" = None,
+        *,
+        in_place: bool = False,
     ) -> ResourceBuilder: ...
 
     @overload
-    def build_resource(self, *, resource_id: UUID) -> ResourceBuilder: ...
+    def build_resource(
+        self, *, resource_id: UUID, in_place: bool = False
+    ) -> ResourceBuilder: ...
 
     def build_resource(
         self,
@@ -612,6 +631,7 @@ class RecapClient:
         resource_id: UUID | None = None,
         on_existing: Literal["create", "silent", "warn", "raise"] = "warn",
         parent: "ResourceSchema | UUID | None" = None,
+        in_place: bool = False,
         **kwargs,
     ):
         """Open a builder for a :class:`~recap.dsl.resource_builder.ResourceBuilder`.
@@ -651,6 +671,12 @@ class RecapClient:
                 or a :class:`~uuid.UUID` (which will be resolved to a
                 schema via backend query).  Cannot be combined with
                 ``resource_id``.
+            in_place: When ``True``, edits to an ``ACTIVE`` resource (or a
+                child of an active resource) are applied directly instead of
+                creating a copy. The revision still increments and finalized
+                process runs that reference the resource see the new values.
+                Archived resources cannot be edited. Defaults to
+                ``False``.
 
         Returns:
             A :class:`~recap.dsl.resource_builder.ResourceBuilder` context
@@ -680,6 +706,7 @@ class RecapClient:
                 namespace_context=self.namespace_context,
                 resource_id=resource_id,
                 on_existing=on_existing,
+                in_place=in_place,
             )
 
         resolved_parent = self._resolve_parent(parent, self.namespace_context)
@@ -694,6 +721,7 @@ class RecapClient:
             namespace_context=self.namespace_context,
             on_existing=on_existing,
             parent=resolved_parent,
+            in_place=in_place,
         )
 
     def _resolve_parent(

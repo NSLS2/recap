@@ -165,14 +165,13 @@ class CommandRegistry:
 def _encode_update_resource(command: CommandModel) -> EncodedRequest:
     assert isinstance(command, UpdateResource)
     data = command.model_dump(mode="json")
+    excluded = {"resource_id", "expected_revision"}
+    if not command.in_place:
+        excluded.add("in_place")
     return EncodedRequest(
         method="PATCH",
         path=f"/api/v1/resources/{command.resource_id}",
-        body={
-            key: value
-            for key, value in data.items()
-            if key not in {"resource_id", "expected_revision"}
-        },
+        body={key: value for key, value in data.items() if key not in excluded},
         etag=_revision_etag(command.expected_revision),
     )
 
@@ -392,6 +391,8 @@ def _encode_update_process_run(command: CommandModel) -> EncodedRequest:
     data = command.model_dump(mode="json")
     data.pop("process_run_id")
     data.pop("expected_revision")
+    if not command.in_place:
+        data.pop("in_place")
     return EncodedRequest(
         method="PATCH",
         path=f"/api/v1/process-runs/{command.process_run_id}",

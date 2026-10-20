@@ -39,6 +39,7 @@ class UpdateResource(CommandModel):
     expected_revision: int
     name: str | None = None
     properties: dict[str, dict[str, object]] | None = None
+    in_place: bool = False
 
 
 class CreateNamespace(CommandModel):
@@ -97,6 +98,7 @@ class UpdateProcessRun(CommandModel):
     status: str | None = None
     assignments: dict[str, UUID] | None = None
     steps: dict[str, dict[str, dict[str, object]]] | None = None
+    in_place: bool = False
 
 
 class CopyProcessRun(CommandModel):

@@ -92,13 +92,19 @@ half-built records do not appear. `finalize()` moves an entity to active.
 `include_archived()`.
 
 **Frozen**
-: A template or resource that has acquired a stable reference and can no longer
-be edited in place. Changes are made by copying instead. See
-[Manage Resource Lifecycle](../how-to/manage-resource-lifecycle.qmd).
+: A template or resource that has acquired a stable reference. By default,
+changes are made by copying instead of editing. Active resources and
+finalized process runs can still be edited explicitly with `in_place=True`.
+See [Manage Resource Lifecycle](../how-to/manage-resource-lifecycle.qmd).
 
 **Copy-on-write**
 : Deriving a new resource from a frozen one rather than editing it, preserving
 the link to the source through `copied_from_id`.
+
+**Edit in place**
+: Opt-in change to an active resource or finalized process run, requested with
+`in_place=True`. The object keeps its ID and status; its revision increments.
+Archived objects cannot be edited in place.
 
 **Revision**
 : A per-entity counter incremented on every successful write, used for

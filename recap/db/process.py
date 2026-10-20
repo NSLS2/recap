@@ -455,6 +455,24 @@ def _validate_status_change(root):
         validate_transition(history.deleted[0], root.status)
 
 
+IN_PLACE_ROOTS_KEY = "recap_in_place_roots"
+
+
+def allow_in_place_edit(session: Session, root) -> None:
+    """Permit explicit edits to one frozen aggregate for this session.
+
+    Explicit ``in_place`` update commands call this before mutating an ACTIVE
+    resource graph or finalized process run. Only ACTIVE ``Resource`` or
+    ``ProcessRun`` aggregates whose root is registered bypass the provenance
+    guard; ARCHIVED roots and templates are still blocked, and lifecycle
+    transitions are still validated. The allow-list lives in ``session.info``
+    and is discarded with the session.
+    """
+    if root.id is None:
+        raise ValueError("In-place edit requires a persisted aggregate root")
+    session.info.setdefault(IN_PLACE_ROOTS_KEY, set()).add(root.id)
+
+
 @event.listens_for(Session, "before_flush")
 def _enforce_provenance_lifecycle(session, flush_context, instances):  # noqa: C901
     from recap.db.resource import Resource
@@ -491,11 +509,18 @@ def _enforce_provenance_lifecycle(session, flush_context, instances):  # noqa: C
         _validate_status_change(root)
 
     changed = set(session.new) | set(session.dirty) | set(session.deleted)
+    in_place_roots = session.info.get(IN_PLACE_ROOTS_KEY, ())
     for obj in changed:
         root = _aggregate_root(session, obj)
         if root is None or root in session.new:
             continue
         source_status = _source_status(root)
+        if (
+            root.id in in_place_roots
+            and isinstance(root, Resource | ProcessRun)
+            and source_status is LifecycleStatus.ACTIVE
+        ):
+            continue
         if source_status is LifecycleStatus.MUTABLE:
             continue
         if isinstance(root, Resource) and isinstance(obj, Resource):

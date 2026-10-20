@@ -271,13 +271,22 @@ def test_merge_preserves_nested_generated_containers(
 ):
     stamp = datetime(2026, 1, 1)
     template = AttributeGroupTemplateSchema(
-        id=uuid4(), create_date=stamp, modified_date=stamp,
-        name="Measurements", slug="measurements",
+        id=uuid4(),
+        create_date=stamp,
+        modified_date=stamp,
+        name="Measurements",
+        slug="measurements",
         attribute_templates=[
             AttributeTemplateSchema(
-                id=uuid4(), create_date=stamp, modified_date=stamp,
-                name="Dose", slug="dose", value_type="int",
-                default_value=None, unit="uL", metadata={"min": 0, "max": 10},
+                id=uuid4(),
+                create_date=stamp,
+                modified_date=stamp,
+                name="Dose",
+                slug="dose",
+                value_type="int",
+                default_value=None,
+                unit="uL",
+                metadata={"min": 0, "max": 10},
             ),
         ],
     )
@@ -289,11 +298,19 @@ def test_merge_preserves_nested_generated_containers(
             (("Dose", "dose", "int", {"min": 0, "max": 10}, "uL"),),
         )
         return group_type(
-            id=group_id, create_date=stamp, modified_date=stamp,
+            id=group_id,
+            create_date=stamp,
+            modified_date=stamp,
             template=template,
-            values=model.model_validate({"Dose": {
-                "value": value, "unit": unit, "metadata_json": metadata,
-            }}),
+            values=model.model_validate(
+                {
+                    "Dose": {
+                        "value": value,
+                        "unit": unit,
+                        "metadata_json": metadata,
+                    }
+                }
+            ),
         )
 
     current_group = group(1, "uL", {"old": True})
@@ -301,11 +318,19 @@ def test_merge_preserves_nested_generated_containers(
     container = create_model("MeasurementsContainer", measurements=(group_type, ...))
     current = container(measurements=current_group)
     incoming_type = (
-        create_model("OtherMeasurementsContainer", measurements=(group_type, ...),
-                     unknown=(int, Field(default=3)))
-        if different_class else container
+        create_model(
+            "OtherMeasurementsContainer",
+            measurements=(group_type, ...),
+            unknown=(int, Field(default=3)),
+        )
+        if different_class
+        else container
     )
-    incoming = incoming_type(measurements=incoming_group, unknown=3) if different_class else incoming_type(measurements=incoming_group)
+    incoming = (
+        incoming_type(measurements=incoming_group, unknown=3)
+        if different_class
+        else incoming_type(measurements=incoming_group)
+    )
     original_values = current_group.values
     original_value = original_values.dose
     original_type = type(original_values)

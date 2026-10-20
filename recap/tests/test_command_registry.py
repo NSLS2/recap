@@ -178,6 +178,7 @@ def test_service_dispatches_update_resource_via_registered_handler(monkeypatch):
             "expected_revision": 1,
             "name": "renamed",
             "properties": None,
+            "in_place": False,
         }
     ]
 
@@ -571,5 +572,37 @@ def test_service_dispatches_process_run_via_registered_handler(monkeypatch):
             "status": None,
             "assignments": None,
             "steps": None,
+            "in_place": False,
         }
     ]
+
+
+def test_update_encoders_emit_in_place_only_when_true():
+    plain = UpdateResource(resource_id=uuid4(), expected_revision=2, name="n")
+    flagged = UpdateResource(
+        resource_id=uuid4(), expected_revision=2, name="n", in_place=True
+    )
+    assert (
+        "in_place" not in COMMAND_REGISTRY.by_command(plain).encode_request(plain).body
+    )
+    assert (
+        COMMAND_REGISTRY.by_command(flagged).encode_request(flagged).body["in_place"]
+        is True
+    )
+
+    run_plain = UpdateProcessRun(
+        process_run_id=uuid4(), expected_revision=2, description="d"
+    )
+    run_flagged = UpdateProcessRun(
+        process_run_id=uuid4(), expected_revision=2, description="d", in_place=True
+    )
+    assert (
+        "in_place"
+        not in COMMAND_REGISTRY.by_command(run_plain).encode_request(run_plain).body
+    )
+    assert (
+        COMMAND_REGISTRY.by_command(run_flagged)
+        .encode_request(run_flagged)
+        .body["in_place"]
+        is True
+    )

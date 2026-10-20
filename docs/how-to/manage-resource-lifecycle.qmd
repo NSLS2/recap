@@ -1,6 +1,6 @@
 ---
 title: Manage Resource Lifecycle
-description: Activate, archive, and copy resources, including how to edit a frozen one.
+description: Activate, archive, copy, and edit resources in place, including how to change an active one.
 ---
 
 # Manage Resource Lifecycle
@@ -8,8 +8,9 @@ description: Activate, archive, and copy resources, including how to edit a froz
 Resources move through three states:
 
 - **Mutable**: properties can be edited and saved.
-- **Active**: resource is finalized for use and cannot be patched in place.
-- **Archived**: resource is retained for history and cannot be patched in place.
+- **Active**: resource is finalized for use. Edits create a copy unless you
+  opt in to editing in place.
+- **Archived**: resource is retained for history and cannot be edited.
 
 ## Activate a resource
 
@@ -33,8 +34,9 @@ lifecycle.
 
 ## Edit frozen resources with copy-on-write
 
-Active and archived resources cannot be patched in place. Create mutable copy,
-then edit copy:
+By default, editing an active resource through a builder saves your changes
+to a new mutable copy and leaves the source untouched. To make the copy
+explicitly:
 
 ```python
 from recap import ResourceCopyOptions
@@ -50,3 +52,39 @@ with namespace.build_resource(resource_id=copied.id) as builder:
 ```
 
 Copy-on-write preserves frozen source and records lineage from copy to source.
+
+## Edit an active resource in place
+
+When an active resource holds a mistake, or holds state that legitimately
+changes over time, pass `in_place=True` to change it directly. Given an active
+resource `sample`:
+
+```python
+with namespace.build_resource(resource_id=sample.id, in_place=True) as builder:
+    builder.resource.properties["details"].values["concentration"] = 2.5
+```
+
+The resource keeps its ID and `ACTIVE` status, and its revision increments.
+This also works for a child of an active resource. In-place editing changes
+names and values only; it cannot add or remove child resources.
+
+Finalized process runs also default to copy-on-write: edits through
+`build_process_run` save to a new mutable copy unless you pass
+`in_place=True`. Given a finalized process run `run`, edit it in place:
+
+```python
+with namespace.build_process_run(process_run_id=run.id, in_place=True) as run_builder:
+    params = run_builder.get_params("Collect")
+    params.inputs.values.exposure.value = 0.2
+    run_builder.set_params(params)
+```
+
+::: {.callout-warning}
+## In-place edits rewrite history
+
+Process runs that already reference an edited resource see the new values.
+The revision number is the only record of the change. Use copy-on-write when
+you need to preserve what a run originally used.
+:::
+
+Archived resources and runs cannot be edited, even with `in_place=True`.

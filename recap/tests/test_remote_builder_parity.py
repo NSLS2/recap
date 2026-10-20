@@ -40,7 +40,9 @@ def seed_command_namespace(client):
     return scoped
 
 
-def test_overlapping_trees_and_assignments_preserve_generated_properties(command_client):
+def test_overlapping_trees_and_assignments_preserve_generated_properties(
+    command_client,
+):
     scoped = seed_command_namespace(command_client)
     with scoped.build_resource_template(name="Overlap plate", type_names=["plate"]):
         pass
@@ -48,12 +50,21 @@ def test_overlapping_trees_and_assignments_preserve_generated_properties(command
         with scoped.build_resource_template(
             name=f"Overlap well {index}", type_names=["well"]
         ) as template:
-            template.add_properties({"Measurements": [
-                {"name": "Dose", "type": "int", "default": None,
-                 "unit": "uL", "metadata": {"min": 0, "max": 10}},
-                {"name": "Label", "type": "str", "default": f"well-{index}"},
-                {"name": "Readings", "type": "array", "default": [index]},
-            ]})
+            template.add_properties(
+                {
+                    "Measurements": [
+                        {
+                            "name": "Dose",
+                            "type": "int",
+                            "default": None,
+                            "unit": "uL",
+                            "metadata": {"min": 0, "max": 10},
+                        },
+                        {"name": "Label", "type": "str", "default": f"well-{index}"},
+                        {"name": "Readings", "type": "array", "default": [index]},
+                    ]
+                }
+            )
     with scoped.build_resource("plate", "Overlap plate") as plate_builder:
         for index in range(2):
             plate_builder.add_child(f"well-{index}", f"Overlap well {index}")
@@ -66,7 +77,9 @@ def test_overlapping_trees_and_assignments_preserve_generated_properties(command
         template.add_resource_slot("plate", "plate", Direction.input)
         template.add_resource_slot("well", "well", Direction.input)
     plate = plate_builder.resource
-    with scoped.build_process_run("overlap-run", "", "Overlap measurement", "1.0") as run_builder:
+    with scoped.build_process_run(
+        "overlap-run", "", "Overlap measurement", "1.0"
+    ) as run_builder:
         run_builder.assign_resource("plate", plate)
         run_builder.assign_resource("well", plate.children["well-0"])
     with run_builder:
@@ -78,7 +91,13 @@ def test_overlapping_trees_and_assignments_preserve_generated_properties(command
     snapshots = {}
     for name, child in tree.children.items():
         group = child.properties.measurements
-        snapshots[name] = (child, child.properties, group, group.values, group.values.dose)
+        snapshots[name] = (
+            child,
+            child.properties,
+            group,
+            group.values,
+            group.values.dose,
+        )
 
     def assert_child(child):
         original, properties, group, values, dose = snapshots[child.name]
@@ -96,7 +115,11 @@ def test_overlapping_trees_and_assignments_preserve_generated_properties(command
         assert set(type(values).model_fields) == {"dose", "label", "readings"}
 
     for _ in range(2):
-        run = maker.process_runs(load="eager").filter(id=run_builder.process_run.id).first()
+        run = (
+            maker.process_runs(load="eager")
+            .filter(id=run_builder.process_run.id)
+            .first()
+        )
         assigned_plate = run.assigned_resources["plate"].resource
         assert assigned_plate is tree
         assert_child(run.assigned_resources["well"].resource)
@@ -109,7 +132,8 @@ def test_overlapping_trees_and_assignments_preserve_generated_properties(command
         for child in repeated[0].children.values():
             assert_child(child)
         wells = [
-            resource for resource in maker.resources(load="eager").all()
+            resource
+            for resource in maker.resources(load="eager").all()
             if resource.id != tree.id
         ]
         for resource in wells:
@@ -765,3 +789,46 @@ def test_remote_namespace_write_rejects_invalid_api_key(tmp_path, monkeypatch):
 
     assert caught.value.status_code == 401
     assert "wrong-key" not in str(caught.value)
+
+
+def test_resource_in_place_edit_has_local_remote_parity(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(
+        name="Sample", type_names=["sample"]
+    ) as template:
+        template.prop_group("details").add_attribute(
+            "serial", "str", "", "old"
+        ).close_group()
+    resource = scoped.create_resource("sample-1", "Sample")
+    with scoped.build_resource(resource_id=resource.id) as builder:
+        builder.finalize()
+    active_revision = builder.resource.revision
+
+    with scoped.build_resource(resource_id=resource.id, in_place=True) as builder:
+        model = builder.get_model()
+        model.properties.details.values.serial.value = "new"
+        builder.set_model(model)
+
+    assert builder.resource.id == resource.id
+    assert builder.resource.status.value == "ACTIVE"
+    assert builder.resource.revision == active_revision + 1
+    assert builder.resource.properties.details.values.serial.value == "new"
+
+
+def test_process_run_in_place_edit_has_local_remote_parity(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_process_template("Measure", "1.0"):
+        pass
+    with scoped.build_process_run("run-1", "original", "Measure", "1.0") as builder:
+        builder.finalize()
+    run = builder.process_run
+
+    with scoped.build_process_run(process_run_id=run.id, in_place=True) as builder:
+        model = builder.get_model()
+        model.description = "corrected"
+        builder.set_model(model)
+
+    assert builder.process_run.id == run.id
+    assert builder.process_run.status.value == "ACTIVE"
+    assert builder.process_run.description == "corrected"
+    assert builder.process_run.revision == run.revision + 1

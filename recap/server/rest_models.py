@@ -40,6 +40,7 @@ class CreateResourceRequest(RestModel):
 class UpdateResourceRequest(RestModel):
     name: str | None = None
     properties: dict[str, dict[str, Any]] | None = None
+    in_place: bool = False
 
     @model_validator(mode="after")
     def require_change(self):
@@ -53,6 +54,7 @@ class UpdateProcessRunRequest(RestModel):
     status: str | None = None
     assignments: dict[str, UUID] | None = None
     steps: dict[str, dict[str, dict[str, object]]] | None = None
+    in_place: bool = False
 
     @model_validator(mode="after")
     def require_change(self):

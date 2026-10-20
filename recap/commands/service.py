@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from json_merge_patch import merge
@@ -38,6 +38,8 @@ from recap.db.process import (
     ProcessTemplate,
     ResourceAssignment,
     ResourceSlot,
+    _resource_root,
+    allow_in_place_edit,
 )
 from recap.db.resource import Property, Resource, ResourceTemplate, ResourceType
 from recap.db.step import Step, StepTemplate, StepTemplateResourceSlotBinding
@@ -86,6 +88,11 @@ class _UpdateResourceFingerprint(BaseModel):
     expected_revision: int
 
 
+class _InPlaceUpdateResourceFingerprint(_UpdateResourceFingerprint):
+    # Subclass keeps default-update fingerprints byte-identical to pre-feature.
+    in_place: Literal[True] = True
+
+
 class _UpdateFingerprint(BaseModel):
     metadata: dict[str, Any] | None
     status: LifecycleStatus | None
@@ -108,6 +115,24 @@ class _UpdateProcessRunFingerprint(BaseModel):
     assignments: dict[str, UUID] | None
     steps: dict[str, dict[str, dict[str, object]]] | None
     expected_revision: int
+
+
+class _InPlaceUpdateProcessRunFingerprint(_UpdateProcessRunFingerprint):
+    in_place: Literal[True] = True
+
+
+def _effective_resource_status(resource: Resource, root: Resource) -> LifecycleStatus:
+    """Return lifecycle status that governs edits to ``resource``.
+
+    Activation marks only the aggregate root, so descendants of an ACTIVE
+    root still carry ``MUTABLE`` themselves.
+    """
+    statuses = {resource.status, root.status}
+    if LifecycleStatus.ARCHIVED in statuses:
+        return LifecycleStatus.ARCHIVED
+    if LifecycleStatus.ACTIVE in statuses:
+        return LifecycleStatus.ACTIVE
+    return LifecycleStatus.MUTABLE
 
 
 class _LifecycleFingerprint(BaseModel):
@@ -345,6 +370,7 @@ class CommandService:
         expected_revision: int,
         name: str | None = None,
         properties: dict[str, dict[str, object]] | None = None,
+        in_place: bool = False,
     ) -> ResourceSchema:
         if expected_revision < 1:
             raise CommandValidationError("Expected revision must be positive")
@@ -355,8 +381,14 @@ class CommandService:
             route_template="/api/v1/resources/{resource_id}",
             namespace_path=None,
             source_id=resource_id,
-            body=_UpdateResourceFingerprint(
-                name=name, properties=properties, expected_revision=expected_revision
+            body=(
+                _InPlaceUpdateResourceFingerprint
+                if in_place
+                else _UpdateResourceFingerprint
+            )(
+                name=name,
+                properties=properties,
+                expected_revision=expected_revision,
             ),
         )
         try:
@@ -377,8 +409,14 @@ class CommandService:
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
                     return ResourceSchema.model_validate(decision.response)
-                if resource.status is not LifecycleStatus.MUTABLE:
-                    raise CommandConflictError("Cannot update an active resource")
+                root = _resource_root(resource)
+                effective_status = _effective_resource_status(resource, root)
+                if effective_status is LifecycleStatus.ARCHIVED:
+                    raise CommandConflictError("Cannot update an archived resource")
+                if effective_status is LifecycleStatus.ACTIVE:
+                    if not in_place:
+                        raise CommandConflictError("Cannot update an active resource")
+                    allow_in_place_edit(session, root)
                 if name is not None:
                     duplicate = session.scalar(
                         select(Resource.id).where(
@@ -1217,6 +1255,7 @@ class CommandService:
         status: str | None = None,
         assignments: dict[str, UUID] | None = None,
         steps: dict[str, dict[str, dict[str, object]]] | None = None,
+        in_place: bool = False,
     ):
         if expected_revision < 1:
             raise CommandValidationError("Expected revision must be positive")
@@ -1225,7 +1264,11 @@ class CommandService:
             route_template="/api/v1/process-runs/{process_run_id}",
             namespace_path=None,
             source_id=process_run_id,
-            body=_UpdateProcessRunFingerprint(
+            body=(
+                _InPlaceUpdateProcessRunFingerprint
+                if in_place
+                else _UpdateProcessRunFingerprint
+            )(
                 description=description,
                 status=status,
                 assignments=assignments,
@@ -1259,14 +1302,34 @@ class CommandService:
                     and steps is None
                 ):
                     raise CommandValidationError("Process run update is empty")
-                if run.status is not LifecycleStatus.MUTABLE and (
+                changes_content = (
                     description is not None
                     or assignments is not None
                     or steps is not None
-                ):
-                    raise CommandConflictError("Cannot update a finalized process run")
+                )
+                if changes_content and run.status is LifecycleStatus.ARCHIVED:
+                    raise CommandConflictError("Cannot update an archived process run")
+                if changes_content and run.status is LifecycleStatus.ACTIVE:
+                    if not in_place:
+                        raise CommandConflictError(
+                            "Cannot update a finalized process run"
+                        )
+                    allow_in_place_edit(session, run)
                 if assignments is not None:
                     self._apply_run_assignments(session, run, assignments, context)
+                    if run.status is LifecycleStatus.ACTIVE:
+                        # A finalized run must never reference mutable data;
+                        # mirror finalize() for resources assigned in place.
+                        for slot, assignment in run.assignments.items():
+                            if slot.name not in assignments:
+                                continue
+                            root = _resource_root(assignment.resource)
+                            if root.status is LifecycleStatus.ARCHIVED:
+                                raise CommandConflictError(
+                                    "Cannot assign an archived resource "
+                                    "to a finalized process run"
+                                )
+                            root.activate()
                 if steps is not None:
                     self._apply_run_steps(session, run, steps)
                     session.flush()

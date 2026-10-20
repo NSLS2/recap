@@ -194,23 +194,21 @@ The builder validates against the template and saves once, on clean exit. If
 the block raises, nothing is written.
 
 ::: {.callout-important}
-## Writes to an active resource are silently ignored
+## Writes to an active resource go to a copy unless `in_place=True`
 
-A resource is frozen once it becomes `ACTIVE`, and an attempted edit does
-**not** raise. It simply has no effect:
+A resource is frozen once it becomes `ACTIVE`. Saving builder edits to it
+creates a new mutable copy and leaves the original unchanged:
 
-```{python}
-print("before:", plate.status)
-
+```python
 with namespace.build_resource(resource_id=plate.id) as builder:
-    builder.resource.properties.dimensions.rows = 9999
+    builder.resource.properties.dimensions.rows = 9999  # saved to a copy
 
-check = namespace.query_maker().resources().filter(name="Plate 001").first()
-print("after: ", check.properties.dimensions.rows.value, "(9999 discarded)")
+with namespace.build_resource(resource_id=plate.id, in_place=True) as builder:
+    builder.resource.properties.dimensions.rows = 24    # changes plate itself
 ```
 
 Since queries only return active resources, any resource you *found* by
-querying is already frozen. To change one, copy it first, as described in
+querying is already frozen. See
 [Manage Resource Lifecycle](../how-to/manage-resource-lifecycle.qmd).
 :::
 
@@ -255,7 +253,7 @@ scan.steps["Scan"].parameters.acquisition.exposure = 5.0   # no effect
 | `.values` level | optional | optional |
 | `.value` suffix | required | required |
 | Write | assign on `builder.resource.properties` | `get_params()` / `set_params()` |
-| Write window | while `MUTABLE` only | inside `build_process_run` |
+| Write window | while `MUTABLE`, or `ACTIVE` with `in_place=True` | inside `build_process_run` |
 
 ```{python}
 #| include: false

@@ -52,14 +52,25 @@ successful context-manager exit. An exception rolls the change back.
 ## Change values on an active resource
 
 ::: {.callout-important}
-## Active resources are frozen, and edits to them fail silently
+## Edits to an active resource go to a copy by default
 
-A resource becomes frozen once it is `ACTIVE`. Assigning to its properties
-raises no error and has no effect. Because queries return only active
-resources, any resource you located with a query is already frozen.
+A resource becomes frozen once it is `ACTIVE`. Saving builder edits to it
+creates a new mutable copy that records its origin; the original is
+unchanged. Because queries return only active resources, any resource you
+located with a query is already frozen.
 :::
 
-Copy the resource, then edit the copy:
+To change the active resource itself, opt in to editing in place:
+
+```python
+with namespace.build_resource(resource_id=plate.id, in_place=True) as builder:
+    builder.resource.properties.dimensions.rows = 16
+```
+
+The resource keeps its ID and status and its revision increments. Process
+runs that reference it see the new values.
+
+To keep the original and work on a revision instead, copy it explicitly:
 
 ```python
 from recap import ResourceCopyOptions
@@ -76,8 +87,8 @@ with namespace.build_resource(resource_id=copied.id) as builder:
 
 The copy records its origin, so lineage from the revision back to the original
 is preserved. See
-[Manage Resource Lifecycle](manage-resource-lifecycle.qmd) for the full
-copy-on-write procedure.
+[Manage Resource Lifecycle](manage-resource-lifecycle.qmd) for both
+procedures.
 
 ## Units and metadata
 

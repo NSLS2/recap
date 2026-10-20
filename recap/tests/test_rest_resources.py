@@ -214,3 +214,45 @@ def test_copy_resource_requires_destination_namespace(api_client, idempotency_he
     )
 
     assert response.status_code == 422
+
+
+def test_patch_active_resource_requires_in_place(
+    api_client, idempotency_headers, create_namespace
+):
+    create_namespace("beamline")
+    template = api_client.post(
+        "/api/v1/resource-templates/beamline",
+        headers=idempotency_headers("in-place-template"),
+        json={"name": "plate", "version": "1", "type_names": []},
+    )
+    resource = api_client.post(
+        "/api/v1/resources/beamline",
+        headers=idempotency_headers("in-place-resource"),
+        json={"name": "plate-1", "template_id": template.json()["id"]},
+    )
+    resource_id = resource.json()["id"]
+    activated = api_client.post(
+        f"/api/v1/lifecycle/resource/{resource_id}",
+        headers=idempotency_headers("in-place-activate", **{"If-Match": '"1"'}),
+        json={"status": "ACTIVE"},
+    )
+    assert activated.status_code == 200, activated.text
+    assert activated.headers["ETag"] == '"2"'
+
+    rejected = api_client.patch(
+        f"/api/v1/resources/{resource_id}",
+        headers=idempotency_headers("in-place-reject", **{"If-Match": '"2"'}),
+        json={"name": "plate-fixed"},
+    )
+    assert rejected.status_code == 409, rejected.text
+
+    updated = api_client.patch(
+        f"/api/v1/resources/{resource_id}",
+        headers=idempotency_headers("in-place-accept", **{"If-Match": '"2"'}),
+        json={"name": "plate-fixed", "in_place": True},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["id"] == resource_id
+    assert updated.json()["name"] == "plate-fixed"
+    assert updated.json()["status"] == "ACTIVE"
+    assert updated.headers["ETag"] == '"3"'
