@@ -698,6 +698,11 @@ class IdentityMap:
         *,
         _seen: set[tuple[int, int]] | None = None,
     ) -> bool:
+        # Canonicalization can return a relation already held by current. There
+        # is nothing to reconcile in that case; walking it again repeatedly
+        # traverses shared parent/child graphs and generated property models.
+        if current is incoming and isinstance(current, BaseModel | list | dict):
+            return True
         if _seen is None:
             _seen = set()
         if isinstance(current, BaseModel | list | dict) and isinstance(

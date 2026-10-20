@@ -150,6 +150,22 @@ def test_intern_handles_self_referential_persisted_graphs():
     assert canonical.children[0] is canonical
 
 
+@pytest.mark.parametrize("container_type", ["model", "dict", "list"])
+def test_merging_identical_container_does_not_rewalk_canonical_graph(container_type):
+    identity_map = IdentityMap()
+    resource = _resource(uuid4())
+    if container_type == "model":
+        container = resource
+    elif container_type == "dict":
+        container = {"sample": resource}
+    else:
+        container = [resource]
+
+    with patch.object(identity_map, "_canonicalize_value") as canonicalize:
+        assert identity_map._merge_container(container, container)
+        canonicalize.assert_not_called()
+
+
 def test_equal_revision_cyclic_template_relations_do_not_recurse():
     identity_map = IdentityMap()
     namespace_id = uuid4()
