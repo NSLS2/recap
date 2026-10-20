@@ -266,3 +266,9 @@ Path("access-reference.db").unlink(missing_ok=True)
 Related: [Edit Resource Properties](../how-to/edit-resource-properties.qmd),
 [Build Process Runs](../how-to/build-process-runs.qmd),
 [Manage Resource Lifecycle](../how-to/manage-resource-lifecycle.qmd).
+Property and parameter assignments are observed on builder-owned drafts. Groups
+record changed attribute keys and fields; resources and steps expose
+`properties_dirty` and `parameters_dirty` candidate flags. These flags indicate
+possible edits, not differences from persisted state. Builders compare against
+an independent baseline before writing. In-place array and value-metadata
+mutations are always compared, even when no assignment notification occurred.

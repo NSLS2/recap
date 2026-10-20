@@ -14,12 +14,14 @@ data fields ("attributes") on resources and process steps:
   supplied by the user before it is written to the database.
 """
 
+from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -108,6 +110,24 @@ class AttributeGroupTemplateSchema(LoadAwareMixin, CommonFields):
         return self
 
 
+class AttributeObserver:
+    """Draft-local notification binding, deliberately detached by deep copies."""
+
+    def __init__(self, notify: Callable[[str], None] | None = None):
+        self.notify = notify
+
+    def __deepcopy__(self, memo):
+        return type(self)()
+
+
+class AttributeChangeMixin:
+    """Read-only view of candidate changes recorded on an attribute group."""
+
+    @property
+    def changed_attributes(self) -> dict[str, set[str]]:
+        return {key: set(fields) for key, fields in self._changed_attributes.items()}
+
+
 class AttributeValueSchema(BaseModel):
     """A single stored attribute value with an optional physical unit.
 
@@ -132,6 +152,14 @@ class AttributeValueSchema(BaseModel):
     value: Any = None
     unit: str | None = None
     metadata_json: dict[str, Any] = Field(default_factory=dict)
+    _observer: AttributeObserver = PrivateAttr(default_factory=AttributeObserver)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name in {"value", "unit", "metadata_json"}:
+            observer = self._observer
+            if observer.notify is not None:
+                observer.notify(name)
 
     def __str__(self) -> str:
         """Return ``"<value><unit>"`` when a unit is set, otherwise ``str(value)``."""

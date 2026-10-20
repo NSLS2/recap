@@ -9,13 +9,15 @@ from pydantic import BaseModel, ConfigDict
 from recap.authentication.models import RequestActor
 from recap.authorization.query import NamespacePolicy
 from recap.dsl.drafts import (
+    ChildStepDraft,
     ProcessRunDraft,
+    ProcessRunStepDraft,
     ProcessTemplateDraft,
     ResourceTemplateDraft,
 )
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.process import ProcessRunCopyOptions
-from recap.schemas.resource import ResourceCopyOptions
+from recap.schemas.resource import ResourceChildDraft, ResourceCopyOptions
 from recap.server.audit import AuditSink
 
 
@@ -32,6 +34,7 @@ class CreateResource(CommandModel):
     template_id: UUID
     parent_id: UUID | None = None
     properties: dict[str, dict[str, object]] | None = None
+    children: tuple[ResourceChildDraft, ...] = ()
 
 
 class UpdateResource(CommandModel):
@@ -40,6 +43,7 @@ class UpdateResource(CommandModel):
     name: str | None = None
     properties: dict[str, dict[str, object]] | None = None
     in_place: bool = False
+    children: tuple[ResourceChildDraft, ...] = ()
 
 
 class CreateNamespace(CommandModel):
@@ -97,8 +101,9 @@ class UpdateProcessRun(CommandModel):
     description: str | None = None
     status: str | None = None
     assignments: dict[str, UUID] | None = None
-    steps: dict[str, dict[str, dict[str, object]]] | None = None
+    steps: dict[str, ProcessRunStepDraft | dict[str, dict[str, object]]] | None = None
     in_place: bool = False
+    child_steps: tuple[ChildStepDraft, ...] = ()
 
 
 class CopyProcessRun(CommandModel):

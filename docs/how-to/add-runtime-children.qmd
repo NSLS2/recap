@@ -24,6 +24,51 @@ with namespace.build_resource(resource_id=collection.id) as builder:
 Child resources are persisted as part of the root aggregate and remain
 available through the root's `children` dictionary.
 
-Process templates define their ordered steps. Process-run builders record
-assignments and parameter values for those declared steps; they do not support
-adding child process steps at runtime.
+## Add a child process step
+
+Runtime child steps record finer detail beneath a template-generated step:
+
+```python
+with namespace.build_process_run(process_run_id=run.id) as builder:
+    parent = builder.process_run.steps["Transfer"]
+    child = parent.generate_child(name="A01 to B01")
+    child.parameters.transfer.volume = 20
+    child.resources["source"] = source.children["A01"]
+    child.resources["destination"] = target.children["B01"]
+    builder.add_child_step(child)
+
+recorded = builder.process_run.steps["Transfer"]["A01 to B01"]
+```
+
+Children use their parent's exact step template and start with template-default
+parameters, rather than the parent's recorded values. Roles inherit run-level
+resource assignments through the template's slot bindings. An explicit role
+assignment must select the assigned resource or one of its descendants.
+
+`run.steps` contains template-generated steps only. Each step's `children`
+dictionary contains its runtime children; `step[name]` is shorthand for
+`step.children[name]`. Child names are unique within their parent. Children
+cannot have further child steps.
+
+To correct an existing child, edit a detached run model and submit it:
+
+```python
+with namespace.build_process_run(process_run_id=run.id) as builder:
+    model = builder.get_model()
+    model.steps["Transfer"]["A01 to B01"].parameters.transfer.volume = 25
+    builder.set_model(model)
+```
+
+Parameter values, units, value metadata, and resource-role replacements can be
+edited. Deletion, reparenting, template changes, and clearing role overrides are
+not supported. Recording a transfer does not change liquid balances or resource
+properties automatically.
+
+## Lifecycle behavior
+
+Mutable resources and runs accept children in place. Adding children to an
+active resource or finalized run creates a mutable copy by default. To correct
+the original, open its builder with `in_place=True`; its ID and status remain
+unchanged and its revision increments. Archived originals cannot be edited.
+Child additions and owner content changes are committed together; a failed
+addition rolls back the content changes in that submission.

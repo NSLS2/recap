@@ -23,6 +23,7 @@ from sqlalchemy.orm import (
     relationship,
     validates,
 )
+from sqlalchemy.orm.collections import collection
 
 from recap.db.namespace import Namespace
 from recap.db.step import Step, StepTemplate, StepTemplateEdge
@@ -36,6 +37,38 @@ if typing.TYPE_CHECKING:
     from recap.db.resource import Resource, ResourceType
 
 AssignedResource = namedtuple("AssignedResource", ["slot", "resource"])
+
+
+class RunStepCollection(mapped_collection(lambda step: step.id)):
+    """UUID-keyed storage with compatibility lookup for root step names."""
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            step = next(
+                (
+                    step
+                    for step in self.values()
+                    if step.parent_id is None
+                    and step.parent is None
+                    and step.name == key
+                ),
+                None,
+            )
+            if step is not None:
+                return step
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    @collection.internally_instrumented
+    def __setitem__(self, key, value, _sa_initiator=None):
+        if value.id is None:
+            value.id = uuid4()
+        super().__setitem__(value.id, value, _sa_initiator=_sa_initiator)
 
 
 class ProcessTemplate(RevisionedLifecycleMixin, TimestampMixin, Base):
@@ -158,7 +191,7 @@ class ProcessRun(RevisionedLifecycleMixin, TimestampMixin, Base):
     )
     steps: Mapped[dict[str, "Step"]] = relationship(
         back_populates="process_run",
-        collection_class=mapped_collection(lambda s: s.name),
+        collection_class=RunStepCollection,
     )
     __table_args__ = (
         Index(

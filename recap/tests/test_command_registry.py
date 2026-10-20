@@ -179,6 +179,7 @@ def test_service_dispatches_update_resource_via_registered_handler(monkeypatch):
             "name": "renamed",
             "properties": None,
             "in_place": False,
+            "children": (),
         }
     ]
 
@@ -573,6 +574,7 @@ def test_service_dispatches_process_run_via_registered_handler(monkeypatch):
             "assignments": None,
             "steps": None,
             "in_place": False,
+            "child_steps": (),
         }
     ]
 

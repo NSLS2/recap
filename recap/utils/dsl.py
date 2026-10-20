@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import datetime
 from functools import lru_cache
 from typing import Any
@@ -9,7 +10,85 @@ from sqlalchemy.sql import Select
 
 # Imported lazily-ish at module level to avoid circular imports — AttributeValueSchema
 # has no dependency on dsl.py so this is safe.
-from recap.schemas.attribute import AttributeValueSchema
+from recap.schemas.attribute import AttributeObserver, AttributeValueSchema
+
+
+def bind_attribute_observers(owner: BaseModel) -> None:
+    """Bind fresh observation state to one editable resource or step draft.
+
+    Referenced templates/resources are not traversed. Each nested owner must be
+    bound separately so edits never notify an unrelated aggregate.
+    """
+    domain = "parameters" if "parameters" in type(owner).model_fields else "properties"
+    groups = owner.__dict__.get(domain)
+    if groups is None:
+        return
+    setattr(owner, f"_{domain}_dirty", False)
+    if isinstance(groups, BaseModel):
+        groups = {
+            field.alias or name: getattr(groups, name)
+            for name, field in type(groups).model_fields.items()
+        }
+    for group in groups.values():
+        group._changed_attributes = {}
+        for name, field in type(group.values).model_fields.items():
+            value = getattr(group.values, name)
+            key = field.alias or name
+
+            def notify(changed_field, *, group=group, key=key):
+                group._changed_attributes.setdefault(key, set()).add(changed_field)
+                setattr(owner, f"_{domain}_dirty", True)
+
+            value._observer = AttributeObserver(notify)
+
+
+def mark_attribute_groups_changed(owner: BaseModel) -> None:
+    """Force comparison after accepting an externally edited model."""
+    domain = "parameters" if "parameters" in type(owner).model_fields else "properties"
+    groups = owner.__dict__.get(domain, {})
+    groups = (
+        groups.values()
+        if isinstance(groups, dict)
+        else [getattr(groups, name) for name in type(groups).model_fields]
+    )
+    for group in groups:
+        group._changed_attributes = {
+            field.alias or name: {"value", "unit", "metadata_json"}
+            for name, field in type(group.values).model_fields.items()
+        }
+    setattr(owner, f"_{domain}_dirty", True)
+
+
+def attribute_group_payload(group: BaseModel, baseline: dict | None = None) -> dict:
+    """Snapshot editable attribute content with conservative mutable fallback.
+
+    Unobserved/replaced values are always read. Bound scalar fields can reuse
+    their independent baseline snapshot; dictionaries and lists never do.
+    """
+    result = {}
+    for name, field in type(group.values).model_fields.items():
+        key = field.alias or name
+        value = getattr(group.values, name)
+        previous = baseline.get(key) if baseline is not None else None
+        changed = group.changed_attributes.get(key, set())
+        observed = value._observer.notify is not None
+        result[key] = {
+            "value": deepcopy(
+                previous["value"]
+                if previous is not None
+                and observed
+                and "value" not in changed
+                and not isinstance(value.value, (list, dict, set))
+                else value.value
+            ),
+            "unit": (
+                previous["unit"]
+                if previous is not None and observed and "unit" not in changed
+                else value.unit
+            ),
+            "metadata_json": deepcopy(value.metadata_json),
+        }
+    return result
 
 
 def resolve_path(

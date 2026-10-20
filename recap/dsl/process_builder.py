@@ -20,6 +20,7 @@ from recap.dsl.builder_state import BuilderChanges, BuilderTransactionState
 from recap.dsl.drafts import (
     AttributeDraft,
     AttributeGroupDraft,
+    ChildStepDraft,
     ProcessRunDraft,
     ProcessRunStepDraft,
     ProcessTemplateDraft,
@@ -45,7 +46,13 @@ from recap.schemas.process import (
 )
 from recap.schemas.resource import ResourceAssignmentSchema, ResourceSchema
 from recap.schemas.step import StepSchema, StepTemplateRef
-from recap.utils.dsl import build_step_parameters_model, lock_instance_fields
+from recap.utils.dsl import (
+    attribute_group_payload,
+    bind_attribute_observers,
+    build_step_parameters_model,
+    lock_instance_fields,
+    mark_attribute_groups_changed,
+)
 from recap.utils.general import Direction
 
 
@@ -651,6 +658,14 @@ class ProcessRunBuilder:
         self._draft_assignments = self._assignment_ids(self._draft_process_run)
         self._draft_steps = self._model_steps_payload(self._draft_process_run)
         self._resources = {}
+        self._child_additions = []
+        self._bind_draft_observers()
+
+    def _bind_draft_observers(self):
+        for step in self._draft_process_run.steps.values():
+            bind_attribute_observers(step)
+            for child in step.children.values():
+                bind_attribute_observers(child)
 
     def __enter__(self):
         self._transaction.enter()
@@ -667,8 +682,6 @@ class ProcessRunBuilder:
         return self._save()
 
     def _save(self):
-        if self._submitted and not self._dirty and self._pending_lifecycle() is None:
-            return self
         assignments = self._assignment_changes()
         steps = self._step_changes()
         description = self._description_change()
@@ -677,6 +690,7 @@ class ProcessRunBuilder:
             or bool(assignments)
             or bool(steps)
             or description is not None
+            or bool(self._child_additions)
         )
         result = self._process_run
         if needs_data and self._process_run is None:
@@ -692,6 +706,7 @@ class ProcessRunBuilder:
                         name: ProcessRunStepDraft(parameters=value)
                         for name, value in self._draft_steps.items()
                     },
+                    child_steps=tuple(self._child_additions),
                 ),
             )
         elif (
@@ -707,6 +722,7 @@ class ProcessRunBuilder:
                         "description": description,
                         "assignments": assignments or None,
                         "steps": steps or None,
+                        "child_steps": tuple(self._child_additions),
                     }
                 },
             )
@@ -718,6 +734,7 @@ class ProcessRunBuilder:
                 assignments=assignments or None,
                 steps=steps or None,
                 in_place=self._in_place,
+                child_steps=tuple(self._child_additions),
             )
         if needs_data:
             result = self.backend._execute(command, self._command_context)
@@ -732,7 +749,9 @@ class ProcessRunBuilder:
             self.name = result.name
             self.description = result.description
             self._steps = list(result.steps.values())
+            self._bind_draft_observers()
             self._dirty = False
+            self._child_additions = []
             self._submitted = True
 
         pending = self._pending_lifecycle()
@@ -779,6 +798,8 @@ class ProcessRunBuilder:
             fields["steps"] = steps
         if description is not None:
             fields["description"] = description
+        if self._child_additions:
+            fields["child_steps"] = tuple(self._child_additions)
         return BuilderChanges(
             fields=fields,
             lifecycle=self._pending_lifecycle(),
@@ -794,13 +815,71 @@ class ProcessRunBuilder:
             raise RuntimeError("ProcessRun not initialized")
         if model.id != self._process_run.id:
             raise ValueError("ID for this ProcessRun does not match the builder")
+        self._validate_step_structure(model)
         self._draft_process_run = detached_model(model)
+        self._bind_draft_observers()
+        for parent in self._draft_process_run.steps.values():
+            for step in (parent, *parent.children.values()):
+                mark_attribute_groups_changed(step)
         self.name = model.name
         self.description = model.description
         self._draft_assignments = self._assignment_ids(model)
         self._draft_steps = self._model_steps_payload(model)
         self._dirty = True
         self._save_called = False
+
+    def add_child_step(self, child: StepSchema) -> StepSchema:
+        parent = next(
+            (
+                step
+                for step in self._draft_process_run.steps.values()
+                if step.id == child.parent_id
+            ),
+            None,
+        )
+        if parent is None or parent.parent_id is not None:
+            raise ValueError(
+                "Children require a template-generated parent step in this run"
+            )
+        if child.process_run_id != self._draft_process_run.id:
+            raise ValueError("Child step belongs to another process run")
+        if child.template.id != parent.template.id or child.children:
+            raise ValueError("Child must use the parent template and have no children")
+        if child.name in parent.children:
+            raise ValueError("Child step name already exists under parent")
+        parameters = (
+            self._model_steps_payload(
+                self._draft_process_run.model_copy(
+                    update={"steps": {child.name: child}}
+                )
+            )
+            .get(str(child.id), {})
+            .get("parameters", {})
+        )
+        inherited = {role: resource.id for role, resource in parent.resources.items()}
+        unknown_roles = child.resources.keys() - child.template.resource_slots.keys()
+        if unknown_roles:
+            raise ValueError(
+                f"Unknown child resource roles: {', '.join(sorted(unknown_roles))}"
+            )
+        self._child_additions.append(
+            ChildStepDraft(
+                id=child.id,
+                parent_id=parent.id,
+                template_id=parent.template.id,
+                name=child.name,
+                parameters=parameters,
+                resources={
+                    role: resource.id
+                    for role, resource in child.resources.items()
+                    if inherited.get(role) != resource.id
+                },
+            )
+        )
+        parent.children[child.name] = child.model_copy(deep=True)
+        bind_attribute_observers(parent.children[child.name])
+        self._dirty = True
+        return parent.children[child.name]
 
     def assign_resource(
         # self, resource_slot_name: str, resource_name: str, resource_template_name: str
@@ -923,33 +1002,63 @@ class ProcessRunBuilder:
                 values[attr_info.alias or attr_name] = {
                     "value": value.value,
                     "unit": value.unit,
+                    "metadata_json": value.metadata_json,
                 }
             step_data[field_info.alias or field_name] = values
-        self._draft_steps[filled_params.step_name] = step_data
+        child = next(
+            (
+                child
+                for parent in self._draft_process_run.steps.values()
+                for child in parent.children.values()
+                if child.id == filled_params.step_id
+            ),
+            None,
+        )
+        self._draft_steps[str(child.id) if child else filled_params.step_name] = {
+            "parameters": step_data
+        }
         self._dirty = True
         self._save_called = False
         return self
 
     @staticmethod
-    def _model_steps_payload(model: ProcessRunSchema):
+    def _model_steps_payload(model: ProcessRunSchema, baseline=None):
         result = {}
-        for step in model.steps.values():
+        all_steps = [
+            step
+            for parent in model.steps.values()
+            for step in (parent, *parent.children.values())
+        ]
+        for step in all_steps:
             groups = {}
             if not isinstance(step.parameters, BaseModel):
-                result[step.name] = groups
+                result[str(step.id) if step.parent_id is not None else step.name] = {
+                    "parameters": groups
+                }
+                if step.parent_id is not None:
+                    result[str(step.id)]["resources"] = {
+                        role: str(resource.id)
+                        for role, resource in step.resources.items()
+                    }
                 continue
             for group_name, group_info in type(step.parameters).model_fields.items():
                 group = getattr(step.parameters, group_name)
-                value_model = getattr(group, "values", group)
-                groups[group_info.alias or group_name] = {
-                    attr_info.alias or attr_name: {
-                        "value": getattr(value_model, attr_name).value,
-                        "unit": getattr(value_model, attr_name).unit,
-                    }
-                    for attr_name, attr_info in type(value_model).model_fields.items()
-                    if hasattr(getattr(value_model, attr_name), "value")
+                step_key = str(step.id) if step.parent_id is not None else step.name
+                group_key = group_info.alias or group_name
+                previous = (
+                    (baseline or {})
+                    .get(step_key, {})
+                    .get("parameters", {})
+                    .get(group_key)
+                )
+                groups[group_key] = attribute_group_payload(group, previous)
+            result[str(step.id) if step.parent_id is not None else step.name] = {
+                "parameters": groups
+            }
+            if step.parent_id is not None:
+                result[str(step.id)]["resources"] = {
+                    role: str(resource.id) for role, resource in step.resources.items()
                 }
-            result[step.name] = {"parameters": groups}
         return result
 
     def get_model(self, *, update: bool = False) -> ProcessRunSchema:
@@ -993,14 +1102,96 @@ class ProcessRunBuilder:
         }
 
     def _step_changes(self):
+        self._validate_step_structure(self._draft_process_run)
+        persisted_model = (
+            self._model_steps_payload(self._baseline_process_run)
+            if self._baseline_process_run is not None
+            else {}
+        )
+        current_model = self._model_steps_payload(
+            self._draft_process_run, persisted_model
+        )
+        for name, value in current_model.items():
+            if any(str(draft.id) == name for draft in self._child_additions):
+                child = next(
+                    child
+                    for parent in self._draft_process_run.steps.values()
+                    for child in parent.children.values()
+                    if str(child.id) == name
+                )
+                self._child_additions = [
+                    draft.model_copy(
+                        update={
+                            "parameters": value.get("parameters", {}),
+                            "resources": {
+                                role: resource.id
+                                for role, resource in child.resources.items()
+                                if self._draft_process_run.assigned_resources[
+                                    child.template.resource_slots[role].name
+                                ].resource.id
+                                != resource.id
+                            },
+                        }
+                    )
+                    if str(draft.id) == name
+                    else draft
+                    for draft in self._child_additions
+                ]
+                continue
+            if value != persisted_model.get(name) or any(
+                step.parameters_dirty
+                for parent in self._draft_process_run.steps.values()
+                for step in (parent, *parent.children.values())
+                if (str(step.id) if step.parent_id is not None else step.name) == name
+            ):
+                self._draft_steps[name] = value
         if self._baseline_process_run is None:
             return dict(self._draft_steps)
-        baseline = self._model_steps_payload(self._baseline_process_run)
+        baseline = persisted_model
         return {
             name: value
             for name, value in self._draft_steps.items()
             if baseline.get(name) != value
         }
+
+    def _validate_step_structure(self, model):
+        if self._baseline_process_run is None:
+            return
+        baseline_children = {
+            child.id: child
+            for parent in self._baseline_process_run.steps.values()
+            for child in parent.children.values()
+        }
+        current_children = {
+            child.id: child
+            for parent in model.steps.values()
+            for child in parent.children.values()
+        }
+        if not baseline_children.keys() <= current_children.keys():
+            raise ValueError("Child deletion is not supported")
+        for parent in model.steps.values():
+            for name, child in parent.children.items():
+                if (
+                    child.children
+                    or child.parent_id != parent.id
+                    or child.template.id != parent.template.id
+                ):
+                    raise ValueError(
+                        "Child parent and template are fixed; grandchildren are not supported"
+                    )
+                original = baseline_children.get(child.id)
+                if original and (
+                    name != original.name
+                    or child.name != original.name
+                    or child.process_run_id != original.process_run_id
+                    or child.parent_id != original.parent_id
+                    or child.template.id != original.template.id
+                ):
+                    raise ValueError(
+                        "Child identity, name, parent and template are fixed"
+                    )
+                if original and not original.resources.keys() <= child.resources.keys():
+                    raise ValueError("Child resource override removal is not supported")
 
     def _description_change(self):
         if (

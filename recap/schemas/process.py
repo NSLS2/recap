@@ -15,6 +15,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from recap.dsl.drafts import ChildStepDraft, ProcessRunStepDraft
 from recap.schemas.common import (
     SIMPLE_FIELD,
     LoadAwareMixin,
@@ -103,7 +104,8 @@ class ProcessRunRef(NamespaceOwnedFields):
 class ProcessRunCopyChanges(BaseModel):
     description: str | None = None
     assignments: dict[str, UUID] | None = None
-    steps: dict[str, dict[str, dict[str, object]]] | None = None
+    steps: dict[str, ProcessRunStepDraft | dict[str, dict[str, object]]] | None = None
+    child_steps: tuple[ChildStepDraft, ...] = ()
 
 
 class ProcessRunCopyOptions(BaseModel):
@@ -149,6 +151,16 @@ class ProcessRunSchema(LoadAwareMixin, NamespaceOwnedFields):
     _relation_fields = frozenset({"template", "steps", "assigned_resources"})
     # ``assigned_resources`` is populated via ``include('resources')``.
     _include_hints = {"assigned_resources": "resources"}
+
+    @field_validator("steps", mode="before")
+    @classmethod
+    def _root_steps(cls, steps):
+        return {
+            step.name if hasattr(step, "name") else key: step
+            for key, step in steps.items()
+            if (step.parent_id if hasattr(step, "parent_id") else step.get("parent_id"))
+            is None
+        }
 
     @field_validator("assigned_resources", mode="before")
     @classmethod

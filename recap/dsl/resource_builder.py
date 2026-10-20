@@ -36,6 +36,7 @@ from recap.exceptions import (
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import (
+    ResourceChildDraft,
     ResourceCopyChanges,
     ResourceCopyOptions,
     ResourceSchema,
@@ -43,7 +44,14 @@ from recap.schemas.resource import (
     ResourceTemplateSchema,
     ResourceTypeSchema,
 )
-from recap.utils.dsl import AliasMixin, lock_instance_fields, map_dtype_to_pytype
+from recap.utils.dsl import (
+    AliasMixin,
+    attribute_group_payload,
+    bind_attribute_observers,
+    lock_instance_fields,
+    map_dtype_to_pytype,
+    mark_attribute_groups_changed,
+)
 
 
 class ResourceBuilder:
@@ -96,6 +104,7 @@ class ResourceBuilder:
             self._load_existing_resource(resource_id)
         else:
             self._prepare_new_resource()
+        bind_attribute_observers(self._draft)
 
     def _configure_parent(self, parent: "ResourceBuilder | ResourceSchema | None"):
         if isinstance(parent, self.__class__):
@@ -331,6 +340,9 @@ class ResourceBuilder:
         self._draft.children[child.resource.name] = child.resource
 
     def _flush(self, *, flush_lifecycle: bool = True):  # noqa: C901
+        pending_children = tuple(
+            child._child_draft() for child in self._children if not child._submitted
+        )
         if self._draft is not None and self._resource is not None:
             source = (
                 self._draft
@@ -350,10 +362,10 @@ class ResourceBuilder:
                 == getattr(self._resource, "name", None)
             )
         )
-        if unchanged and self._pending_lifecycle() is None:
+        if unchanged and not pending_children and self._pending_lifecycle() is None:
             self._flush_children()
             return self
-        if unchanged:
+        if unchanged and not pending_children:
             self._flush_children()
             if flush_lifecycle:
                 self._flush_lifecycle_tree()
@@ -377,6 +389,7 @@ class ResourceBuilder:
                     template_id=self._template_id,
                     parent_id=self._parent_id(),
                     properties=properties,
+                    children=pending_children,
                 )
         elif (
             self._resource.status is not LifecycleStatus.MUTABLE and not self._in_place
@@ -388,7 +401,9 @@ class ResourceBuilder:
                     name=self._draft.name
                     if self._draft is not None
                     else self._resource.name,
-                    changes=ResourceCopyChanges(properties=properties),
+                    changes=ResourceCopyChanges(
+                        properties=properties, children=pending_children
+                    ),
                 ),
             )
         else:
@@ -400,8 +415,11 @@ class ResourceBuilder:
                 else self._resource.name,
                 properties=properties,
                 in_place=self._in_place,
+                children=pending_children,
             )
         result = self.backend._execute(command, self._command_context)
+        if pending_children and isinstance(result, ResourceSchema):
+            result = self._reload_resource(result.id)
         if not isinstance(result, ResourceSchema):
             self._submitted = True
             self._last_properties_payload = self._resource_properties_payload(
@@ -413,19 +431,49 @@ class ResourceBuilder:
         )
         if self._copy_source_id is not None and not result.children:
             result = self._reload_resource(result.id)
-        if previous_children:
+        if previous_children and not pending_children:
             result.children = {**previous_children, **result.children}
         self._resource = result
         self._draft = result.model_copy(deep=True)
+        bind_attribute_observers(self._draft)
         self._expected_revision = result.revision
         self._is_new_resource = False
         self._last_properties_payload = self._resource_properties_payload(result)
         self._submitted = True
+        if pending_children:
+            self._sync_child_results(result)
         self._flush_children()
         if not flush_lifecycle:
             return self
         self._flush_lifecycle_tree()
         return self
+
+    def _child_draft(self):
+        return ResourceChildDraft(
+            id=self.resource.id,
+            name=self.resource.name,
+            template_id=self._template_id,
+            source_id=self._copy_source_id,
+            properties=self._resource_properties_payload(self.resource) or {},
+            children=tuple(
+                child._child_draft() for child in self._children if not child._submitted
+            ),
+        )
+
+    def _sync_child_results(self, result):
+        for child in self._children:
+            if not child._submitted and child.name in result.children:
+                persisted = result.children[child.name]
+                child._resource = persisted
+                child._draft = persisted.model_copy(deep=True)
+                bind_attribute_observers(child._draft)
+                child._is_new_resource = False
+                child._submitted = True
+                child._expected_revision = persisted.revision
+                child._last_properties_payload = child._resource_properties_payload(
+                    persisted
+                )
+                child._sync_child_results(persisted)
 
     def _resource_properties_payload(self, resource=None):
         resource = resource or self._resource
@@ -441,6 +489,13 @@ class ResourceBuilder:
             }
         )
         for group_name, prop in properties.items():
+            if isinstance(prop.values, BaseModel):
+                payload[group_name] = attribute_group_payload(
+                    prop, (self._last_properties_payload or {}).get(group_name)
+                )
+                if prop.changed_attributes:
+                    resource._properties_dirty = True
+                continue
             value_names = (
                 type(prop.values).model_fields
                 if isinstance(prop.values, BaseModel)
@@ -518,6 +573,8 @@ class ResourceBuilder:
                 "ID for this Resource does not match the builder's resource"
             )
         self._draft = detached_model(model)
+        bind_attribute_observers(self._draft)
+        mark_attribute_groups_changed(self._draft)
         self._submitted = False
 
     @overload

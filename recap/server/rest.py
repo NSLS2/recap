@@ -83,7 +83,11 @@ def _policy(request: Request):
 
 def _set_etag(response: Response, entity):
     response.headers["ETag"] = f'"{entity.revision}"'
-    return serialize_model(entity) if isinstance(entity, ResourceSchema) else entity
+    return (
+        serialize_model(entity)
+        if isinstance(entity, (ResourceSchema, ProcessRunSchema))
+        else entity
+    )
 
 
 def _query_service(request: Request) -> QueryService:

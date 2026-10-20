@@ -703,6 +703,15 @@ class IdentityMap:
         # traverses shared parent/child graphs and generated property models.
         if current is incoming and isinstance(current, BaseModel | list | dict):
             return True
+        if isinstance(current, BaseModel) and isinstance(incoming, BaseModel):
+            current_id = getattr(current, "id", None)
+            incoming_id = getattr(incoming, "id", None)
+            if (
+                isinstance(current_id, UUID)
+                and isinstance(incoming_id, UUID)
+                and current_id != incoming_id
+            ):
+                return False
         if _seen is None:
             _seen = set()
         if isinstance(current, BaseModel | list | dict) and isinstance(

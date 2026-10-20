@@ -588,21 +588,17 @@ def test_builder_in_place_edits_child_of_active_resource(client):
         assert reloaded.resource.properties.details.values.serial.value == "child-xyz"
 
 
-def test_builder_in_place_rejects_adding_child_to_active_resource(client):
+def test_builder_in_place_adds_child_to_active_resource(client):
     scoped, active = _active_robot(client, "builder-add-child")
 
-    # In-place covers edits only; structural additions hit the active-aggregate
-    # guard. The parent's own UpdateResource may already have committed.
-    with (
-        pytest.raises(ValueError, match="Cannot mutate an active resource aggregate"),
-        scoped.build_resource(resource_id=active.id, in_place=True) as builder,
-    ):
+    with scoped.build_resource(resource_id=active.id, in_place=True) as builder:
         builder.add_child("new-child", "Robot-builder-add-child")
 
     with scoped.build_resource(resource_id=active.id) as reloaded:
         assert reloaded.resource.id == active.id
         assert reloaded.resource.status == LifecycleStatus.ACTIVE
-        assert reloaded.resource.children == {}
+        assert set(reloaded.resource.children) == {"new-child"}
+        assert reloaded.resource.revision == active.revision + 1
 
 
 def _finalized_run(client, suffix):

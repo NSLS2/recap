@@ -170,7 +170,7 @@ class ProcessRunSchemaHydrator:
                     if include_step_parameters
                     else {}
                 ),
-                children=[],
+                children={},
                 resources=(
                     {
                         role: self._construct_resource_schema(
@@ -181,6 +181,13 @@ class ProcessRunSchemaHydrator:
                     if include_resources
                     else {}
                 ),
+                resource_overrides={
+                    role: assignment.resource.id
+                    for role, slot in step.template.resource_slots.items()
+                    if (assignment := step.assignments.get(slot.id)) is not None
+                }
+                if include_resources and step.parent_id is not None
+                else {},
             )
             step_schema.set_loaded_relations(
                 {
@@ -188,20 +195,29 @@ class ProcessRunSchemaHydrator:
                     "parameters": include_step_parameters,
                     "children": include_steps,
                     "resources": include_resources,
+                    "resource_overrides": include_resources,
                 },
                 on_unloaded=on_unloaded,
             )
-            steps[step.name] = step_schema
+            steps[step.id] = step_schema
 
         if include_steps:
-            id_to_step = {step.id: steps[step.name] for step in run.steps.values()}
+            id_to_step = steps
             for step in run.steps.values():
-                step_schema = steps[step.name]
-                step_schema.children = [
-                    id_to_step[child.id]
+                step_schema = steps[step.id]
+                step_schema.children = {
+                    child.name: id_to_step[child.id]
                     for child in step.children
                     if child.id in id_to_step
-                ]
+                }
+            steps = {
+                step.name: steps[step.id]
+                for step in run.steps.values()
+                if step.parent_id is None
+            }
+            for schema in id_to_step.values():
+                if include_step_parameters:
+                    schema.build_parameter_model()
 
         assigned_resources = {}
         if include_resources:

@@ -53,8 +53,10 @@ name-based lookup.
 ## Record dynamic resources
 
 When an experiment discovers resource structure at runtime, add child resources
-through a resource builder. Process-run builders record assignments and
-parameters for steps declared by their process template; they cannot add steps.
+through a resource builder. Process-run builders can add named runtime children
+beneath template-generated steps. Children reuse the parent's step template,
+start with template defaults, and inherit run resources by role. See
+[Add Runtime Children](add-runtime-children.qmd) for creation and nested access.
 
 ## Set generated process parameters
 

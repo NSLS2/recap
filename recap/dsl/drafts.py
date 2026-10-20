@@ -103,6 +103,16 @@ class ResourceTemplateDraft(DraftModel):
 
 class ProcessRunStepDraft(DraftModel):
     parameters: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    resources: dict[str, UUID] = Field(default_factory=dict)
+
+
+class ChildStepDraft(DraftModel):
+    id: UUID
+    parent_id: UUID
+    template_id: UUID
+    name: str = Field(min_length=1)
+    parameters: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    resources: dict[str, UUID] = Field(default_factory=dict)
 
 
 class ProcessRunDraft(DraftModel):
@@ -112,6 +122,7 @@ class ProcessRunDraft(DraftModel):
     template_id: UUID
     assignments: dict[str, UUID] = Field(default_factory=dict)
     steps: dict[str, ProcessRunStepDraft] = Field(default_factory=dict)
+    child_steps: tuple[ChildStepDraft, ...] = ()
 
 
 def _require_unique(items, kind: str) -> None:

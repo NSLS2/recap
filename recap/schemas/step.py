@@ -14,13 +14,15 @@ a :class:`~recap.schemas.process.ProcessRunSchema`:
   serialisation.
 """
 
+from datetime import UTC, datetime
 from typing import Annotated, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 from recap.db.step import Parameter
 from recap.schemas.attribute import (
+    AttributeChangeMixin,
     AttributeGroupTemplateSchema,
     AttributeValueSchema,
 )
@@ -80,7 +82,7 @@ class StepTemplateSchema(LoadAwareMixin, CommonFields):
         return self
 
 
-class ParameterSchema(CommonFields):
+class ParameterSchema(AttributeChangeMixin, CommonFields):
     """A parameter group instance attached to a step.
 
     Mirrors the structure of :class:`~recap.schemas.resource.PropertySchema`
@@ -104,6 +106,7 @@ class ParameterSchema(CommonFields):
 
     template: AttributeGroupTemplateSchema
     values: BaseModel = Field(repr=False)
+    _changed_attributes: dict[str, set[str]] = PrivateAttr(default_factory=dict)
 
     @model_validator(mode="before")
     def coerce_from_orm(cls, data):
@@ -231,7 +234,7 @@ class ParameterSchema(CommonFields):
                 raw_value = raw_value.get("value")
             else:
                 raw_unit = None
-                raw_metadata = {}
+                raw_metadata = getattr(raw_value, "metadata_json", {})
 
             value = from_json_value(attr_tmpl.value_type, raw_value)
             if attr_tmpl.value_type == "enum":
@@ -257,6 +260,8 @@ class ParameterSchema(CommonFields):
         """
         # Only called when normal attribute resolution fails.
         # Allows `param.batch` as a shortcut for `param.values.batch`.
+        if name.startswith("_"):
+            return super().__getattr__(name)
         values = self.__dict__.get("values")
         if values is not None:
             try:
@@ -357,9 +362,18 @@ class StepSchema(LoadAwareMixin, CommonFields):
     state: Annotated[StepStatus, SIMPLE_FIELD] = StepStatus.PENDING
     process_run_id: Annotated[UUID | None, SIMPLE_FIELD] = None
     parent_id: Annotated[UUID | None, SIMPLE_FIELD] = None
-    children: list["StepSchema"] = Field(default_factory=list)
+    children: dict[str, "StepSchema"] = Field(default_factory=dict)
     resources: dict[str, "ResourceSchema"] = Field(default_factory=dict)
-    _relation_fields = frozenset({"template", "parameters", "children", "resources"})
+    resource_overrides: dict[str, UUID] = Field(default_factory=dict)
+    _parameters_dirty: bool = PrivateAttr(default=False)
+
+    @property
+    def parameters_dirty(self) -> bool:
+        return self._parameters_dirty
+
+    _relation_fields = frozenset(
+        {"template", "parameters", "children", "resources", "resource_overrides"}
+    )
 
     def set_loaded_relations(self, loaded_relations, *, on_unloaded="warn"):
         LoadAwareMixin.set_loaded_relations(
@@ -367,8 +381,70 @@ class StepSchema(LoadAwareMixin, CommonFields):
         )
         return self
 
-    def generate_child(self):
-        return self.model_copy(deep=True, update={"id": None, "parent_id": self.id})
+    def __getitem__(self, name: str) -> "StepSchema":
+        return self.children[name]
+
+    @field_validator("children", mode="before")
+    @classmethod
+    def normalize_children(cls, data):
+        if isinstance(data, list):
+            return {
+                child.name if hasattr(child, "name") else child["name"]: child
+                for child in data
+            }
+        return data
+
+    def generate_child(self, *, name: str) -> "StepSchema":
+        if self.parent_id is not None:
+            raise ValueError("Children require a template-generated parent step")
+        if not name.strip():
+            raise ValueError("Child step name must not be empty")
+        template = self.template
+        if template is None:
+            raise ValueError(
+                "Child generation requires loaded step template definitions"
+            )
+        if (
+            template.__pydantic_private__.get("_loaded_relations", {}).get(
+                "attribute_group_templates"
+            )
+            is False
+        ):
+            raise ValueError(
+                "Child generation requires loaded step template definitions"
+            )
+        now = datetime.now(UTC)
+        parameters = {}
+        for group in template.attribute_group_templates:
+            parameters[group.name] = ParameterSchema(
+                id=uuid4(),
+                create_date=now,
+                modified_date=now,
+                template=group,
+                values={
+                    attribute.name: {
+                        "value": from_json_value(
+                            attribute.value_type, attribute.default_value
+                        ),
+                        "unit": attribute.unit,
+                        "metadata_json": {},
+                    }
+                    for attribute in group.attribute_templates
+                },
+            )
+        return StepSchema(
+            id=uuid4(),
+            create_date=now,
+            modified_date=now,
+            name=name,
+            template=template,
+            parameters=parameters,
+            process_run_id=self.process_run_id,
+            parent_id=self.id,
+            resources=dict(self.resources),
+            children={},
+            state=StepStatus.PENDING,
+        )
 
     @model_validator(mode="after")
     def build_parameter_model(self) -> "StepSchema":

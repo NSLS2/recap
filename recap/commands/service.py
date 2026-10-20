@@ -54,14 +54,12 @@ from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.namespace import NamespaceSchema
 from recap.schemas.process import (
     ProcessRunCopyOptions,
-    ProcessRunSchema,
     ProcessTemplateSchema,
 )
 from recap.schemas.resource import (
     ResourceCopyOptions,
     ResourceSchema,
 )
-from recap.schemas.step import ParameterSchema, StepSchema
 from recap.server.audit import AuditOutcome, AuditRecord
 from recap.server.errors import ErrorCode
 from recap.utils.namespace import (
@@ -93,6 +91,15 @@ class _InPlaceUpdateResourceFingerprint(_UpdateResourceFingerprint):
     in_place: Literal[True] = True
 
 
+class _CreateResourceChildrenFingerprint(_CreateResourceFingerprint):
+    children: tuple
+
+
+class _UpdateResourceChildrenFingerprint(_UpdateResourceFingerprint):
+    children: tuple
+    in_place: bool
+
+
 class _UpdateFingerprint(BaseModel):
     metadata: dict[str, Any] | None
     status: LifecycleStatus | None
@@ -113,11 +120,19 @@ class _UpdateProcessRunFingerprint(BaseModel):
     description: str | None
     status: str | None
     assignments: dict[str, UUID] | None
-    steps: dict[str, dict[str, dict[str, object]]] | None
+    steps: dict[str, Any] | None
     expected_revision: int
 
 
 class _InPlaceUpdateProcessRunFingerprint(_UpdateProcessRunFingerprint):
+    in_place: Literal[True] = True
+
+
+class _ChildStepUpdateFingerprint(_UpdateProcessRunFingerprint):
+    child_steps: tuple
+
+
+class _InPlaceChildStepUpdateFingerprint(_ChildStepUpdateFingerprint):
     in_place: Literal[True] = True
 
 
@@ -279,6 +294,7 @@ class CommandService:
         template_id: UUID,
         parent_id: UUID | None = None,
         properties: dict[str, dict[str, object]] | None = None,
+        children=(),
     ) -> ResourceSchema:
         try:
             canonical_path = canonicalize_namespace_path(namespace_path)
@@ -292,11 +308,16 @@ class CommandService:
             route_template="/api/v1/resources/{namespace_path:path}",
             namespace_path=canonical_path,
             source_id=None,
-            body=_CreateResourceFingerprint(
+            body=(
+                _CreateResourceChildrenFingerprint
+                if children
+                else _CreateResourceFingerprint
+            )(
                 name=name,
                 template_id=template_id,
                 parent_id=parent_id,
                 properties=properties,
+                **({"children": children} if children else {}),
             ),
         )
         try:
@@ -333,6 +354,7 @@ class CommandService:
                 )
                 session.add(resource)
                 resource._initialize_from_resource_template(template)
+                self._apply_resource_children(session, resource, children, context)
                 if properties:
                     self._apply_resource_changes(resource, properties)
                 session.flush()
@@ -371,10 +393,11 @@ class CommandService:
         name: str | None = None,
         properties: dict[str, dict[str, object]] | None = None,
         in_place: bool = False,
+        children=(),
     ) -> ResourceSchema:
         if expected_revision < 1:
             raise CommandValidationError("Expected revision must be positive")
-        if name is None and not properties:
+        if name is None and not properties and not children:
             raise CommandValidationError("Resource update is empty")
         fingerprint = command_fingerprint(
             method="PATCH",
@@ -382,13 +405,16 @@ class CommandService:
             namespace_path=None,
             source_id=resource_id,
             body=(
-                _InPlaceUpdateResourceFingerprint
+                _UpdateResourceChildrenFingerprint
+                if children
+                else _InPlaceUpdateResourceFingerprint
                 if in_place
                 else _UpdateResourceFingerprint
             )(
                 name=name,
                 properties=properties,
                 expected_revision=expected_revision,
+                **({"children": children, "in_place": in_place} if children else {}),
             ),
         )
         try:
@@ -432,6 +458,7 @@ class CommandService:
                     resource.name = name
                 if properties:
                     self._apply_resource_changes(resource, properties)
+                self._apply_resource_children(session, resource, children, context)
                 compare_and_swap_revision(
                     session,
                     Resource,
@@ -585,6 +612,9 @@ class CommandService:
                     copied.name = options.name
                 session.add(copied)
                 self._apply_resource_changes(copied, options.changes.properties)
+                self._apply_resource_children(
+                    session, copied, options.changes.children, context
+                )
                 if source.status is LifecycleStatus.MUTABLE:
                     source.activate()
                 session.flush()
@@ -625,6 +655,70 @@ class CommandService:
             result.extend(children)
             pending = [child.id for child in children]
         return result
+
+    @staticmethod
+    def _apply_resource_children(session, parent, children, context):
+        for draft in children:
+            if draft.name in parent.children:
+                raise CommandConflictError(
+                    "Child resource name already exists under parent"
+                )
+            template = session.get(ResourceTemplate, draft.template_id)
+            if template is None:
+                raise CommandNotFoundError("Resource template not found")
+            with session.no_autoflush:
+                child = Resource(
+                    id=draft.id,
+                    name=draft.name,
+                    template=template,
+                    namespace=parent.namespace,
+                    parent=parent,
+                    _init_children=False,
+                )
+                session.add(child)
+                child._initialize_from_resource_template(template)
+                if draft.source_id is not None:
+                    source = session.get(Resource, draft.source_id)
+                    if source is None:
+                        raise CommandNotFoundError("Source resource not found")
+                    CommandService._authorize_scope(
+                        context,
+                        source.namespace.path,
+                        Scope.RESOURCE_READ,
+                        "copy_resource",
+                    )
+                    child.copied_from = source
+
+                    def copy_descendants(original, target):
+                        for item in original.children.values():
+                            copied = Resource(
+                                id=uuid4(),
+                                name=item.name,
+                                template=item.template,
+                                namespace=parent.namespace,
+                                parent=target,
+                                _init_children=False,
+                            )
+                            session.add(copied)
+                            for prop in item.properties.values():
+                                new_property = Property(
+                                    template=prop.template, resource=copied
+                                )
+                                for key, value in prop._values.items():
+                                    new_property._values[key].value_json = deepcopy(
+                                        value.value_json
+                                    )
+                                    new_property._values[key].unit = value.unit
+                                    new_property._values[key].metadata_json = deepcopy(
+                                        value.metadata_json
+                                    )
+                            copy_descendants(item, copied)
+
+                    copy_descendants(source, child)
+                CommandService._apply_resource_changes(child, draft.properties)
+                CommandService._apply_resource_children(
+                    session, child, draft.children, context
+                )
 
     @staticmethod
     def _apply_resource_changes(resource, changes):
@@ -1202,7 +1296,7 @@ class CommandService:
                     lambda _id: None,
                 )
                 if decision is not None and decision.replayed:
-                    return ProcessRunSchema.model_validate(decision.response)
+                    return self._replay_run(decision.response)
                 run = ProcessRun(
                     id=draft.id or uuid4(),
                     namespace=namespace,
@@ -1213,7 +1307,8 @@ class CommandService:
                 session.add(run)
                 session.flush()
                 self._apply_run_assignments(session, run, draft.assignments, context)
-                self._apply_run_steps(session, run, draft.steps)
+                self._apply_run_steps(session, run, draft.steps, context)
+                self._apply_child_steps(session, run, draft.child_steps, context)
                 session.flush()
                 session.expire_all()
                 run = session.get(ProcessRun, run.id)
@@ -1223,7 +1318,7 @@ class CommandService:
                     idempotency.complete(
                         decision,
                         target_id=str(run.id),
-                        response=result.model_dump(mode="json"),
+                        response=self._serialize_run(result),
                     )
                 self._emit_success(
                     session,
@@ -1256,6 +1351,7 @@ class CommandService:
         assignments: dict[str, UUID] | None = None,
         steps: dict[str, dict[str, dict[str, object]]] | None = None,
         in_place: bool = False,
+        child_steps=(),
     ):
         if expected_revision < 1:
             raise CommandValidationError("Expected revision must be positive")
@@ -1265,7 +1361,13 @@ class CommandService:
             namespace_path=None,
             source_id=process_run_id,
             body=(
-                _InPlaceUpdateProcessRunFingerprint
+                (
+                    _InPlaceChildStepUpdateFingerprint
+                    if in_place
+                    else _ChildStepUpdateFingerprint
+                )
+                if child_steps
+                else _InPlaceUpdateProcessRunFingerprint
                 if in_place
                 else _UpdateProcessRunFingerprint
             )(
@@ -1274,6 +1376,7 @@ class CommandService:
                 assignments=assignments,
                 steps=steps,
                 expected_revision=expected_revision,
+                **({"child_steps": child_steps} if child_steps else {}),
             ),
         )
         try:
@@ -1294,18 +1397,20 @@ class CommandService:
                     lambda _id: None,
                 )
                 if decision is not None and decision.replayed:
-                    return ProcessRunSchema.model_validate(decision.response)
+                    return self._replay_run(decision.response)
                 if (
                     description is None
                     and status is None
                     and assignments is None
                     and steps is None
+                    and not child_steps
                 ):
                     raise CommandValidationError("Process run update is empty")
                 changes_content = (
                     description is not None
                     or assignments is not None
                     or steps is not None
+                    or bool(child_steps)
                 )
                 if changes_content and run.status is LifecycleStatus.ARCHIVED:
                     raise CommandConflictError("Cannot update an archived process run")
@@ -1331,8 +1436,9 @@ class CommandService:
                                 )
                             root.activate()
                 if steps is not None:
-                    self._apply_run_steps(session, run, steps)
+                    self._apply_run_steps(session, run, steps, context)
                     session.flush()
+                self._apply_child_steps(session, run, child_steps, context)
                 values: dict[str, Any] = {}
                 if description is not None:
                     values["description"] = description
@@ -1362,7 +1468,7 @@ class CommandService:
                     IdempotencyRepository(session).complete(
                         decision,
                         target_id=str(run.id),
-                        response=result.model_dump(mode="json"),
+                        response=self._serialize_run(result),
                     )
                 self._emit_success(
                     session,
@@ -1428,7 +1534,7 @@ class CommandService:
                     lambda _id: None,
                 )
                 if decision is not None and decision.replayed:
-                    return ProcessRunSchema.model_validate(decision.response)
+                    return self._replay_run(decision.response)
 
                 changes = options.changes
                 copied = ProcessRun(
@@ -1450,8 +1556,16 @@ class CommandService:
                 for slot, assignment in source.assignments.items():
                     copied.resources[slot] = assignment.resource
 
+                copied_step_ids = {}
+
                 def copy_step(source_step, target_parent=None):
-                    target_step = copied.steps.get(source_step.name)
+                    if source_step.id in copied_step_ids:
+                        return copied_step_ids[source_step.id]
+                    target_step = (
+                        copied.steps.get(source_step.name)
+                        if target_parent is None
+                        else None
+                    )
                     if target_step is None:
                         target_step = Step(
                             template=source_step.template,
@@ -1460,9 +1574,14 @@ class CommandService:
                             process_run=copied,
                             state=source_step.state,
                         )
-                        copied.steps[target_step.name] = target_step
+                        copied.steps[
+                            target_step.name
+                            if target_parent is None
+                            else target_step.id
+                        ] = target_step
                     elif target_parent is not None:
                         target_step.parent = target_parent
+                    copied_step_ids[source_step.id] = target_step
                     for child in source_step.children:
                         copy_step(child, target_step)
                     for name, source_parameter in source_step.parameters.items():
@@ -1494,20 +1613,34 @@ class CommandService:
                     return target_step
 
                 for source_step in source.steps.values():
-                    copy_step(source_step)
+                    if source_step.parent_id is None:
+                        copy_step(source_step)
                 if changes.assignments is not None:
                     self._apply_run_assignments(
                         session, copied, changes.assignments, context
                     )
                 if changes.steps is not None:
-                    self._apply_run_steps(session, copied, changes.steps)
+                    remapped = {
+                        str(copied_step_ids[UUID(key)].id)
+                        if copied.steps.get(key) is None
+                        else key: value
+                        for key, value in changes.steps.items()
+                    }
+                    self._apply_run_steps(session, copied, remapped, context)
+                additions = [
+                    draft.model_copy(
+                        update={"parent_id": copied_step_ids[draft.parent_id].id}
+                    )
+                    for draft in changes.child_steps
+                ]
+                self._apply_child_steps(session, copied, additions, context)
                 session.flush()
                 result = self._process_run_schema(copied)
                 if decision is not None:
                     IdempotencyRepository(session).complete(
                         decision,
                         target_id=str(copied.id),
-                        response=result.model_dump(mode="json"),
+                        response=self._serialize_run(result),
                     )
                 self._emit_success(
                     session,
@@ -1529,29 +1662,108 @@ class CommandService:
 
     @staticmethod
     def _process_run_schema(run):
-        result = ProcessRunSchema.model_validate(run)
-        for orm_step in run.steps.values():
-            current = result.steps[orm_step.name]
-            if orm_step.parameters:
-                parameters = {
-                    name: ParameterSchema.model_validate(
-                        {
-                            "id": parameter.id,
-                            "create_date": parameter.create_date,
-                            "modified_date": parameter.modified_date,
-                            "template": parameter.template,
-                            "values": {
-                                value_name: {"value": value.value, "unit": value.unit}
-                                for value_name, value in parameter._values.items()
-                            },
-                        }
+        from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
+
+        return ProcessRunSchemaHydrator()._construct_process_run_schema(
+            run,
+            include_steps=True,
+            include_step_parameters=True,
+            include_resources=True,
+            include_template=True,
+            full=True,
+            on_unloaded="silent",
+        )
+
+    @staticmethod
+    def _serialize_run(result):
+        from recap.adapter.transport import serialize_model
+
+        return serialize_model(result)
+
+    @staticmethod
+    def _replay_run(payload):
+        from recap.commands.registry import _decode_process_run_response
+
+        return _decode_process_run_response(deepcopy(payload))
+
+    @staticmethod
+    def _apply_child_steps(session, run, additions, context):
+        from recap.db.step import Step
+
+        for draft in additions:
+            parent = session.get(Step, draft.parent_id)
+            if (
+                parent is None
+                or parent.process_run_id != run.id
+                or parent.parent_id is not None
+            ):
+                raise CommandValidationError(
+                    "Children require a template-generated parent step in this run"
+                )
+            if parent.step_template_id != draft.template_id:
+                raise CommandValidationError("Child must use the parent step template")
+            if any(child.name == draft.name for child in parent.children):
+                raise CommandConflictError(
+                    "Child step name already exists under parent"
+                )
+            with session.no_autoflush:
+                child = Step(id=draft.id, template=parent.template, name=draft.name)
+                session.add(child)
+                child.parent = parent
+                child.parent_id = parent.id
+                child.process_run = run
+                run.steps[child.id] = child
+            CommandService._apply_run_steps(
+                session, run, {child.id: {"parameters": draft.parameters}}, context
+            )
+            CommandService._apply_step_resources(
+                session, run, child, draft.resources, context
+            )
+
+    @staticmethod
+    def _apply_step_resources(session, run, step, resources, context):
+        """Validate role-scoped refinements and persist explicit overrides."""
+        if resources and step.parent_id is None:
+            raise CommandValidationError("Resource overrides require a child step")
+        for role, resource_id in resources.items():
+            slot = step.template.resource_slots.get(role)
+            if slot is None:
+                raise CommandValidationError(f"Unknown step resource role {role!r}")
+            assignment = run.assignments.get(slot)
+            resource = session.get(Resource, resource_id)
+            if assignment is None or resource is None:
+                raise CommandValidationError(
+                    "Child override requires an assigned run resource"
+                )
+            if context is not None:
+                CommandService._authorize_scope(
+                    context,
+                    resource.namespace.path,
+                    Scope.RESOURCE_READ,
+                    "update_process_run",
+                )
+            candidate = resource
+            while candidate is not None and candidate.id != assignment.resource_id:
+                candidate = candidate.parent
+            if candidate is None:
+                raise CommandValidationError(
+                    "Child resource must be the assigned resource or its descendant"
+                )
+            with session.no_autoflush:
+                existing = step.assignments.get(slot.id)
+                if existing is not None:
+                    existing.resource = resource
+                else:
+                    assigned = ResourceAssignment(
+                        process_run=run,
+                        resource_slot=slot,
+                        resource_slot_id=slot.id,
+                        step=step,
+                        step_id=step.id,
+                        resource=resource,
                     )
-                    for name, parameter in orm_step.parameters.items()
-                }
-                payload = current.model_dump()
-                payload["parameters"] = parameters
-                result.steps[orm_step.name] = StepSchema.model_validate(payload)
-        return result
+                    session.add(assigned)
+                    step.assignments[slot.id] = assigned
 
     @staticmethod
     def _apply_run_assignments(session, run, assignments, context):
@@ -1590,11 +1802,32 @@ class CommandService:
                 run.resources[slot] = resource
 
     @staticmethod
-    def _apply_run_steps(session, run, steps):
+    def _apply_run_steps(session, run, steps, context=None):  # noqa: C901
         for step_name, step_data in steps.items():
             step = run.steps.get(step_name)
             if step is None:
+                step = next(
+                    (
+                        item
+                        for item in run.steps.values()
+                        if str(item.id) == str(step_name)
+                    ),
+                    None,
+                )
+            if step is None:
                 raise CommandValidationError(f"Step {step_name!r} not found")
+            resources = (
+                step_data.get("resources", {})
+                if isinstance(step_data, dict)
+                else getattr(step_data, "resources", {})
+            )
+            CommandService._apply_step_resources(
+                session,
+                run,
+                step,
+                {role: UUID(str(value)) for role, value in resources.items()},
+                context,
+            )
             parameters = (
                 step_data.parameters
                 if hasattr(step_data, "parameters")
@@ -1623,8 +1856,9 @@ class CommandService:
                         )
                     if isinstance(raw, dict):
                         value.set_value(raw.get("value"))
-                        if "unit" in raw:
-                            value.unit = raw["unit"]
+                        for field in ("unit", "metadata_json"):
+                            if field in raw:
+                                setattr(value, field, deepcopy(raw[field]))
                     else:
                         value.set_value(raw)
                     session.add(value)

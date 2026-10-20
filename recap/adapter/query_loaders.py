@@ -47,6 +47,7 @@ PRELOAD_STATEMENTS = {
         ),
     ],
     (ProcessRunSchema, "steps"): [
+        chain_load(ProcessRun.steps, Step.assignments, ResourceAssignment.resource),
         chain_load(ProcessRun.steps, Step.children),
         chain_load(ProcessRun.steps, Step.parameters),
         chain_load(

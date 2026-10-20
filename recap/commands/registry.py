@@ -166,6 +166,8 @@ def _encode_update_resource(command: CommandModel) -> EncodedRequest:
     assert isinstance(command, UpdateResource)
     data = command.model_dump(mode="json")
     excluded = {"resource_id", "expected_revision"}
+    if not command.children:
+        excluded.add("children")
     if not command.in_place:
         excluded.add("in_place")
     return EncodedRequest(
@@ -200,6 +202,8 @@ def _decode_resource_response(
 def _encode_create_resource(command: CommandModel) -> EncodedRequest:
     assert isinstance(command, CreateResource)
     data = command.model_dump(mode="json")
+    if not command.children:
+        data.pop("children")
     data.pop("namespace_path")
     if data["id"] is None:
         data.pop("id")
@@ -227,6 +231,8 @@ def _encode_copy_resource(command: CommandModel) -> EncodedRequest:
         "destination_namespace": command.destination_namespace_path.strip("/"),
         **command.options.model_dump(mode="json"),
     }
+    if not command.options.changes.children:
+        body["changes"].pop("children")
     return EncodedRequest(
         method="POST",
         path=f"/api/v1/resources/{command.source_resource_id}/copies",
@@ -367,6 +373,8 @@ def _decode_update_process_template(
 def _encode_create_process_run(command: CommandModel) -> EncodedRequest:
     assert isinstance(command, CreateProcessRun)
     body = command.draft.model_dump(mode="json")
+    if not command.draft.child_steps:
+        body.pop("child_steps")
     if body["id"] is None:
         body.pop("id")
     return EncodedRequest(
@@ -389,6 +397,8 @@ def _decode_create_process_run(
 def _encode_update_process_run(command: CommandModel) -> EncodedRequest:
     assert isinstance(command, UpdateProcessRun)
     data = command.model_dump(mode="json")
+    if not command.child_steps:
+        data.pop("child_steps")
     data.pop("process_run_id")
     data.pop("expected_revision")
     if not command.in_place:
@@ -421,7 +431,36 @@ def _decode_process_template_response(
 def _decode_process_run_response(
     entity: Any, etag: str | None = None, **_: Any
 ) -> ProcessRunSchema:
-    return ProcessRunSchema.model_validate(entity)
+    from copy import deepcopy
+
+    original_payload = deepcopy(entity) if isinstance(entity, dict) else entity
+    if isinstance(entity, dict):
+        from recap.adapter.transport import _decode_tagged_scalars, _restore_metadata
+
+        entity = _decode_tagged_scalars(entity)
+        _prepare_dynamic_models(entity)
+    result = ProcessRunSchema.model_validate(entity)
+    if not isinstance(result, ProcessRunSchema):
+        return result
+    if isinstance(entity, dict):
+        _restore_metadata(result, original_payload)
+    result.set_loaded_relations(
+        {"template": True, "steps": True, "assigned_resources": True},
+        on_unloaded=result.__pydantic_private__.get("_on_unloaded", "warn"),
+    )
+    for parent in result.steps.values():
+        for step in (parent, *parent.children.values()):
+            step.set_loaded_relations(
+                {
+                    "template": True,
+                    "parameters": True,
+                    "children": True,
+                    "resources": True,
+                    "resource_overrides": True,
+                },
+                on_unloaded=step.__pydantic_private__.get("_on_unloaded", "warn"),
+            )
+    return result
 
 
 def _encode_create_namespace(command: CommandModel) -> EncodedRequest:
@@ -526,6 +565,8 @@ def _decode_lifecycle_response(
         raise TypeError(f"Unsupported lifecycle object: {command.object_type}")
     if isinstance(entity, dict) and schema is ResourceSchema:
         _prepare_dynamic_models(entity)
+    if schema is ProcessRunSchema:
+        return _decode_process_run_response(entity, etag)
     return schema.model_validate(entity)
 
 

@@ -21,10 +21,18 @@ except ImportError:  # Python <3.11
 
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
 from recap.db.resource import Property
 from recap.schemas.attribute import (
+    AttributeChangeMixin,
     AttributeGroupTemplateSchema,
     AttributeValueSchema,
 )
@@ -56,7 +64,7 @@ def _attr_metadata(vt: Any) -> dict | None:
         return {}
 
 
-class PropertySchema(CommonFields):
+class PropertySchema(AttributeChangeMixin, CommonFields):
     """A property group instance attached to a resource.
 
     Combines the group template (field definitions, types, units) with the
@@ -80,6 +88,7 @@ class PropertySchema(CommonFields):
 
     template: AttributeGroupTemplateSchema
     values: BaseModel = Field(repr=False)
+    _changed_attributes: dict[str, set[str]] = PrivateAttr(default_factory=dict)
 
     @model_validator(mode="before")
     def coerce_from_orm_or_dict(cls, data):
@@ -203,6 +212,8 @@ class PropertySchema(CommonFields):
         # This allows `prop.smiles` as a shortcut for `prop.values.smiles`.
         # Note: if an attribute group defines a field that clashes with a
         # PropertySchema field name, the shortcut won't reach it.
+        if name.startswith("_"):
+            return super().__getattr__(name)
         values = self.__dict__.get("values")
         if values is not None:
             try:
@@ -290,10 +301,22 @@ class ResourceTypeSchema(CommonFields):
     name: Annotated[str, SIMPLE_FIELD]
 
 
+class ResourceChildDraft(BaseModel):
+    """New or copied child contents submitted with an aggregate write."""
+
+    id: UUID
+    name: str
+    template_id: UUID
+    source_id: UUID | None = None
+    properties: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    children: tuple["ResourceChildDraft", ...] = ()
+
+
 class ResourceCopyChanges(BaseModel):
     """Property changes applied while copying a resource."""
 
     properties: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    children: tuple[ResourceChildDraft, ...] = ()
 
 
 class ResourceCopyOptions(BaseModel):
@@ -452,6 +475,11 @@ class ResourceSchema(LoadAwareMixin, NamespaceOwnedFields):
     properties: BaseModel | dict[str, PropertySchema] = Field(default_factory=dict)
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
     _relation_fields = frozenset({"template", "parent", "children", "properties"})
+    _properties_dirty: bool = PrivateAttr(default=False)
+
+    @property
+    def properties_dirty(self) -> bool:
+        return self._properties_dirty
 
     @field_validator("parent", mode="before")
     @classmethod

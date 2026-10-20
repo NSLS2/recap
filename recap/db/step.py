@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey, UniqueConstraint, func
+from sqlalchemy import ForeignKey, Index, UniqueConstraint, func, text
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import (
     Mapped,
@@ -166,6 +166,17 @@ class Step(TimestampMixin, Base):
     )
     parent_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("step.id"), nullable=True, index=True
+    )
+    __table_args__ = (
+        UniqueConstraint("parent_id", "name", name="uq_step_parent_name"),
+        Index(
+            "uq_step_run_root_name",
+            "process_run_id",
+            "name",
+            unique=True,
+            sqlite_where=text("parent_id IS NULL"),
+            postgresql_where=text("parent_id IS NULL"),
+        ),
     )
     parent: Mapped["Step | None"] = relationship(
         "Step", back_populates="children", remote_side=[id]
