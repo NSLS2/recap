@@ -19,6 +19,7 @@ from recap.schemas.namespace import NamespaceContext
 from recap.schemas.process import ProcessTemplateSchema
 from recap.schemas.resource import ResourceCopyOptions, ResourceTemplateSchema
 from recap.server.app import create_app
+from recap.utils.general import Direction
 
 
 @pytest.fixture(params=["local", "remote"], ids=["local", "remote"])
@@ -37,6 +38,82 @@ def seed_command_namespace(client):
     client.create_namespace("beamline/amx")
     scoped = client.namespace("beamline/amx")
     return scoped
+
+
+def test_overlapping_trees_and_assignments_preserve_generated_properties(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(name="Overlap plate", type_names=["plate"]):
+        pass
+    for index in range(2):
+        with scoped.build_resource_template(
+            name=f"Overlap well {index}", type_names=["well"]
+        ) as template:
+            template.add_properties({"Measurements": [
+                {"name": "Dose", "type": "int", "default": None,
+                 "unit": "uL", "metadata": {"min": 0, "max": 10}},
+                {"name": "Label", "type": "str", "default": f"well-{index}"},
+                {"name": "Readings", "type": "array", "default": [index]},
+            ]})
+    with scoped.build_resource("plate", "Overlap plate") as plate_builder:
+        for index in range(2):
+            plate_builder.add_child(f"well-{index}", f"Overlap well {index}")
+    with plate_builder:
+        plate_builder.finalize()
+    for child in plate_builder.resource.children.values():
+        with scoped.build_resource(resource_id=child.id) as child_builder:
+            child_builder.finalize()
+    with scoped.build_process_template("Overlap measurement", "1.0") as template:
+        template.add_resource_slot("plate", "plate", Direction.input)
+        template.add_resource_slot("well", "well", Direction.input)
+    plate = plate_builder.resource
+    with scoped.build_process_run("overlap-run", "", "Overlap measurement", "1.0") as run_builder:
+        run_builder.assign_resource("plate", plate)
+        run_builder.assign_resource("well", plate.children["well-0"])
+    with run_builder:
+        run_builder.finalize()
+
+    maker = scoped.query_maker()
+    tree_query = maker.resources(load="eager").filter(id=plate.id)
+    tree = tree_query.first()
+    snapshots = {}
+    for name, child in tree.children.items():
+        group = child.properties.measurements
+        snapshots[name] = (child, child.properties, group, group.values, group.values.dose)
+
+    def assert_child(child):
+        original, properties, group, values, dose = snapshots[child.name]
+        assert child is original
+        assert child.properties is properties
+        assert type(child.properties) is type(properties)
+        assert child.properties.measurements is group
+        assert child.properties.measurements.values is values
+        assert group.values.dose is dose
+        assert dose.value is None
+        assert dose.unit == "uL"
+        assert group.values.label.value == child.name
+        assert group.values.readings.value == [int(child.name[-1])]
+        assert set(type(properties).model_fields) == {"measurements"}
+        assert set(type(values).model_fields) == {"dose", "label", "readings"}
+
+    for _ in range(2):
+        run = maker.process_runs(load="eager").filter(id=run_builder.process_run.id).first()
+        assigned_plate = run.assigned_resources["plate"].resource
+        assert assigned_plate is tree
+        assert_child(run.assigned_resources["well"].resource)
+        for child in assigned_plate.children.values():
+            assert_child(child)
+        partial = maker.resources().filter(id=plate.id).first()
+        assert partial is tree
+        repeated = tree_query.all()
+        assert repeated == [tree]
+        for child in repeated[0].children.values():
+            assert_child(child)
+        wells = [
+            resource for resource in maker.resources(load="eager").all()
+            if resource.id != tree.id
+        ]
+        for resource in wells:
+            assert_child(resource)
 
 
 @pytest.mark.parametrize("kind", ["resource", "process"])

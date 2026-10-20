@@ -169,8 +169,13 @@ def serialize_model(
 
     if isinstance(model, LoadAware):
         private = model.__pydantic_private__ or {}
+        loaded_relations = dict(private.get("_loaded_relations", {}))
+        if repeated:
+            # Cycle shells omit every relation, even if the source object has
+            # those relations loaded. Their defaults are not hydrated data.
+            loaded_relations.update(dict.fromkeys(relation_fields, False))
         payload["__recap__"] = {
-            "loaded_relations": dict(private.get("_loaded_relations", {})),
+            "loaded_relations": loaded_relations,
             "on_unloaded": private.get("_on_unloaded", "warn"),
         }
     return payload

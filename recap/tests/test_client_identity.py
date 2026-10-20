@@ -7,14 +7,20 @@ from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import Field, create_model
 
 from recap.client.backend import ClientBackend
 from recap.client.base_client import RecapClient
 from recap.client.connection_state import ConnectionState
 from recap.client.identity import IdentityMap, IdentityMergeConflict
-from recap.schemas.attribute import AttributeValueSchema
+from recap.schemas.attribute import (
+    AttributeGroupTemplateSchema,
+    AttributeTemplateSchema,
+    AttributeValueSchema,
+)
 from recap.schemas.namespace import NamespaceContext, NamespaceRef, NamespaceSchema
 from recap.schemas.resource import (
+    PropertySchema,
     ResourceRef,
     ResourceSchema,
     ResourceSlotSchema,
@@ -22,6 +28,7 @@ from recap.schemas.resource import (
     ResourceTypeSchema,
 )
 from recap.schemas.step import ParameterSchema
+from recap.utils.dsl import build_param_values_model
 
 
 def _resource(resource_id, *, name="sample", revision=1, modified_date=None):
@@ -216,6 +223,88 @@ def test_merge_replaces_scalar_list_and_dict_fields():
 
     assert current.value == ["new"]
     assert current.metadata_json == {"new": True}
+
+
+def test_merge_dict_view_replaces_scalar_list_and_dict_fields():
+    current = AttributeValueSchema(value=["old"], metadata_json={"old": True})
+    assert IdentityMap()._merge_container(
+        current, {"value": ["new"], "metadata_json": {"new": True}}
+    )
+    assert current.value == ["new"]
+    assert current.metadata_json == {"new": True}
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_merge_dict_view_preserves_generated_container(empty):
+    container = create_model(
+        "DictViewContainer", dose=(AttributeValueSchema, Field(alias="Dose"))
+    )
+    dose = AttributeValueSchema(value=1)
+    current = container(Dose=dose)
+    incoming = {} if empty else {"Dose": AttributeValueSchema(value=None)}
+    assert IdentityMap()._merge_container(current, incoming)
+    assert current.dose is dose
+    assert dose.value == (1 if empty else None)
+
+
+@pytest.mark.parametrize("group_type", [PropertySchema, ParameterSchema])
+@pytest.mark.parametrize("incoming_value", [None, 7])
+@pytest.mark.parametrize("different_class", [False, True])
+def test_merge_preserves_nested_generated_containers(
+    group_type, incoming_value, different_class
+):
+    stamp = datetime(2026, 1, 1)
+    template = AttributeGroupTemplateSchema(
+        id=uuid4(), create_date=stamp, modified_date=stamp,
+        name="Measurements", slug="measurements",
+        attribute_templates=[
+            AttributeTemplateSchema(
+                id=uuid4(), create_date=stamp, modified_date=stamp,
+                name="Dose", slug="dose", value_type="int",
+                default_value=None, unit="uL", metadata={"min": 0, "max": 10},
+            ),
+        ],
+    )
+    group_id = uuid4()
+
+    def group(value, unit, metadata, distinct=False):
+        model = build_param_values_model(
+            "other_measurements" if distinct else "measurements",
+            (("Dose", "dose", "int", {"min": 0, "max": 10}, "uL"),),
+        )
+        return group_type(
+            id=group_id, create_date=stamp, modified_date=stamp,
+            template=template,
+            values=model.model_validate({"Dose": {
+                "value": value, "unit": unit, "metadata_json": metadata,
+            }}),
+        )
+
+    current_group = group(1, "uL", {"old": True})
+    incoming_group = group(incoming_value, "mL", {"new": True}, different_class)
+    container = create_model("MeasurementsContainer", measurements=(group_type, ...))
+    current = container(measurements=current_group)
+    incoming_type = (
+        create_model("OtherMeasurementsContainer", measurements=(group_type, ...),
+                     unknown=(int, Field(default=3)))
+        if different_class else container
+    )
+    incoming = incoming_type(measurements=incoming_group, unknown=3) if different_class else incoming_type(measurements=incoming_group)
+    original_values = current_group.values
+    original_value = original_values.dose
+    original_type = type(original_values)
+
+    assert IdentityMap()._merge_container(current, incoming)
+
+    assert current.measurements is current_group
+    assert current.measurements.values is original_values
+    assert type(current.measurements.values) is original_type
+    assert current.measurements.values.dose is original_value
+    assert original_value.value == incoming_value
+    assert original_value.unit == "mL"
+    assert original_value.metadata_json == {"new": True}
+    assert set(type(current).model_fields) == {"measurements"}
+    assert "unknown" not in current.__dict__
 
 
 def test_entity_family_and_uuid_separate_keys():

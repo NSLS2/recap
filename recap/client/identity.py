@@ -707,6 +707,24 @@ class IdentityMap:
             if pair in _seen:
                 return True
             _seen.add(pair)
+        if isinstance(current, BaseModel) and isinstance(incoming, dict):
+            for name, field in type(current).model_fields.items():
+                key = name if name in incoming else field.alias
+                if key not in incoming:
+                    continue
+                value = incoming[key]
+                existing = current.__dict__.get(name)
+                if (
+                    isinstance(existing, BaseModel)
+                    and isinstance(value, BaseModel | dict)
+                    and self._merge_container(existing, value, _seen=_seen)
+                ):
+                    continue
+                if name not in getattr(
+                    type(current), "_relation_fields", frozenset()
+                ) or not self._merge_container(existing, value, _seen=_seen):
+                    setattr(current, name, self._canonicalize_value(value))
+            return True
         if isinstance(current, dict) and isinstance(incoming, dict):
             for key, value in incoming.items():
                 existing = current.get(key)
@@ -734,6 +752,16 @@ class IdentityMap:
                     if not self._merge_container(existing, value, _seen=_seen):
                         setattr(current, name, self._canonicalize_value(value))
                 else:
+                    existing = current.__dict__.get(name)
+                    # Generated groups and value models are ordinary fields,
+                    # but their concrete classes and references must survive
+                    # reconciliation just like relation containers.
+                    if (
+                        isinstance(existing, BaseModel)
+                        and isinstance(value, BaseModel)
+                        and self._merge_container(existing, value, _seen=_seen)
+                    ):
+                        continue
                     setattr(current, name, self._canonicalize_value(value))
             return True
         return False

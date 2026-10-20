@@ -278,6 +278,26 @@ def test_serialize_model_truncates_repeated_cyclic_template_edges():
     assert "children" not in payload["children"]["child"]["parent"]
 
 
+def test_cyclic_resource_shell_marks_omitted_relations_unloaded():
+    parent = minimal_resource()
+    child = minimal_resource()
+    parent.children = {"child": child}
+    child.parent = parent
+    flags = {"template": True, "parent": True, "children": True, "properties": True}
+    parent.set_loaded_relations(flags, on_unloaded="raise")
+    child.set_loaded_relations(flags, on_unloaded="raise")
+
+    payload = serialize_model(parent)
+    shell = payload["children"]["child"]["parent"]
+    assert shell["__recap__"]["loaded_relations"] == dict.fromkeys(flags, False)
+    assert all(name not in shell for name in flags)
+    [hydrated] = hydrate_result(
+        ResourceSchema, QueryResult(schema_name="ResourceSchema", items=[payload])
+    )
+    restored_shell = hydrated.children["child"].parent
+    assert all(not restored_shell.is_loaded(name) for name in flags)
+
+
 def test_resource_round_trip_preserves_hydrated_array_override_and_metadata():
     group = AttributeGroupTemplateSchema(
         **{
