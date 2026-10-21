@@ -98,9 +98,14 @@ class IdentityMap:
 
     def intern(self, model: BaseModel, *, authoritative: bool = False) -> BaseModel:
         with self._lock:
-            canonical = self._intern(model, authoritative=authoritative)
-            self._canonicalize_relations(canonical)
-            return canonical
+            try:
+                canonical = self._intern(model, authoritative=authoritative)
+                self._canonicalize_relations(canonical)
+                return canonical
+            finally:
+                # A pair only needs reconciliation once per top-level read.
+                # Keep completed pairs during this traversal, not across reads.
+                self._canonical_merge_pairs.clear()
 
     def clear(self) -> None:
         with self._lock:
@@ -508,9 +513,14 @@ class IdentityMap:
             right
         )
 
-    def _dedupe_repeated_sequences(self, value: Any) -> Any:
+    def _dedupe_repeated_sequences(self, value: Any, _memo=None) -> Any:
+        if _memo is None:
+            _memo = {}
         if isinstance(value, tuple):
-            items = tuple(self._dedupe_repeated_sequences(item) for item in value)
+            if id(value) in _memo:
+                return _memo[id(value)]
+            items = tuple(self._dedupe_repeated_sequences(item, _memo) for item in value)
+            _memo[id(value)] = items
             n = len(items)
             if n < 2:
                 return items
@@ -523,7 +533,8 @@ class IdentityMap:
                 if n % size != 0:
                     continue
                 if all(items[i] == items[i % size] for i in range(size, n)):
-                    return items[:size]
+                    _memo[id(value)] = items[:size]
+                    return _memo[id(value)]
             return items
         return value
 
@@ -793,10 +804,7 @@ class IdentityMap:
                     if pair not in self._canonical_merge_pairs:
                         self._canonical_merge_pairs.add(pair)
                         self._invalidate_canonicalized(existing)
-                        try:
-                            self._merge_loaded_relations(existing, value)
-                        finally:
-                            self._canonical_merge_pairs.remove(pair)
+                        self._merge_loaded_relations(existing, value)
                     return existing
             self._canonicalize_relations(value)
             return self._intern(value)

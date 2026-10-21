@@ -166,6 +166,15 @@ def test_merging_identical_container_does_not_rewalk_canonical_graph(container_t
         canonicalize.assert_not_called()
 
 
+def test_repeated_signature_subtrees_are_normalized_once():
+    identity_map = IdentityMap()
+    shared = ("x", "y", "x", "y")
+    signature = (shared, shared, "tail")
+    normalized = identity_map._dedupe_repeated_sequences(signature)
+    assert normalized == (("x", "y"), ("x", "y"), "tail")
+    assert normalized[0] is normalized[1]
+
+
 def test_equal_revision_cyclic_template_relations_do_not_recurse():
     identity_map = IdentityMap()
     namespace_id = uuid4()

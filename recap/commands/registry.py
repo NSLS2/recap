@@ -446,7 +446,7 @@ def _decode_process_run_response(
         _restore_metadata(result, original_payload)
     result.set_loaded_relations(
         {"template": True, "steps": True, "assigned_resources": True},
-        on_unloaded=result.__pydantic_private__.get("_on_unloaded", "warn"),
+        on_unloaded=(result.__pydantic_private__ or {}).get("_on_unloaded", "warn"),
     )
     for parent in result.steps.values():
         for step in (parent, *parent.children.values()):
@@ -458,7 +458,7 @@ def _decode_process_run_response(
                     "resources": True,
                     "resource_overrides": True,
                 },
-                on_unloaded=step.__pydantic_private__.get("_on_unloaded", "warn"),
+                on_unloaded=(step.__pydantic_private__ or {}).get("_on_unloaded", "warn"),
             )
     return result
 
