@@ -188,14 +188,15 @@ def test_shared_template_canonicalization_absolute_bound():
     assert calls <= 3000, f"expected bounded canonicalization, got {calls} visits"
 
 
-# --- Re-query path (item A): equal-revision merge signature hashing ----------
+# --- Model-only adapter fallback: equal-revision signature comparison -------
 #
 # Querying the same plate a second time interns a *fresh* object graph carrying
 # the *same* ids and revision. The equal-revision merge path compares the
 # incoming graph against the canonical one via ``_relation_signature``. Without
 # a signature cache the whole graph is re-serialized on every re-query, and the
 # shared template subtree is re-hashed once per well -- O(occurrences x subtree)
-# on every poll of an already-cached object.
+# on every poll through a model-only backend. Local and REST batch reads instead
+# use flat materialization, covered in test_materialization.py.
 #
 # These builders reuse fixed ids so re-interning maps onto the same canonical
 # identities (unlike ``_make_plate``, which mints new ids each call).

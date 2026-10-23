@@ -177,7 +177,9 @@ class IdentityMap:
                     self._copy_fields(current, incoming)
                     self._canonicalize_relations(current)
                     return
-                if self._equivalent_with_repeated_array_values(current, incoming):
+                if self._relation_signature(current) == self._relation_signature(
+                    incoming
+                ):
                     self._invalidate_canonicalized(current)
                     self._copy_fields(current, incoming)
                     self._canonicalize_relations(current)
@@ -501,136 +503,9 @@ class IdentityMap:
                 return self._family(value), model_id
         return self._relation_signature(value)
 
-    def _equivalent_with_repeated_array_values(
-        self, current: Any, incoming: Any
-    ) -> bool:
-        """Recognize stale hydrated array wrappers without hiding real conflicts."""
-        left = self._relation_signature(current)
-        right = self._relation_signature(incoming)
-        if left == right:
-            return True
-        return self._dedupe_repeated_sequences(left) == self._dedupe_repeated_sequences(
-            right
-        )
-
-    def _dedupe_repeated_sequences(self, value: Any, _memo=None) -> Any:
-        if _memo is None:
-            _memo = {}
-        if isinstance(value, tuple):
-            if id(value) in _memo:
-                return _memo[id(value)]
-            items = tuple(self._dedupe_repeated_sequences(item, _memo) for item in value)
-            _memo[id(value)] = items
-            n = len(items)
-            if n < 2:
-                return items
-            # Collapse a tuple that is a whole-number repetition of a shorter
-            # block to that block. Only sizes that divide ``n`` can tile it, so
-            # iterate divisors (O(d(n))) and verify each candidate period by
-            # element comparison with an early exit -- no per-size tuple
-            # rebuild. Same result as the original divisor scan.
-            for size in range(1, n // 2 + 1):
-                if n % size != 0:
-                    continue
-                if all(items[i] == items[i % size] for i in range(size, n)):
-                    _memo[id(value)] = items[:size]
-                    return _memo[id(value)]
-            return items
-        return value
-
     @staticmethod
     def _empty_relation_value(value: Any) -> bool:
         return value is None or value == {} or value == []
-
-    def _relation_is_extension(self, base: Any, candidate: Any) -> bool:
-        if isinstance(base, BaseModel) and isinstance(candidate, BaseModel):
-            return self._model_is_compatible_extension(base, candidate)
-        if isinstance(base, dict) and isinstance(candidate, dict):
-            if not set(base).issubset(candidate):
-                return False
-            return all(
-                self._model_is_compatible_extension(base[key], candidate[key])
-                for key in base
-            )
-        if isinstance(base, list) and isinstance(candidate, list):
-            candidate_by_id = {
-                (self._family(item), getattr(item, "id", None)): item
-                for item in candidate
-                if isinstance(item, BaseModel)
-            }
-            for item in base:
-                if not isinstance(item, BaseModel):
-                    if item not in candidate:
-                        return False
-                    continue
-                match = candidate_by_id.get(
-                    (self._family(item), getattr(item, "id", None))
-                )
-                if match is None or not self._model_is_compatible_extension(
-                    item, match
-                ):
-                    return False
-            return True
-        return False
-
-    def _model_is_compatible_extension(self, base: Any, candidate: Any) -> bool:  # noqa: C901
-        if not isinstance(base, BaseModel) or not isinstance(candidate, BaseModel):
-            return base == candidate
-        if type(base) is not type(candidate):
-            return False
-        relation_fields = getattr(type(base), "_relation_fields", frozenset())
-        if self._family(base) is None:
-            for name in base.model_fields_set & candidate.model_fields_set:
-                left = base.__dict__.get(name)
-                right = candidate.__dict__.get(name)
-                if isinstance(left, BaseModel) and isinstance(right, BaseModel):
-                    if not (
-                        self._model_is_compatible_extension(left, right)
-                        or self._model_is_compatible_extension(right, left)
-                    ):
-                        return False
-                elif isinstance(left, list | dict) or isinstance(right, list | dict):
-                    if not (
-                        self._relation_is_extension(left, right)
-                        or self._relation_is_extension(right, left)
-                    ):
-                        return False
-                elif left != right:
-                    return False
-            return True
-        if getattr(base, "id", None) != getattr(candidate, "id", None):
-            return False
-        for name in (
-            base.model_fields_set & candidate.model_fields_set - relation_fields
-        ):
-            if name in {"create_date", "modified_date"}:
-                continue
-            left = base.__dict__.get(name)
-            right = candidate.__dict__.get(name)
-            if isinstance(left, BaseModel | list | dict) or isinstance(
-                right, BaseModel | list | dict
-            ):
-                if self._relation_signature(left) != self._relation_signature(right):
-                    return False
-            elif name == "status":
-                continue
-            elif left != right:
-                return False
-        for name in relation_fields:
-            if (
-                _loaded_relations(base).get(name) is True
-                and _loaded_relations(candidate).get(name) is True
-            ):
-                left = base.__dict__.get(name)
-                right = candidate.__dict__.get(name)
-                if (
-                    not self._empty_relation_value(left)
-                    and not self._empty_relation_value(right)
-                    and not self._relation_is_extension(left, right)
-                    and not self._relation_is_extension(right, left)
-                ):
-                    return False
-        return True
 
     def _canonicalize_relations(self, model: BaseModel) -> None:
         if not isinstance(model, BaseModel):

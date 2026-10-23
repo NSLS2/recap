@@ -8,17 +8,12 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from recap.adapter import AuthorizedBatchReadBackend
 from recap.adapter.schema_registry import (
-    SCHEMA_ENTITY_KEYS,
-    SCHEMA_PROJECTIONS,
     SCHEMA_REGISTRY,
-    SCHEMAS_BY_NAME,
 )
 from recap.adapter.transport import (
     FlatQueryResult,
     QueryRequest,
-    QueryResult,
     encode_query_batch,
-    serialize_model,
 )
 from recap.authorization.query import AuthorizedQuery
 from recap.client.permissions import ActorPermissions
@@ -29,22 +24,6 @@ from recap.exceptions import RecapProtocolError, RecapValidationError
 class QueryService:
     def __init__(self, backend: AuthorizedBatchReadBackend) -> None:
         self.backend = backend
-
-    @classmethod
-    def legacy_request(
-        cls, schema_name: str, namespace_path: str, spec: Any
-    ) -> QueryRequest:
-        try:
-            schema = SCHEMAS_BY_NAME[schema_name]
-        except KeyError as exc:
-            raise RecapValidationError("Unknown query schema") from exc
-        return QueryRequest(
-            entity=SCHEMA_ENTITY_KEYS[schema],
-            projection=SCHEMA_PROJECTIONS[schema],
-            namespace_path=namespace_path,
-            spec=spec,
-            schema_name=schema_name,
-        )
 
     def query(self, request: QueryRequest, *, actor, policy) -> FlatQueryResult:
         schema = self._schema(request)
@@ -66,89 +45,6 @@ class QueryService:
             batch, entity=request.entity, projection=request.projection
         )
 
-    @staticmethod
-    def _serialize_item(item, entity, projection):
-        payload = serialize_model(item)
-        if projection != "ref":
-            return payload
-        fields = {
-            "namespace": {"id", "path"},
-            "resource_template": {
-                "id",
-                "name",
-                "slug",
-                "version",
-                "labels",
-                "types",
-                "namespace_id",
-                "status",
-                "revision",
-                "create_date",
-                "modified_date",
-            },
-            "resource": {
-                "id",
-                "name",
-                "copied_from_id",
-                "template",
-                "namespace_id",
-                "status",
-                "revision",
-                "create_date",
-                "modified_date",
-            },
-            "process_template": {
-                "id",
-                "name",
-                "version",
-                "labels",
-                "namespace_id",
-                "status",
-                "revision",
-                "create_date",
-                "modified_date",
-            },
-            "process_run": {
-                "id",
-                "name",
-                "description",
-                "template",
-                "namespace_id",
-                "status",
-                "revision",
-                "create_date",
-                "modified_date",
-            },
-        }[entity]
-        return {key: value for key, value in payload.items() if key in fields}
-
-    def query_models(self, request: QueryRequest, *, actor, policy):
-        schema = self._schema(request)
-        spec = self._spec(request, schema)
-        if policy is None:
-            items = self.backend.query(
-                schema, spec, namespace_path=request.namespace_path
-            )
-        else:
-            authorization = AuthorizedQuery.from_policy(
-                policy, actor, namespace_path=request.namespace_path
-            )
-            if not spec.include_mutable:
-                authorization = authorization.for_read()
-            items = self.backend.query_authorized(
-                schema, spec, authorization=authorization
-            )
-        return items
-
-    def legacy_query(
-        self, schema_name: str, namespace_path: str, spec: Any, *, backend=None
-    ) -> QueryResult:
-        request = self.legacy_request(schema_name, namespace_path, spec)
-        service = self if backend is None else QueryService(backend)
-        return service.query(request, actor=None, policy=None).model_copy(
-            update={"schema_name": schema_name}
-        )
-
     def count(self, request: QueryRequest, *, actor, policy) -> int:
         schema = self._schema(request)
         spec = self._spec(request, schema)
@@ -167,13 +63,6 @@ class QueryService:
             )
         return self.parse_count(value)
 
-    def legacy_count(
-        self, schema_name: str, namespace_path: str, spec: Any, *, backend=None
-    ) -> int:
-        request = self.legacy_request(schema_name, namespace_path, spec)
-        service = self if backend is None else QueryService(backend)
-        return service.count(request, actor=None, policy=None)
-
     def permissions(self, namespace_path: str, *, actor, policy) -> ActorPermissions:
         permissions = policy.permissions_for(actor, namespace_path)
         return ActorPermissions(
@@ -186,11 +75,11 @@ class QueryService:
         )
 
     @staticmethod
-    def parse_result(body: Any) -> QueryResult:
+    def parse_result(body: Any) -> FlatQueryResult:
         if not body:
             raise RecapProtocolError("Empty query response body")
         try:
-            return QueryResult.model_validate(body)
+            return FlatQueryResult.model_validate(body)
         except ValidationError as exc:
             raise RecapProtocolError("Malformed query response") from exc
 
