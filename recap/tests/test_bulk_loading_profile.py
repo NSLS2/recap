@@ -10,13 +10,16 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from recap.adapter.entity_batch import EntityBatchCollector
+from recap.adapter.entity_loading import prepare_batch_graph
+from recap.adapter.local import LocalBackend
 from recap.adapter.query_loaders import resolve_loader_options
 from recap.client.identity import IdentityMap
 from recap.client.materialization import BatchMaterializer
 from recap.db.process import ProcessRun
-from recap.db.resource import Resource
+from recap.db.resource import Resource, ResourceTemplate
+from recap.dsl.query import Field, QuerySpec
 from recap.schemas.process import ProcessRunSchema
-from recap.schemas.resource import ResourceSchema
+from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
 from scripts.profile_bulk_loading import (
     capture_sql,
     profile_cases,
@@ -325,11 +328,15 @@ def test_collection_keys_do_not_trigger_lazy_loads(loaded_plate, root):
 
 
 @pytest.mark.performance
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Children-only subtree preparation loads unused properties and values",
-)
+def test_run_preparation_keeps_assigned_tree_loading_within_budget(loaded_plate):
+    factory, graph = loaded_plate
+    _, profile = profile_read(
+        factory, graph.namespace_path, graph.run_id, kind="process_run"
+    )
+    assert profile.total_sql <= 45, profile.report()
+
+
+@pytest.mark.performance
 def test_children_only_does_not_load_unused_values(loaded_plate):
     factory, graph = loaded_plate
     _, profile = read_graph(factory, graph, "plate", "resource", ("children",), False)
@@ -338,14 +345,182 @@ def test_children_only_does_not_load_unused_values(loaded_plate):
 
 
 @pytest.mark.performance
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Well template ancestor/sibling closure is not bulk prepared",
-)
 def test_well_eager_collection_issues_no_sql(loaded_plate):
     factory, graph = loaded_plate
     _, profile = read_graph(factory, graph, "well", "resource", (), False)
+    assert profile.sql_by_phase["collection"] == 0
+
+
+@pytest.mark.parametrize("root_kind", ["resource", "resource_template"])
+def test_expanded_direct_getters_prepare_distinct_template_closure(
+    loaded_plate, root_kind
+):
+    factory, graph = loaded_plate
+    with factory() as session:
+        well = session.get(Resource, graph.well_ids[0])
+        namespace_id = well.namespace_id
+        name, template_name = well.name, well.template.name
+        template_id = well.resource_template_id
+    backend = LocalBackend(factory)
+    with capture_sql(factory.kw["bind"]) as profile:
+        if root_kind == "resource":
+            result = backend.get_resource(
+                namespace_id, name, template_name, expand=True
+            )
+            assert result.id == graph.well_ids[0]
+            assert result.parent.id == graph.plate_id
+        else:
+            result = backend.get_resource_template(
+                namespace_id, None, id=template_id, expand=True
+            )
+            assert result.id == template_id
+    assert profile.sql_by_phase["collection"] == 0
+    assert not profile.lazy_relationships, profile.lazy_relationships
+
+
+@pytest.mark.parametrize(
+    "preloads", [(), ("types",), ("children",), ("attribute_group_templates",)]
+)
+def test_template_query_preserves_requested_root_coverage_without_collector_sql(
+    loaded_plate, preloads
+):
+    factory, graph = loaded_plate
+    with factory() as session:
+        plate = session.get(Resource, graph.plate_id)
+        template_id = plate.resource_template_id
+    with capture_sql(factory.kw["bind"]) as profile:
+        batch = LocalBackend(factory).query_batch(
+            ResourceTemplateSchema,
+            QuerySpec(
+                filters={"id": template_id}, preloads=preloads, include_mutable=True
+            ),
+            namespace_path=graph.namespace_path,
+        )
+    assert batch.roots[0].id == template_id
+    edges = [edge for edge in batch.adjacency if edge.source == batch.roots[0]]
+    assert {edge.relation for edge in edges if edge.loaded} == set(preloads) | (
+        {"types"} if "children" in preloads else set()
+    )
+    assert profile.sql_by_phase["collection"] == 0
+
+
+def test_filtered_paginated_children_queries_keep_selected_root_order(loaded_plate):
+    factory, graph = loaded_plate
+    with capture_sql(factory.kw["bind"]) as profile:
+        batch = LocalBackend(factory).query_batch(
+            ResourceSchema,
+            QuerySpec(
+                filters={"parent_id": graph.plate_id},
+                orderings=(Field("name").asc(),),
+                offset=1,
+                limit=2,
+                preloads=("children",),
+                include_mutable=True,
+            ),
+            namespace_path=graph.namespace_path,
+        )
+    with factory() as session:
+        expected = list(
+            session.scalars(
+                select(Resource.id)
+                .where(Resource.parent_id == graph.plate_id)
+                .order_by(Resource.name)
+                .offset(1)
+                .limit(2)
+            )
+        )
+    assert [root.id for root in batch.roots] == expected
+    assert (
+        profile.loaded_types["Property"] == profile.loaded_types["AttributeValue"] == 0
+    )
+    assert profile.sql_by_phase["collection"] == 0
+
+
+def test_direct_step_and_parameter_getters_share_prepared_collection(loaded_plate):
+    factory, graph = loaded_plate
+    backend = LocalBackend(factory)
+    run = backend.query(
+        ProcessRunSchema,
+        QuerySpec(filters={"id": graph.run_id}, include_mutable=True),
+        namespace_path=graph.namespace_path,
+    )[0]
+    with capture_sql(factory.kw["bind"]) as steps_profile:
+        steps = backend.get_steps(run)
+    assert len(steps) == 3
+    assert steps_profile.sql_by_phase["collection"] == 0
+    with capture_sql(factory.kw["bind"]) as params_profile:
+        backend.get_params(steps[0])
+    assert params_profile.sql_by_phase["collection"] == 0
+
+
+@pytest.mark.performance
+def test_children_only_crosses_row_batch_boundary_without_loading_values(loaded_plate):
+    factory, graph = loaded_plate
+    with factory() as session:
+        plate = session.get(Resource, graph.plate_id)
+        template = next(iter(plate.children.values())).template
+        for index in range(520 - len(plate.children)):
+            session.add(
+                Resource(
+                    name=f"overflow-{index}",
+                    template=template,
+                    parent=plate,
+                    namespace=plate.namespace,
+                    _init_children=False,
+                )
+            )
+        session.commit()
+    batch, profile = profile_read(
+        factory, graph.namespace_path, graph.plate_id, preloads=("children",)
+    )
+    assert sum(record.kind == "resource" for record in batch.entities) == 521
+    assert (
+        profile.loaded_types["Property"] == profile.loaded_types["AttributeValue"] == 0
+    )
+    assert not profile.lazy_relationships
+    assert profile.sql_by_phase["collection"] == 0
+    # Two row batches beyond SQLAlchemy's select-in batch size are intentional.
+    assert profile.total_sql <= 6
+
+
+@pytest.mark.parametrize("kind", ["resource", "resource_template", "process_run"])
+def test_prepared_graph_matches_original_relation_traversal(loaded_plate, kind):
+    factory, graph = loaded_plate
+    if kind == "resource":
+        model, schema, object_id = Resource, ResourceSchema, graph.well_ids[0]
+        requested = {"template", "parent", "children", "properties"}
+    elif kind == "resource_template":
+        model, schema = ResourceTemplate, ResourceTemplateSchema
+        with factory() as session:
+            object_id = session.get(Resource, graph.plate_id).resource_template_id
+        requested = {"parent", "types", "children", "attribute_group_templates"}
+    else:
+        model, schema, object_id = ProcessRun, ProcessRunSchema, graph.run_id
+        requested = {"template", "steps", "steps.parameters", "resources"}
+    with factory() as session:
+        original = EntityBatchCollector()
+        original.add_root(session.get(model, object_id), requested)
+        expected = original.collect()
+    with factory() as session, capture_sql(factory.kw["bind"]) as profile:
+        actual = prepare_batch_graph(
+            session, [session.get(model, object_id)], schema, requested
+        )
+    assert actual.roots == expected.roots
+    assert {
+        (record.kind, record.id): record.model_dump(mode="json")
+        for record in actual.entities
+    } == {
+        (record.kind, record.id): record.model_dump(mode="json")
+        for record in expected.entities
+    }
+    assert {
+        (edge.source, edge.relation): edge.model_dump(mode="json")
+        for edge in actual.adjacency
+    } == {
+        (edge.source, edge.relation): edge.model_dump(mode="json")
+        for edge in expected.adjacency
+    }
+    assert not profile.lazy_relationships, profile.lazy_relationships
     assert profile.sql_by_phase["collection"] == 0
 
 

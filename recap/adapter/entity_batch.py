@@ -106,18 +106,19 @@ class EntityBatchCollector:
             }
         else:
             fields = extract_simple_fields(policy.schema, row)
-        # Existing public models retain minimal template references even when
-        # those relations are not requested. These are supporting records,
-        # explicitly marked unloaded rather than advertised as included data.
-        if ref.kind in {"resource", "process_run", "step"}:
-            self._single(ref, "template", row.template, loaded=False)
-        if ref.kind == "resource_slot":
-            self._single(ref, "resource_type", row.resource_type)
+        self._supporting_relations(row, ref)
         fields.pop("id", None)
         kwargs = {}
         if "revision" in fields:
             kwargs["revision"] = fields.pop("revision")
         return policy.record(id=ref.id, fields=fields, **kwargs)
+
+    def _supporting_relations(self, row, ref):
+        # Minimal supporting references are not advertised as requested coverage.
+        if ref.kind in {"resource", "process_run", "step"}:
+            self._single(ref, "template", row.template, loaded=False)
+        if ref.kind == "resource_slot":
+            self._single(ref, "resource_type", row.resource_type)
 
     def _single(self, source, relation, row, requested=frozenset(), *, loaded=True):
         target = None if row is None else self._enqueue(row, requested)
