@@ -23,7 +23,7 @@ from recap.dsl.drafts import ProcessRunDraft
 from recap.schemas.process import ProcessRunSchema
 from recap.schemas.resource import ResourceSchema
 
-from .test_hydration_cache import _seed_resource_graph
+from .entity_fixtures import _seed_resource_graph
 from .test_process_run_resource_tree_perf import _seed_run_with_resource_chain
 
 
@@ -125,8 +125,9 @@ def test_process_run_direct_execution_and_replay_use_flat_snapshots(db_session):
             name="direct-run", description="snapshot", template_id=template_id
         ),
     )
-    with patch(
-        "recap.adapter.process_run_construct.ProcessRunSchemaHydrator",
+    with patch.object(
+        ProcessRunSchema,
+        "model_validate",
         side_effect=AssertionError("Nested process hydration"),
     ):
         first = service.create_process_run(

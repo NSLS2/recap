@@ -7,7 +7,7 @@ import httpx2
 import pytest
 
 from recap.adapter.http_transport import HTTPResult, HTTPTransport
-from recap.adapter.transport import serialize_model
+from recap.adapter.transport import encode_query_batch
 from recap.client.permissions import ActorPermissions
 from recap.dsl.query import QuerySpec
 from recap.exceptions import (
@@ -31,6 +31,16 @@ def _transport(body=None, *, etag=None, request_id=None):
     return transport
 
 
+def _flat_payload(model):
+    from recap.adapter.schema_registry import SCHEMA_ENTITY_KEYS
+    from recap.tests.batch_fakes import model_batch
+
+    batch = model_batch(type(model), [model])
+    return encode_query_batch(
+        batch, entity=SCHEMA_ENTITY_KEYS[type(model)], projection="full"
+    ).model_dump(mode="json")
+
+
 def _namespace_body(namespace_id=None):
     stamp = datetime(2026, 1, 1, tzinfo=UTC).isoformat()
     return {
@@ -42,6 +52,24 @@ def _namespace_body(namespace_id=None):
         "create_date": stamp,
         "modified_date": stamp,
     }
+
+
+def test_graph_commands_reject_nested_response_payload():
+    from recap.adapter.rest import RESTAdapter
+    from recap.commands.models import UpdateResource
+    from recap.tests.transport_factories import minimal_resource
+
+    resource = minimal_resource()
+    adapter = RESTAdapter(
+        "https://recap.test", _transport=_transport(resource.model_dump(mode="json"))
+    )
+    with pytest.raises(RecapProtocolError, match="flat"):
+        adapter.execute_batch(
+            UpdateResource(
+                resource_id=resource.id, expected_revision=1, name="updated"
+            ),
+            SimpleNamespace(idempotency_key="nested"),
+        )
 
 
 def test_create_namespace_uses_registered_route_and_hydrates_response():
@@ -159,25 +187,21 @@ def test_update_namespace_preserves_explicit_empty_etag():
 def test_execute_hydrates_copy_resource():
     from recap.adapter.rest import RESTAdapter
     from recap.commands.models import CopyResource
-    from recap.schemas.resource import ResourceSchema
 
     source = uuid4()
-    result = object()
-    transport = _transport({"resource": "payload"})
-    adapter = RESTAdapter("https://recap.test", _transport=transport)
-    original = ResourceSchema.model_validate
-    ResourceSchema.model_validate = classmethod(lambda cls, value: result)
-    try:
-        returned = adapter.execute(
-            CopyResource(
-                source_resource_id=source, destination_namespace_path="beamline/amx"
-            ),
-            SimpleNamespace(idempotency_key="idem-copy"),
-        )
-    finally:
-        ResourceSchema.model_validate = original
+    from recap.tests.transport_factories import minimal_resource
 
-    assert returned is result
+    result = minimal_resource("copied")
+    transport = _transport(_flat_payload(result))
+    adapter = RESTAdapter("https://recap.test", _transport=transport)
+    returned = adapter.execute(
+        CopyResource(
+            source_resource_id=source, destination_namespace_path="beamline/amx"
+        ),
+        SimpleNamespace(idempotency_key="idem-copy"),
+    )
+
+    assert returned.id == result.id
     transport.request.assert_called_once_with(
         "POST",
         f"https://recap.test/api/v1/resources/{source}/copies",
@@ -194,7 +218,6 @@ def test_execute_hydrates_copy_resource():
 def test_execute_lifecycle_uses_status_route_and_if_match_header():
     from recap.adapter.rest import RESTAdapter
     from recap.commands.models import SetLifecycleStatus
-    from recap.schemas.resource import ResourceTemplateSchema
 
     command = SetLifecycleStatus(
         object_type="resource_template",
@@ -202,15 +225,15 @@ def test_execute_lifecycle_uses_status_route_and_if_match_header():
         expected_revision=3,
         status="ACTIVE",
     )
-    transport = _transport({"id": str(command.object_id), "revision": 4})
-    original = ResourceTemplateSchema.model_validate
-    ResourceTemplateSchema.model_validate = classmethod(lambda cls, value: object())
-    try:
-        RESTAdapter("https://recap.test", _transport=transport).execute(
-            command, SimpleNamespace(idempotency_key="lifecycle-1")
-        )
-    finally:
-        ResourceTemplateSchema.model_validate = original
+    from recap.tests.transport_factories import resource_template
+
+    template = resource_template().model_copy(
+        update={"id": command.object_id, "revision": 4}
+    )
+    transport = _transport(_flat_payload(template))
+    RESTAdapter("https://recap.test", _transport=transport).execute(
+        command, SimpleNamespace(idempotency_key="lifecycle-1")
+    )
 
     transport.request.assert_called_once_with(
         "POST",
@@ -220,24 +243,31 @@ def test_execute_lifecycle_uses_status_route_and_if_match_header():
     )
 
 
-def test_execute_update_resource_hydrates_dynamic_properties():
+def test_execute_update_resource_hydrates_dynamic_properties(db_session):
+    from recap.adapter.entity_batch import EntityBatchCollector
     from recap.adapter.rest import RESTAdapter
     from recap.commands.models import UpdateResource
-    from recap.tests.transport_factories import full_resource
+    from recap.tests.entity_fixtures import _seed_resource_graph
 
-    resource = full_resource()
+    resource, _, _, _ = _seed_resource_graph(db_session)
     command = UpdateResource(
         resource_id=resource.id, expected_revision=1, name=resource.name
     )
-    transport = _transport(serialize_model(resource))
+    collector = EntityBatchCollector()
+    collector.add_root(resource, {"template", "properties"})
+    transport = _transport(
+        encode_query_batch(
+            collector.collect(), entity="resource", projection="full"
+        ).model_dump(mode="json")
+    )
 
     returned = RESTAdapter("https://recap.test", _transport=transport).execute(
         command, SimpleNamespace(idempotency_key="resource-update")
     )
 
     assert (
-        returned.properties.measurements.values.captured_at.value
-        == resource.properties.measurements.values.captured_at.value
+        returned.properties.measurements.values.dose.value
+        == resource.properties["Measurements"]._values["dose"].value
     )
     assert transport.request.call_args.kwargs["headers"] == {
         "If-Match": '"1"',
@@ -254,7 +284,7 @@ def test_execute_update_resource_keeps_revision_out_of_request_body():
     command = UpdateResource(
         resource_id=resource.id, expected_revision=1, name="renamed"
     )
-    transport = _transport(serialize_model(resource))
+    transport = _transport(_flat_payload(resource))
 
     RESTAdapter("https://recap.test", _transport=transport).execute(
         command, SimpleNamespace(idempotency_key="resource-update")
@@ -280,15 +310,21 @@ def test_execute_update_process_run_uses_route_body_and_if_match():
         description="finished",
         status="ACTIVE",
     )
-    transport = _transport({"id": str(command.process_run_id), "revision": 2})
-    original = ProcessRunSchema.model_validate
-    ProcessRunSchema.model_validate = classmethod(lambda cls, value: object())
-    try:
-        RESTAdapter("https://recap.test", _transport=transport).execute(
-            command, SimpleNamespace(idempotency_key="process-run-update")
-        )
-    finally:
-        ProcessRunSchema.model_validate = original
+    from recap.schemas.process import ProcessTemplateSchema
+
+    run = ProcessRunSchema.model_construct(
+        id=command.process_run_id,
+        revision=2,
+        name="run",
+        description="finished",
+        template=ProcessTemplateSchema.model_construct(
+            id=uuid4(), name="template", version="1.0"
+        ),
+    )
+    transport = _transport(_flat_payload(run))
+    RESTAdapter("https://recap.test", _transport=transport).execute(
+        command, SimpleNamespace(idempotency_key="process-run-update")
+    )
 
     transport.request.assert_called_once_with(
         "PATCH",

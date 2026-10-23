@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from recap.server.app import create_app
 
-from .command_responses import command_data
+from .command_responses import command_data, command_model
 
 
 def test_process_run_create_update_finalize_and_replay(tmp_path):
@@ -63,7 +63,7 @@ def test_process_run_create_update_finalize_and_replay(tmp_path):
         )
         assert created.status_code == 201, created.text
         assert UUID(command_data(created)["id"])
-        assert "collect" in command_data(created)["steps"]
+        assert "collect" in command_model(created).steps
         assert created.headers["ETag"] == '"1"'
         assert (
             client.post(

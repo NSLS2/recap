@@ -3,7 +3,7 @@ from dataclasses import replace
 from recap.commands.registry import CommandRegistration
 from recap.server.rest import command_registration, router
 
-from .command_responses import command_data
+from .command_responses import command_data, command_model
 
 
 def test_resource_routes_are_canonical(api_client):
@@ -110,7 +110,8 @@ def test_create_resource_replays_sequentially_with_same_idempotency_key(
     assert first_body["id"] == replay_body["id"]
     assert first_body["name"] == replay_body["name"] == "plate-1"
     assert first_body["revision"] == replay_body["revision"] == 1
-    assert first_body["template"]["id"] == replay_body["template"]["id"]
+    assert first.json() == replay.json()
+    assert command_model(first).template.id == command_model(replay).template.id
 
 
 def test_create_resource_response_preserves_dynamic_properties(
@@ -144,10 +145,7 @@ def test_create_resource_response_preserves_dynamic_properties(
     }
     first = api_client.post("/api/v1/resources/beamline", **request)
     assert first.status_code == 201
-    assert (
-        command_data(first)["properties"]["measurements"]["values"]["mass"]["value"]
-        == 2.5
-    )
+    assert command_model(first).properties.measurements.values.mass.value == 2.5
 
 
 def test_copy_resource_uses_destination_namespace_in_body(

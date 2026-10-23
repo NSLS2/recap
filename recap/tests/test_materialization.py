@@ -14,7 +14,7 @@ from recap.exceptions import RecapProtocolError
 from recap.schemas.process import ProcessRunSchema
 from recap.schemas.resource import ResourceSchema
 
-from .test_hydration_cache import _seed_resource_graph
+from .entity_fixtures import _seed_resource_graph
 from .test_process_run_resource_tree_perf import _seed_run_with_resource_chain
 
 

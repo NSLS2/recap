@@ -11,7 +11,7 @@ from recap.client.materialization import BatchMaterializer
 from recap.db.resource import Resource
 from recap.schemas.resource import ResourceSchema
 
-from .test_hydration_cache import _seed_resource_graph
+from .entity_fixtures import _seed_resource_graph
 
 
 def _plate_batch(db_session, count):

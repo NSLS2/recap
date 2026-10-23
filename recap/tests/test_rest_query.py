@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from recap.adapter.schema_registry import QUERY_SCHEMA_KEYS, schema_for
-from recap.adapter.transport import QueryRequest, QueryResult
+from recap.adapter.transport import FlatQueryResult, QueryRequest, decode_query_batch
 from recap.authentication.models import ProviderIdentity
 from recap.authorization.policy import SnapshotNamespacePolicy
 from recap.authorization.scopes import Scope
@@ -365,6 +365,13 @@ def test_query_request_uses_stable_entity_key():
     assert request.spec["filters"] == {"name": "sample"}
 
 
+def test_query_request_rejects_schema_name_compatibility_payload():
+    with pytest.raises(ValidationError):
+        QueryRequest.model_validate(
+            {"schema_name": "ResourceRef", "namespace_path": "scope", "spec": {}}
+        )
+
+
 def test_canonical_alias_query_uses_stable_entity_and_projection():
     request = QueryRequest.from_query(
         ResourceRef, QuerySpec(), namespace_path="beamline/amx"
@@ -410,26 +417,28 @@ def test_query_spec_rejects_unknown_wire_keys(payload):
 
 
 def test_query_result_rejects_malformed_items_and_schema_mismatch():
-    from recap.adapter.transport import hydrate_result
-
     with pytest.raises(ValidationError):
-        QueryResult.model_validate(
+        FlatQueryResult.model_validate(
             {"entity": "resource", "projection": "full", "items": ["not an object"]}
         )
 
-    result = QueryResult(entity="process_run", projection="full", items=[])
+    result = FlatQueryResult(
+        entity="process_run", projection="full", roots=[], entities=[], adjacency=[]
+    )
     with pytest.raises(RecapProtocolError):
-        hydrate_result(ResourceSchema, result)
+        decode_query_batch(ResourceSchema, result)
 
 
 def test_stable_query_result_requires_projection():
     with pytest.raises(ValidationError):
-        QueryResult.model_validate({"entity": "resource", "items": []})
+        FlatQueryResult.model_validate(
+            {"entity": "resource", "roots": [], "entities": [], "adjacency": []}
+        )
 
 
 def test_query_result_rejects_malformed_entity_with_legacy_schema_name():
     with pytest.raises(ValidationError):
-        QueryResult.model_validate(
+        FlatQueryResult.model_validate(
             {
                 "entity": "unknown",
                 "projection": "full",
@@ -439,12 +448,9 @@ def test_query_result_rejects_malformed_entity_with_legacy_schema_name():
         )
 
 
-def test_legacy_query_result_schema_name_defaults_projection():
-    result = QueryResult.model_validate({"schema_name": "ResourceRef", "items": []})
-
-    assert result.entity == "resource"
-    assert result.projection == "ref"
-    assert result.projection == "ref"
+def test_query_result_rejects_schema_name_compatibility_payload():
+    with pytest.raises(ValidationError):
+        FlatQueryResult.model_validate({"schema_name": "ResourceRef", "items": []})
 
 
 def test_schema_registry_keeps_full_and_ref_projections_distinct():

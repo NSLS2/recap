@@ -1,4 +1,4 @@
-from .command_responses import command_data
+from .command_responses import command_data, command_model
 
 
 def draft(name="plate", version="1.0"):
@@ -26,7 +26,7 @@ def test_post_and_patch_resource_template_aggregate(
         json=draft(),
     )
     assert created.status_code == 201
-    assert command_data(created)["children"]["well"]["types"][0]["name"] == "well"
+    assert command_model(created).children["well"].types[0].name == "well"
     assert created.headers["ETag"] == '"1"'
 
     updated = api_client.patch(

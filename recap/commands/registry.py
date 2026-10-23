@@ -8,7 +8,6 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from recap.adapter.transport import _prepare_dynamic_models
 from recap.commands.errors import CommandValidationError
 from recap.commands.models import (
     CommandModel,
@@ -33,12 +32,7 @@ from recap.dsl.drafts import (
 )
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext, NamespaceSchema
-from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
-from recap.schemas.resource import (
-    ResourceCopyOptions,
-    ResourceSchema,
-    ResourceTemplateSchema,
-)
+from recap.schemas.resource import ResourceCopyOptions
 from recap.server.rest_models import (
     CopyProcessRunRequest,
     CopyResourceRequest,
@@ -100,7 +94,7 @@ class CommandRegistration:
     decode_command: Callable[
         [Mapping[str, Any], Mapping[str, Any], BaseModel], CommandModel
     ]
-    decode_response: Callable[..., Any]
+    decode_response: Callable[..., Any] | None = None
 
     @property
     def batch_service_handler(self) -> str:
@@ -194,14 +188,6 @@ def _decode_update_resource(
         expected_revision=_expected_revision(headers),
         **data,
     )
-
-
-def _decode_resource_response(
-    entity: Any, etag: str | None = None, **_: Any
-) -> ResourceSchema:
-    if isinstance(entity, dict):
-        _prepare_dynamic_models(entity)
-    return ResourceSchema.model_validate(entity)
 
 
 def _encode_create_resource(command: CommandModel) -> EncodedRequest:
@@ -326,12 +312,6 @@ def _decode_update_resource_template(
     )
 
 
-def _decode_resource_template_response(
-    entity: Any, etag: str | None = None, **_: Any
-) -> ResourceTemplateSchema:
-    return ResourceTemplateSchema.model_validate(entity)
-
-
 def _encode_create_process_template(command: CommandModel) -> EncodedRequest:
     assert isinstance(command, CreateProcessTemplate)
     body = command.draft.model_dump(mode="json")
@@ -427,49 +407,6 @@ def _decode_update_process_run(
     )
 
 
-def _decode_process_template_response(
-    entity: Any, etag: str | None = None, **_: Any
-) -> ProcessTemplateSchema:
-    return ProcessTemplateSchema.model_validate(entity)
-
-
-def _decode_process_run_response(
-    entity: Any, etag: str | None = None, **_: Any
-) -> ProcessRunSchema:
-    from copy import deepcopy
-
-    original_payload = deepcopy(entity) if isinstance(entity, dict) else entity
-    if isinstance(entity, dict):
-        from recap.adapter.transport import _decode_tagged_scalars, _restore_metadata
-
-        entity = _decode_tagged_scalars(entity)
-        _prepare_dynamic_models(entity)
-    result = ProcessRunSchema.model_validate(entity)
-    if not isinstance(result, ProcessRunSchema):
-        return result
-    if isinstance(entity, dict):
-        _restore_metadata(result, original_payload)
-    result.set_loaded_relations(
-        {"template": True, "steps": True, "assigned_resources": True},
-        on_unloaded=(result.__pydantic_private__ or {}).get("_on_unloaded", "warn"),
-    )
-    for parent in result.steps.values():
-        for step in (parent, *parent.children.values()):
-            step.set_loaded_relations(
-                {
-                    "template": True,
-                    "parameters": True,
-                    "children": True,
-                    "resources": True,
-                    "resource_overrides": True,
-                },
-                on_unloaded=(step.__pydantic_private__ or {}).get(
-                    "_on_unloaded", "warn"
-                ),
-            )
-    return result
-
-
 def _encode_create_namespace(command: CommandModel) -> EncodedRequest:
     assert isinstance(command, CreateNamespace)
     return EncodedRequest(
@@ -557,26 +494,6 @@ def _decode_lifecycle_status(
     )
 
 
-def _decode_lifecycle_response(
-    entity: Any, etag: str | None = None, *, command: CommandModel
-) -> Any:
-    assert isinstance(command, SetLifecycleStatus)
-    schemas = {
-        "resource": ResourceSchema,
-        "resource_template": ResourceTemplateSchema,
-        "process_template": ProcessTemplateSchema,
-        "process_run": ProcessRunSchema,
-    }
-    schema = schemas.get(command.object_type)
-    if schema is None:
-        raise TypeError(f"Unsupported lifecycle object: {command.object_type}")
-    if isinstance(entity, dict) and schema is ResourceSchema:
-        _prepare_dynamic_models(entity)
-    if schema is ProcessRunSchema:
-        return _decode_process_run_response(entity, etag)
-    return schema.model_validate(entity)
-
-
 COMMAND_REGISTRY = CommandRegistry(
     (
         CommandRegistration(
@@ -588,7 +505,6 @@ COMMAND_REGISTRY = CommandRegistry(
             request_model=CreateResourceRequest,
             encode_request=_encode_create_resource,
             decode_command=_decode_create_resource,
-            decode_response=_decode_resource_response,
         ),
         CommandRegistration(
             command_type=UpdateResource,
@@ -599,7 +515,6 @@ COMMAND_REGISTRY = CommandRegistry(
             request_model=UpdateResourceRequest,
             encode_request=_encode_update_resource,
             decode_command=_decode_update_resource,
-            decode_response=_decode_resource_response,
         ),
         CommandRegistration(
             command_type=CopyResource,
@@ -610,7 +525,6 @@ COMMAND_REGISTRY = CommandRegistry(
             request_model=CopyResourceRequest,
             encode_request=_encode_copy_resource,
             decode_command=_decode_copy_resource,
-            decode_response=_decode_resource_response,
         ),
         CommandRegistration(
             command_type=CopyProcessRun,
@@ -621,7 +535,6 @@ COMMAND_REGISTRY = CommandRegistry(
             request_model=CopyProcessRunRequest,
             encode_request=_encode_copy_process_run,
             decode_command=_decode_copy_process_run,
-            decode_response=_decode_process_run_response,
         ),
         CommandRegistration(
             command_type=CreateResourceTemplate,
@@ -632,7 +545,6 @@ COMMAND_REGISTRY = CommandRegistry(
             request_model=ResourceTemplateDraft,
             encode_request=_encode_create_resource_template,
             decode_command=_decode_create_resource_template,
-            decode_response=_decode_resource_template_response,
         ),
         CommandRegistration(
             command_type=UpdateResourceTemplate,
@@ -643,7 +555,6 @@ COMMAND_REGISTRY = CommandRegistry(
             request_model=ResourceTemplateDraft,
             encode_request=_encode_update_resource_template,
             decode_command=_decode_update_resource_template,
-            decode_response=_decode_resource_template_response,
         ),
         CommandRegistration(
             command_type=CreateProcessTemplate,
@@ -654,7 +565,6 @@ COMMAND_REGISTRY = CommandRegistry(
             request_model=ProcessTemplateDraft,
             encode_request=_encode_create_process_template,
             decode_command=_decode_create_process_template,
-            decode_response=_decode_process_template_response,
         ),
         CommandRegistration(
             command_type=UpdateProcessTemplate,
@@ -665,7 +575,6 @@ COMMAND_REGISTRY = CommandRegistry(
             request_model=ProcessTemplateDraft,
             encode_request=_encode_update_process_template,
             decode_command=_decode_update_process_template,
-            decode_response=_decode_process_template_response,
         ),
         CommandRegistration(
             command_type=CreateProcessRun,
@@ -676,7 +585,6 @@ COMMAND_REGISTRY = CommandRegistry(
             request_model=ProcessRunDraft,
             encode_request=_encode_create_process_run,
             decode_command=_decode_create_process_run,
-            decode_response=_decode_process_run_response,
         ),
         CommandRegistration(
             command_type=UpdateProcessRun,
@@ -687,7 +595,6 @@ COMMAND_REGISTRY = CommandRegistry(
             request_model=UpdateProcessRunRequest,
             encode_request=_encode_update_process_run,
             decode_command=_decode_update_process_run,
-            decode_response=_decode_process_run_response,
         ),
         CommandRegistration(
             command_type=SetLifecycleStatus,
@@ -698,7 +605,6 @@ COMMAND_REGISTRY = CommandRegistry(
             request_model=SetLifecycleStatusRequest,
             encode_request=_encode_lifecycle_status,
             decode_command=_decode_lifecycle_status,
-            decode_response=_decode_lifecycle_response,
         ),
         CommandRegistration(
             command_type=CreateNamespace,

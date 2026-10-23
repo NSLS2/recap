@@ -1,16 +1,19 @@
 from datetime import datetime
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
-from pydantic import BaseModel
+from pydantic import ValidationError
 
+from recap.adapter.entity_batch import EntityBatchCollector
+from recap.adapter.entity_records import EntityBatch, EntityRef, ResourceRecord
 from recap.adapter.transport import (
+    FlatQueryResult,
     QueryRequest,
-    QueryResult,
-    _restore_metadata,
-    hydrate_result,
-    serialize_model,
+    decode_query_batch,
+    encode_query_batch,
 )
+from recap.client.identity import IdentityMap
+from recap.client.materialization import BatchMaterializer
 from recap.db.process import ProcessRun
 from recap.dsl.query import (
     Field,
@@ -20,30 +23,17 @@ from recap.dsl.query import (
     QuerySpec,
 )
 from recap.exceptions import RecapProtocolError
-from recap.schemas.attribute import (
-    AttributeGroupTemplateSchema,
-    AttributeTemplateSchema,
-)
-from recap.schemas.common import StepStatus
 from recap.schemas.process import ProcessRunSchema
-from recap.schemas.resource import (
-    PropertySchema,
-    ResourceSchema,
-    ResourceTemplateSchema,
-)
-from recap.tests.transport_factories import (
-    STAMP,
-    attribute_group,
-    full_process_run,
-    full_resource,
-    minimal_resource,
-)
+from recap.schemas.resource import ResourceSchema
+
+from .entity_fixtures import _seed_resource_graph
+from .test_process_run_resource_tree_perf import _seed_run_with_resource_chain
+from .transport_factories import STAMP
 
 
 def test_query_spec_normalizes_legacy_full_load_mode():
     with pytest.warns(DeprecationWarning, match="load='eager'"):
         spec = QuerySpec.model_validate({"load_mode": "full"})
-
     assert spec.load_mode == "eager"
 
 
@@ -60,62 +50,22 @@ def test_query_request_serializes_complete_supported_query_spec():
         load_mode="eager",
         on_unloaded="raise",
     )
-
     request = QueryRequest.from_query(
         ResourceSchema, spec, namespace_path="beamline/amx"
     )
-
-    assert request.schema_name == "ResourceSchema"
+    expected = spec.model_dump(mode="json")
+    expected.pop("include_mutable")
+    assert request.spec == expected
+    assert request.entity == "resource"
+    assert request.projection == "full"
     assert request.namespace_path == "beamline/amx"
-    assert request.spec == {
-        "filters": {"name": "sample"},
-        "predicates": [],
-        "orderings": [],
-        "preloads": ["properties", "children"],
-        "limit": 25,
-        "offset": 5,
-        "property_filters": [
-            {
-                "name": "temperature",
-                "group": None,
-                "op": "eq",
-                "value": 20,
-                "upper": None,
-                "value_type": None,
-            }
-        ],
-        "parent_resource_id": str(parent_id),
-        "parameter_filters": [],
-        "include_archived": True,
-        "local_metadata_filters": {},
-        "effective_metadata_filters": {},
-        "load_mode": "eager",
-        "on_unloaded": "raise",
-    }
-    assert request.spec["load_mode"] == "eager"
-    assert "full" not in request.spec.values()
-    assert "include_mutable" not in request.spec
-
-
-def test_hydrate_result_rejects_contradictory_legacy_schema_metadata():
-    result = QueryResult(
-        entity="process_run",
-        projection="full",
-        schema_name="ResourceSchema",
-        items=[],
-    )
-
-    with pytest.raises(RecapProtocolError, match="does not match"):
-        hydrate_result(ResourceSchema, result)
+    assert "schema_name" not in request.model_dump()
 
 
 def test_query_request_serializes_include_mutable_when_true():
     request = QueryRequest.from_query(
-        ResourceSchema,
-        QuerySpec(include_mutable=True),
-        namespace_path="beamline/amx",
+        ResourceSchema, QuerySpec(include_mutable=True), namespace_path="beamline/amx"
     )
-
     assert request.spec["include_mutable"] is True
 
 
@@ -132,7 +82,6 @@ def test_query_request_serializes_structured_predicates_and_orderings():
         ),
         namespace_path="beamline/amx",
     )
-
     assert request.spec["predicates"] == [
         {"field": "namespace_id", "op": "eq", "value": str(namespace_id)},
         {
@@ -149,318 +98,100 @@ def test_query_request_serializes_structured_predicates_and_orderings():
 
 
 @pytest.mark.parametrize(
-    ("field", "value"),
+    "field,value",
     [
         ("predicates", (ProcessRun.name == "sample",)),
-        (
-            "predicates",
-            (Field("name") == "sample", ProcessRun.name == "sample"),
-        ),
+        ("predicates", (Field("name") == "sample", ProcessRun.name == "sample")),
         ("orderings", (ProcessRun.name,)),
         ("orderings", (Field("name").asc(), ProcessRun.name.desc())),
     ],
 )
-def test_query_request_rejects_every_legacy_query_feature(field, value):
+def test_query_request_rejects_sqlalchemy_expressions(field, value):
     with pytest.raises(TypeError, match="Field"):
         QueryRequest.from_query(
-            ResourceSchema,
-            QuerySpec(**{field: value}),
-            namespace_path="beamline/amx",
+            ResourceSchema, QuerySpec(**{field: value}), namespace_path="scope"
         )
 
 
-def test_datetime_default_value_round_trips_as_datetime():
-    group = attribute_group()
+def test_flat_result_requires_projection_and_rejects_nested_items():
+    with pytest.raises(ValidationError):
+        FlatQueryResult.model_validate(
+            {"entity": "resource", "roots": [], "entities": [], "adjacency": []}
+        )
+    with pytest.raises(ValidationError):
+        FlatQueryResult.model_validate(
+            {"entity": "resource", "projection": "full", "items": []}
+        )
+    result = FlatQueryResult(
+        entity="process_run", projection="full", roots=[], entities=[], adjacency=[]
+    )
+    with pytest.raises(RecapProtocolError, match="does not match"):
+        decode_query_batch(ResourceSchema, result)
 
-    payload = serialize_model(group)
-    [hydrated] = hydrate_result(
-        AttributeGroupTemplateSchema,
-        QueryResult(schema_name="AttributeGroupTemplateSchema", items=[payload]),
+
+def _roundtrip(schema, batch):
+    envelope = encode_query_batch(batch, entity=batch.roots[0].kind, projection="full")
+    return decode_query_batch(
+        schema, FlatQueryResult.model_validate_json(envelope.model_dump_json())
     )
 
-    assert payload["attribute_templates"][0]["default_value"] == {
-        "__recap_transport_scalar_v1__": "datetime",
-        "value": STAMP.isoformat(),
-    }
-    assert hydrated.attribute_templates[0].default_value == STAMP
-    assert isinstance(hydrated.attribute_templates[0].default_value, datetime)
 
-
-def test_metadata_restoration_rejects_sequence_length_mismatch():
-    resource = minimal_resource()
-    payload = serialize_model(resource)
-
-    with pytest.raises(ValueError, match="zip"):
-        _restore_metadata([resource], [payload, payload])
-
-
-def test_resource_round_trip_preserves_full_graph_and_transport_state():
-    resource = full_resource()
-
-    payload = serialize_model(resource)
-
-    assert payload["id"] == str(resource.id)
-    assert payload["create_date"] == STAMP.isoformat()
-    assert payload["template"]["parent"]["name"] == "Container"
-    assert payload["parent"]["name"] == "plate"
-    assert payload["properties"]["Measurements"]["template"]["attribute_templates"][0][
-        "metadata_json"
-    ] == {"source": "detector"}
+def test_flat_resource_roundtrip_preserves_cycles_values_and_load_state(db_session):
+    parent, child, _, _ = _seed_resource_graph(db_session)
+    template = parent.properties["Measurements"].template.attribute_templates[0]
+    template.value_type = "datetime"
+    template.default_value = STAMP.isoformat()
+    stored = parent.properties["Measurements"]._values["dose"]
+    stored.value_json = STAMP.isoformat()
+    stored.unit = "s"
+    stored.metadata_json = {"source": "scan"}
+    collector = EntityBatchCollector(on_unloaded="raise")
+    collector.add_root(parent, {"template", "parent", "children", "properties"})
+    with db_session.no_autoflush:
+        batch = collector.collect()
+    decoded = _roundtrip(ResourceSchema, batch)
+    model = BatchMaterializer(IdentityMap()).materialize(ResourceSchema, decoded)[0]
+    assert model.children["child"].id == child.id
+    assert model.children["child"].parent is model
+    assert model.properties.measurements.dose.value == STAMP
+    assert model.properties.measurements.dose.metadata_json == {"source": "scan"}
     assert (
-        payload["properties"]["Measurements"]["values"]["Captured At"]["value"]
-        == STAMP.isoformat()
+        model.template.attribute_group_templates[0].attribute_templates[0].default_value
+        == STAMP
     )
-    assert payload["__recap__"] == {
-        "loaded_relations": {"children": True, "properties": True},
-        "on_unloaded": "raise",
-    }
-    assert payload["children"]["child"]["__recap__"]["on_unloaded"] == "silent"
+    assert model.is_loaded("children")
+    assert model._on_unloaded == "raise"
 
-    [hydrated] = hydrate_result(
-        ResourceSchema,
-        QueryResult(schema_name="ResourceSchema", items=[payload]),
+
+def test_flat_process_roundtrip_preserves_parameters_and_assignments(db_session):
+    run = _seed_run_with_resource_chain(db_session, name="transport-run", depth=2)
+    collector = EntityBatchCollector(on_unloaded="silent")
+    collector.add_root(run, {"template", "steps", "steps.parameters", "resources"})
+    decoded = _roundtrip(ProcessRunSchema, collector.collect())
+    model = BatchMaterializer(IdentityMap()).materialize(ProcessRunSchema, decoded)[0]
+    step = next(iter(model.steps.values()))
+    assert next(iter(step.parameters.values())).values.dwell.value == 1
+    assert (
+        step.resources["input"]
+        is next(iter(model.assigned_resources.values())).resource
     )
-
-    assert isinstance(hydrated.id, UUID)
-    assert hydrated.id == resource.id
-    assert hydrated.create_date == STAMP
-    assert hydrated.name == resource.name
-    assert hydrated.template.parent == resource.template.parent
-    assert hydrated.parent == resource.parent
-    assert isinstance(hydrated.properties, BaseModel)
-    assert hydrated.properties.measurements.captured_at.value == STAMP
-    assert hydrated._loaded_relations == {"children": True, "properties": True}
-    assert hydrated._on_unloaded == "raise"
-    assert hydrated.children["child"]._loaded_relations == {
-        "children": False,
-        "properties": False,
-    }
-    assert hydrated.children["child"]._on_unloaded == "silent"
+    assert model.is_loaded("steps")
+    assert model._on_unloaded == "silent"
 
 
-def test_serialize_model_truncates_repeated_cyclic_template_edges():
-    parent = ResourceTemplateSchema.model_construct(
-        id=uuid4(),
-        namespace_id=uuid4(),
-        create_date=STAMP,
-        modified_date=STAMP,
-        status="ACTIVE",
-        revision=1,
-        name="Parent",
-        slug="parent",
-        version="1.0",
-        labels=[],
-        types=[],
-        children={},
-        attribute_group_templates=[],
-    )
-    child = ResourceTemplateSchema.model_construct(
-        id=uuid4(),
-        namespace_id=parent.namespace_id,
-        create_date=STAMP,
-        modified_date=STAMP,
-        status="ACTIVE",
-        revision=1,
-        name="Child",
-        slug="child",
-        version="1.0",
-        labels=[],
-        types=[],
-        children={},
-        attribute_group_templates=[],
-    )
-    parent.children = {"child": child}
-    child.parent = parent
-
-    payload = serialize_model(parent)
-
-    assert payload["children"]["child"]["parent"]["id"] == str(parent.id)
-    assert "children" not in payload["children"]["child"]["parent"]
-
-
-def test_cyclic_resource_shell_marks_omitted_relations_unloaded():
-    parent = minimal_resource()
-    child = minimal_resource()
-    parent.children = {"child": child}
-    child.parent = parent
-    flags = {"template": True, "parent": True, "children": True, "properties": True}
-    parent.set_loaded_relations(flags, on_unloaded="raise")
-    child.set_loaded_relations(flags, on_unloaded="raise")
-
-    payload = serialize_model(parent)
-    shell = payload["children"]["child"]["parent"]
-    assert shell["__recap__"]["loaded_relations"] == dict.fromkeys(flags, False)
-    assert all(name not in shell for name in flags)
-    [hydrated] = hydrate_result(
-        ResourceSchema, QueryResult(schema_name="ResourceSchema", items=[payload])
-    )
-    restored_shell = hydrated.children["child"].parent
-    assert all(not restored_shell.is_loaded(name) for name in flags)
-
-
-def test_resource_round_trip_preserves_hydrated_array_override_and_metadata():
-    group = AttributeGroupTemplateSchema(
-        **{
-            **{
-                "id": uuid4(),
-                "create_date": STAMP,
-                "modified_date": STAMP,
-                "namespace_id": uuid4(),
-                "status": "ACTIVE",
-                "revision": 1,
-                "labels": [],
-            },
-            "name": "Measurements",
-            "slug": "measurements",
-            "attribute_templates": [
-                AttributeTemplateSchema(
-                    **{
-                        "id": uuid4(),
-                        "create_date": STAMP,
-                        "modified_date": STAMP,
-                        "namespace_id": uuid4(),
-                        "status": "ACTIVE",
-                        "revision": 1,
-                        "labels": [],
-                        "name": "Samples",
-                        "slug": "samples",
-                        "value_type": "array",
-                        "unit": "uL",
-                        "default_value": [1],
-                        "metadata_json": {"source": "detector"},
-                    }
-                )
-            ],
-        }
-    )
-    resource = minimal_resource()
-    resource.template.attribute_group_templates = [group]
-    resource.properties = {
-        "Measurements": PropertySchema(
-            id=uuid4(),
-            create_date=STAMP,
-            modified_date=STAMP,
-            template=group,
-            values={
-                "Samples": {
-                    "value": [1, 1],
-                    "unit": "mL",
-                    "metadata_json": {"sample": "override"},
-                }
-            },
-        )
-    }
-    resource.set_loaded_relations({"children": True, "properties": True})
-
-    payload = serialize_model(resource)
-    [hydrated] = hydrate_result(
-        ResourceSchema,
-        QueryResult(schema_name="ResourceSchema", items=[payload]),
-    )
-
-    value = hydrated.properties.measurements.values.samples
-    assert value.value == [1, 1]
-    assert value.unit == "mL"
-    assert value.metadata_json == {"sample": "override"}
-
-    [rehydrated] = hydrate_result(
-        ResourceSchema,
-        QueryResult(schema_name="ResourceSchema", items=[serialize_model(hydrated)]),
-    )
-    assert rehydrated.properties.measurements.values.samples.value == [1, 1]
-
-
-def test_minimal_resource_round_trip_does_not_trigger_unloaded_guard():
-    resource = minimal_resource()
-    resource.set_loaded_relations(
-        {"children": False, "properties": False}, on_unloaded="raise"
-    )
-
-    payload = serialize_model(resource)
-    [hydrated] = hydrate_result(
-        ResourceSchema,
-        QueryResult(schema_name="ResourceSchema", items=[payload]),
-    )
-
-    assert hydrated.__dict__["children"] == {}
-    assert hydrated.__dict__["properties"] == {}
-    assert hydrated._loaded_relations == {"children": False, "properties": False}
-    assert hydrated._on_unloaded == "raise"
-
-
-def test_process_run_round_trip_restores_enums_dynamic_parameters_and_nested_state():
-    run = full_process_run()
-
-    payload = serialize_model(run)
-
-    assert payload["steps"]["Acquire"]["state"] == "COMPLETE"
-    assert payload["template"]["resource_slots"][0]["direction"] == "input"
-    assert payload["__recap__"]["loaded_relations"] == {
-        "steps": True,
-        "assigned_resources": True,
-    }
-    nested_resource = payload["assigned_resources"]["input"]["resource"]
-    assert nested_resource["__recap__"]["loaded_relations"] == {
-        "children": False,
-        "properties": False,
-    }
-
-    [hydrated] = hydrate_result(
-        ProcessRunSchema,
-        QueryResult(schema_name="ProcessRunSchema", items=[payload]),
-    )
-
-    assert hydrated.id == run.id
-    assert hydrated.namespace_id == run.namespace_id
-    assert hydrated.create_date == STAMP
-    assert hydrated.steps["Acquire"].state is StepStatus.COMPLETE
-    assert isinstance(hydrated.steps["Acquire"].parameters, BaseModel)
-    assert hydrated.steps["Acquire"].parameters.acquisition.captured_at.value == STAMP
-    assigned = hydrated.assigned_resources["input"].resource
-    assert assigned._loaded_relations == {"children": False, "properties": False}
-    assert assigned._on_unloaded == "silent"
-    assert hydrated._loaded_relations == {
-        "steps": True,
-        "assigned_resources": True,
-    }
-    assert hydrated._on_unloaded == "raise"
-
-
-def test_minimal_process_run_round_trip_restores_private_state():
-    run = full_process_run()
-    run.__dict__["steps"] = {}
-    run.__dict__["assigned_resources"] = {}
-    run.set_loaded_relations(
-        {"steps": False, "assigned_resources": False}, on_unloaded="silent"
-    )
-
-    payload = serialize_model(run)
-    [hydrated] = hydrate_result(
-        ProcessRunSchema,
-        QueryResult(schema_name="ProcessRunSchema", items=[payload]),
-    )
-
-    assert hydrated.__dict__["steps"] == {}
-    assert hydrated.__dict__["assigned_resources"] == {}
-    assert hydrated._loaded_relations == {
-        "steps": False,
-        "assigned_resources": False,
-    }
-    assert hydrated._on_unloaded == "silent"
+def test_flat_minimal_resource_roundtrip_preserves_unloaded_guards(db_session):
+    parent, _, _, _ = _seed_resource_graph(db_session)
+    collector = EntityBatchCollector(on_unloaded="raise")
+    collector.add_root(parent, set())
+    decoded = _roundtrip(ResourceSchema, collector.collect())
+    model = BatchMaterializer(IdentityMap()).materialize(ResourceSchema, decoded)[0]
+    assert model.__dict__["children"] == {}
+    assert model.__dict__["properties"] == {}
+    assert not model.is_loaded("children")
+    assert model._on_unloaded == "raise"
 
 
 def test_flat_batch_roundtrip_preserves_arbitrary_datetime_values_and_metadata():
-    from datetime import datetime
-    from uuid import uuid4
-
-    from recap.adapter.entity_records import EntityBatch, EntityRef, ResourceRecord
-    from recap.adapter.transport import (
-        FlatQueryResult,
-        decode_query_batch,
-        encode_query_batch,
-    )
-    from recap.schemas.resource import ResourceSchema
-
     stamp = datetime(2026, 1, 1, 12, 30)
     ref = EntityRef(kind="resource", id=uuid4())
     batch = EntityBatch(
@@ -470,13 +201,16 @@ def test_flat_batch_roundtrip_preserves_arbitrary_datetime_values_and_metadata()
                 id=ref.id,
                 revision=1,
                 fields={
-                    "metadata": {"timestamp": stamp, "sequence": [stamp, None, stamp]}
+                    "metadata": {
+                        "timestamp": stamp,
+                        "sequence": [stamp, None, stamp],
+                        "$ref": "user data",
+                    }
                 },
             )
         ],
         adjacency=[],
     )
-    wire = encode_query_batch(batch, entity="resource", projection="full")
-    parsed = FlatQueryResult.model_validate_json(wire.model_dump_json())
-    decoded = decode_query_batch(ResourceSchema, parsed)
-    assert decoded.entities[0].fields == batch.entities[0].fields
+    assert (
+        _roundtrip(ResourceSchema, batch).entities[0].fields == batch.entities[0].fields
+    )

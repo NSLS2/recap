@@ -30,7 +30,7 @@ def test_public_query_registrations_are_complete():
         registration = SCHEMA_REGISTRY.by_key(key)
         assert registration.model is model
         assert registration.orm_model is orm_model
-        assert registration.hydrator is not None
+        assert registration.record_policy.schema is registration.model
         if key != "namespace":
             assert registration.loader_capabilities
         assert SCHEMA_REGISTRY.by_model(model) is registration
@@ -48,7 +48,6 @@ def test_registry_rejects_duplicate_keys_and_models():
         key="first",
         model=First,
         orm_model=Namespace,
-        hydrator=First.model_validate,
         loader_capabilities=(),
     )
     with pytest.raises(ValueError, match="duplicate schema key"):
@@ -58,7 +57,6 @@ def test_registry_rejects_duplicate_keys_and_models():
         key="second",
         model=First,
         orm_model=Namespace,
-        hydrator=First.model_validate,
         loader_capabilities=(),
     )
     with pytest.raises(ValueError, match="duplicate schema model"):

@@ -14,8 +14,6 @@ from recap.adapter.entity_batch import (
     SingleAdjacency,
 )
 from recap.adapter.local import LocalBackend
-from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
-from recap.adapter.resource_construct import ResourceSchemaHydrator
 from recap.adapter.schema_registry import SCHEMA_REGISTRY
 from recap.authorization.query import AuthorizedQuery
 from recap.authorization.scopes import Scope
@@ -37,7 +35,7 @@ from recap.schemas.resource import (
 )
 
 from .conftest import count_statements
-from .test_hydration_cache import _seed_process_template, _seed_resource_graph
+from .entity_fixtures import _seed_process_template, _seed_resource_graph
 from .test_process_run_resource_tree_perf import _seed_run_with_resource_chain
 
 
@@ -385,19 +383,7 @@ def test_batch_resource_subtrees_have_depth_independent_sql_budget(
     counts = []
     for run, depth in ((run3, 3), (run4, 4)):
         run_id, path = run.id, run.namespace.path
-        with (
-            patch.object(
-                ResourceSchemaHydrator,
-                "construct_tree",
-                side_effect=AssertionError("Public graph constructed"),
-            ),
-            patch.object(
-                ProcessRunSchemaHydrator,
-                "construct_many",
-                side_effect=AssertionError("Public graph constructed"),
-            ),
-            count_statements(db_session.get_bind()) as counter,
-        ):
+        with count_statements(db_session.get_bind()) as counter:
             result = (backend.query if model_results else backend.query_batch)(
                 ProcessRunSchema,
                 QuerySpec(
@@ -472,14 +458,7 @@ def test_batch_resource_sql_matches_existing_tree_load(db_session):
     spec = QuerySpec(filters={"id": parent_id}, load_mode="eager", include_mutable=True)
     with count_statements(db_session.get_bind()) as old_counter:
         models = backend.query(ResourceSchema, spec, namespace_path=path)
-    with (
-        patch.object(
-            ResourceSchemaHydrator,
-            "construct_tree",
-            side_effect=AssertionError("Public graph constructed"),
-        ),
-        count_statements(db_session.get_bind()) as batch_counter,
-    ):
+    with count_statements(db_session.get_bind()) as batch_counter:
         batch = backend.query_batch(ResourceSchema, spec, namespace_path=path)
     assert batch_counter["n"] <= old_counter["n"]
     assert len([record for record in batch.entities if record.kind == "resource"]) == 2

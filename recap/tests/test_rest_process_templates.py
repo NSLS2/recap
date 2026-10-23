@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from .command_responses import command_data
+from .command_responses import command_data, command_model
 
 
 def draft(labels=None):
@@ -51,9 +51,7 @@ def test_post_and_patch_process_template_routes(
     assert created.status_code == 201
     UUID(command_data(created)["id"])
     assert (
-        command_data(created)["step_templates"]["collect"]["resource_slots"]["source"][
-            "name"
-        ]
+        command_model(created).step_templates["collect"].resource_slots["source"].name
         == "sample"
     )
     assert created.headers["ETag"] == '"1"'

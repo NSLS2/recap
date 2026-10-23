@@ -2,10 +2,14 @@ from uuid import uuid4
 
 import pytest
 
-from recap.adapter.entity_hydration import EntityHydrationContext
-from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
-from recap.adapter.resource_construct import ResourceSchemaHydrator
-from recap.adapter.transport import QueryResult, hydrate_result, serialize_model
+from recap.adapter.entity_batch import EntityBatchCollector
+from recap.adapter.transport import (
+    FlatQueryResult,
+    decode_query_batch,
+    encode_query_batch,
+)
+from recap.client.identity import IdentityMap
+from recap.client.materialization import BatchMaterializer
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate
@@ -71,23 +75,14 @@ def test_property_and_parameter_metadata_survive_direct_and_embedded_hydration(
 ):
     resource, run = _seed_metadata_graph(db_session)
 
-    direct = ResourceSchemaHydrator().construct_many(
-        [resource],
-        include_template=True,
-        include_properties=True,
-        include_children=False,
-        full=False,
-        on_unloaded="warn",
-    )[0]
-    embedded = ProcessRunSchemaHydrator().construct_many(
-        [run],
-        include_steps=True,
-        include_step_parameters=True,
-        include_resources=False,
-        include_template=False,
-        full=False,
-        on_unloaded="warn",
-    )[0]
+    resource_collector = EntityBatchCollector()
+    resource_collector.add_root(resource, {"template", "properties"})
+    resource_batch = resource_collector.collect()
+    run_collector = EntityBatchCollector()
+    run_collector.add_root(run, {"steps", "steps.parameters"})
+    materializer = BatchMaterializer(IdentityMap())
+    direct = materializer.materialize(ResourceSchema, resource_batch)[0]
+    embedded = materializer.materialize(ProcessRunSchema, run_collector.collect())[0]
 
     assert direct.properties["Measurements"].values.dose.metadata_json == {
         "source": "header"
@@ -101,33 +96,29 @@ def test_property_and_parameter_metadata_survive_direct_and_embedded_hydration(
         "Exposure"
     ].values.dwell.metadata_json == {"source": "header"}
 
-    result = QueryResult(
-        entity="resource", projection="full", items=[serialize_model(direct)]
+    result = encode_query_batch(resource_batch, entity="resource", projection="full")
+    decoded = decode_query_batch(
+        ResourceSchema, FlatQueryResult.model_validate_json(result.model_dump_json())
     )
-    round_tripped = hydrate_result(type(direct), result)[0]
+    round_tripped = BatchMaterializer(IdentityMap()).materialize(
+        ResourceSchema, decoded
+    )[0]
     assert round_tripped.properties["Measurements"].values.dose.metadata_json == {
         "source": "header"
     }
 
 
-def test_shared_context_reuses_resource_across_direct_and_embedded_paths(db_session):
+def test_repeated_batches_reuse_resource_identity(db_session):
     resource, _ = _seed_metadata_graph(db_session)
-    context = EntityHydrationContext()
-    direct = ResourceSchemaHydrator(context).construct_many(
-        [resource],
-        include_template=True,
-        include_properties=True,
-        include_children=False,
-        full=False,
-        on_unloaded="warn",
-    )[0]
-    process_hydrator = ProcessRunSchemaHydrator(context)
-
-    embedded_resource = process_hydrator._construct_resource_schema(resource)
-
-    assert embedded_resource is direct
-    assert embedded_resource.is_loaded("children")
-    assert embedded_resource.is_loaded("properties")
+    collector = EntityBatchCollector()
+    collector.add_root(resource, {"template", "properties", "children"})
+    batch = collector.collect()
+    materializer = BatchMaterializer(IdentityMap())
+    direct = materializer.materialize(ResourceSchema, batch)[0]
+    repeated = materializer.materialize(ResourceSchema, batch)[0]
+    assert repeated is direct
+    assert repeated.is_loaded("children")
+    assert repeated.is_loaded("properties")
 
 
 @pytest.mark.parametrize(

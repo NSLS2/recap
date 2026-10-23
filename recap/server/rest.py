@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, Request, Response
 
 from recap.adapter.local import LocalBackend
-from recap.adapter.transport import FlatQueryResult, QueryRequest, serialize_model
+from recap.adapter.transport import FlatQueryResult, QueryRequest
 from recap.authentication.models import RequestActor
 from recap.authorization.policy import (
     SnapshotNamespacePolicy,
@@ -97,11 +97,7 @@ def _set_etag(response: Response, entity):
             entity, entity=root.kind, projection="full"
         ).model_dump(mode="json")
     response.headers["ETag"] = f'"{entity.revision}"'
-    return (
-        serialize_model(entity)
-        if isinstance(entity, (ResourceSchema, ProcessRunSchema))
-        else entity
-    )
+    return entity
 
 
 def _query_service(request: Request) -> QueryService:

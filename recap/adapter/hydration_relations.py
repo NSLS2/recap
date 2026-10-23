@@ -65,25 +65,3 @@ def process_run_relations(source: Any, requested: set[str]) -> dict[str, Any]:
         for name in ("template", "steps", "assigned_resources")
         if name in requested
     }
-
-
-def step_relations(source: Any, requested: set[str]) -> dict[str, Any]:
-    return {
-        name: getattr(source, name)
-        for name in ("template", "parameters", "children", "resources", "assignments")
-        if name in requested
-    }
-
-
-def included_step_relations(
-    source: Any, *, include_parameters: bool, include_resources: bool
-) -> dict[str, Any]:
-    """Project step relationships selected by the existing run include rules."""
-    requested = {"template", "children"}
-    if include_parameters:
-        requested.add("parameters")
-    if include_resources:
-        requested.add("resources")
-        if source.parent_id is not None:
-            requested.add("assignments")
-    return step_relations(source, requested)

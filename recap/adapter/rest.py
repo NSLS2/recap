@@ -315,4 +315,12 @@ class RESTAdapter:
             if len(batch.roots) != 1:
                 raise RecapProtocolError("Command result must contain one root")
             return batch
-        return registration.decode_response(result.entity, result.etag, command=command)
+        from recap.commands.models import CreateNamespace, UpdateNamespace
+
+        if isinstance(command, (CreateNamespace, UpdateNamespace)):
+            return registration.decode_response(
+                result.entity, result.etag, command=command
+            )
+        raise RecapProtocolError(
+            "Graph command response must use a flat entity envelope"
+        )

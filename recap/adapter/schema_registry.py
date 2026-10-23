@@ -1,17 +1,13 @@
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
 
 from pydantic import BaseModel
 
 from recap.adapter.entity_records import POLICIES_BY_KIND, RecordPolicy
-from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
-from recap.adapter.resource_construct import ResourceSchemaHydrator
 from recap.db.base import Base
 from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate
 from recap.db.resource import Resource, ResourceTemplate
-from recap.schemas.attribute import AttributeGroupTemplateSchema
 from recap.schemas.namespace import NamespaceSchema
 from recap.schemas.process import (
     ProcessRunSchema,
@@ -62,26 +58,6 @@ SCHEMA_ENTITY_KEYS = QUERY_ENTITY_KEYS
 SCHEMA_PROJECTIONS = {
     schema: projection for schema, (_, projection) in SCHEMA_QUERY_KEYS.items()
 }
-SCHEMAS_BY_NAME = {schema.__name__: schema for schema in SCHEMA_QUERY_KEYS}
-LEGACY_SCHEMAS_BY_NAME = {
-    AttributeGroupTemplateSchema.__name__: AttributeGroupTemplateSchema,
-    "AttributeGroupTemplate": AttributeGroupTemplateSchema,
-    "AttributeGroupTemplateRef": AttributeGroupTemplateSchema,
-    "NamespaceRef": NamespaceSchema,
-    "ResourceTemplateRef": ResourceTemplateSchema,
-    "ResourceRef": ResourceSchema,
-    "ProcessTemplateRef": ProcessTemplateSchema,
-    "ProcessRunRef": ProcessRunSchema,
-}
-LEGACY_SCHEMA_KEYS = {
-    name: (SCHEMA_ENTITY_KEYS[schema], "ref" if name.endswith("Ref") else "full")
-    for name, schema in LEGACY_SCHEMAS_BY_NAME.items()
-    if schema in SCHEMA_ENTITY_KEYS
-}
-
-
-def _validate_model(model: type[BaseModel], value: Any) -> BaseModel:
-    return model.model_validate(value)
 
 
 @dataclass(frozen=True)
@@ -89,13 +65,12 @@ class SchemaRegistration:
     key: str
     model: type[BaseModel]
     orm_model: type[Base]
-    hydrator: Callable[..., Any]
     loader_capabilities: tuple[str, ...]
     projections: tuple[str, ...] = ("full", "ref")
 
     @property
     def record_policy(self) -> RecordPolicy:
-        """Normalized row policy shared by both query representations."""
+        """Normalized row policy used by query collection and materialization."""
         return POLICIES_BY_KIND[self.key]
 
 
@@ -147,35 +122,29 @@ class SchemaRegistry:
 
 SCHEMA_REGISTRY = SchemaRegistry(
     (
-        SchemaRegistration(
-            "namespace", NamespaceSchema, Namespace, _validate_model, ()
-        ),
+        SchemaRegistration("namespace", NamespaceSchema, Namespace, ()),
         SchemaRegistration(
             "resource_template",
             ResourceTemplateSchema,
             ResourceTemplate,
-            _validate_model,
             ("types", "children", "attribute_group_templates"),
         ),
         SchemaRegistration(
             "resource",
             ResourceSchema,
             Resource,
-            ResourceSchemaHydrator,
             ("template", "properties", "children"),
         ),
         SchemaRegistration(
             "process_template",
             ProcessTemplateSchema,
             ProcessTemplate,
-            _validate_model,
             ("step_templates", "resource_slots"),
         ),
         SchemaRegistration(
             "process_run",
             ProcessRunSchema,
             ProcessRun,
-            ProcessRunSchemaHydrator,
             ("template", "steps", "steps.parameters", "resources"),
         ),
     )

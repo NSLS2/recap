@@ -2,13 +2,9 @@ from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
-import pytest
-from pydantic import ValidationError
-
 from recap.adapter import hydration_fields as fields
 from recap.adapter import hydration_relations as relations
 from recap.schemas.attribute import (
-    AttributeGroupTemplateSchema,
     AttributeTemplateSchema,
 )
 from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
@@ -57,55 +53,10 @@ def test_validation_preserves_orm_aliases_without_relationship_access():
             metadata_json={"min": 0},
         ),
     )
-    validated = fields.validate_fields(AttributeTemplateSchema, values)
+    validated = AttributeTemplateSchema.model_validate(values)
     assert validated.metadata == {"min": 0}
     assert values["metadata"] == {"min": 0}
     assert validated.default_value is None
-
-
-def test_trusted_construction_is_separate_from_validation():
-    values = fields.extract_simple_fields(ResourceSchema, ScalarRow())
-    values["revision"] = "unvalidated"
-    model = fields.construct_model(ResourceSchema, values, children={})
-    assert model.revision == "unvalidated"
-    assert "children" not in values
-    with pytest.raises(ValidationError):
-        fields.validate_fields(ResourceSchema, values)
-
-
-def test_attribute_extraction_preserves_nulls_units_metadata_and_missing_values():
-    stamp = datetime(2026, 1, 1)
-    template = AttributeGroupTemplateSchema.model_construct(
-        id=uuid4(),
-        create_date=stamp,
-        modified_date=stamp,
-        name="Dose",
-        slug="dose",
-        attribute_templates=[
-            AttributeTemplateSchema.model_construct(
-                name=name, slug=name, value_type="array", metadata={}, unit="uL"
-            )
-            for name in ("observed", "missing")
-        ],
-    )
-    source = SimpleNamespace(
-        _values={
-            "observed": SimpleNamespace(
-                value=None, unit="mL", metadata_json={"source": "scan"}
-            )
-        }
-    )
-    payload = fields.extract_attribute_values(source, template)
-    assert payload == {
-        "observed": {"value": None, "unit": "mL", "metadata_json": {"source": "scan"}},
-        "missing": {"value": None, "unit": "uL", "metadata_json": {}},
-    }
-    assert isinstance(payload["observed"], dict)
-    model = fields.construct_attribute_values(template, payload)
-    assert model.observed.value is None
-    assert model.observed.unit == "mL"
-    assert model.missing.unit == "uL"
-    assert source._values["observed"].value is None
 
 
 def test_requested_relationship_extraction_does_not_materialize_models():
@@ -140,33 +91,4 @@ def test_run_and_step_projection_preserves_relationship_keys():
     step = SimpleNamespace(name="collect", id=uuid4(), parent_id=None)
     run = SimpleNamespace(steps={step.id: step})
     assert relations.process_run_relations(run, {"steps"}) == {"steps": {step.id: step}}
-    assert relations.step_relations(
-        SimpleNamespace(resources={"input": run}, children=[step]),
-        {"resources", "children"},
-    ) == {"resources": {"input": run}, "children": [step]}
     assert relations.process_run_relations(ScalarRow(), set()) == {}
-    assert relations.step_relations(ScalarRow(), set()) == {}
-
-
-@pytest.mark.parametrize("child", [False, True])
-def test_included_step_projection_reads_assignments_only_for_resource_overrides(child):
-    row = SimpleNamespace(
-        parent_id=uuid4() if child else None,
-        template=object(),
-        children=[],
-        parameters={},
-        resources={},
-        assignments={},
-    )
-    minimal = relations.included_step_relations(
-        row, include_parameters=False, include_resources=False
-    )
-    assert set(minimal) == {"template", "children"}
-    included = relations.included_step_relations(
-        row, include_parameters=True, include_resources=True
-    )
-    assert set(included) == (
-        {"template", "children", "parameters", "resources", "assignments"}
-        if child
-        else {"template", "children", "parameters", "resources"}
-    )

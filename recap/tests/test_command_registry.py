@@ -1,4 +1,3 @@
-from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -100,50 +99,14 @@ def test_registry_covers_all_command_types():
     COMMAND_REGISTRY.validate_complete(expected)
 
 
-def test_lifecycle_registration_uses_polymorphic_response_decoder():
+def test_lifecycle_registration_uses_batch_results():
     registration = COMMAND_REGISTRY.by_type(SetLifecycleStatus)
 
     assert registration.name == "set_lifecycle_status"
     assert registration.service_handler == "set_lifecycle_status"
     assert registration.method == "POST"
     assert registration.route_template == "/api/v1/lifecycle/{object_type}/{object_id}"
-    assert registration.decode_response is registry._decode_lifecycle_response
-
-
-@pytest.mark.parametrize(
-    "object_type, schema_name",
-    [
-        ("resource", "ResourceSchema"),
-        ("resource_template", "ResourceTemplateSchema"),
-        ("process_template", "ProcessTemplateSchema"),
-        ("process_run", "ProcessRunSchema"),
-    ],
-)
-def test_lifecycle_response_decoder_selects_schema(object_type, schema_name):
-    command = SetLifecycleStatus(
-        object_type=object_type, object_id=uuid4(), expected_revision=1, status="ACTIVE"
-    )
-
-    schema_module = {
-        "ResourceSchema": "recap.commands.registry.ResourceSchema",
-        "ResourceTemplateSchema": "recap.commands.registry.ResourceTemplateSchema",
-        "ProcessTemplateSchema": "recap.commands.registry.ProcessTemplateSchema",
-        "ProcessRunSchema": "recap.commands.registry.ProcessRunSchema",
-    }[schema_name]
-    with patch(f"{schema_module}.model_validate", return_value=object()) as validate:
-        decoded = registry._decode_lifecycle_response({}, '"2"', command=command)
-
-    assert decoded is not None
-    validate.assert_called_once_with({})
-
-
-def test_lifecycle_response_decoder_rejects_unknown_object_type():
-    command = SetLifecycleStatus(
-        object_type="unknown", object_id=uuid4(), expected_revision=1, status="ACTIVE"
-    )
-
-    with pytest.raises(TypeError, match="Unsupported lifecycle object"):
-        registry._decode_lifecycle_response({}, None, command=command)
+    assert registration.decode_response is None
 
 
 def test_pilot_command_registry_rejects_unexpected_registered_types():
@@ -308,7 +271,7 @@ def test_resource_registry_covers_create_copy_and_templates():
             registration.route_template,
             registration.request_model,
         ) == values[:3]
-        assert registration.decode_response is not None
+        assert registration.decode_response is None
 
 
 def test_copy_resource_codec_preserves_default_options_on_wire():
@@ -451,7 +414,7 @@ def test_process_registry_has_exact_routes_request_models_and_response_schemas()
             registration.route_template,
             registration.request_model,
         ) == values[:3]
-        assert registration.decode_response is not None
+        assert registration.decode_response is None
 
 
 def test_process_template_codecs_unwrap_draft_and_use_if_match():
