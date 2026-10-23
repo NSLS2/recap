@@ -56,7 +56,7 @@ class AuthorizedQuery:
             permissions=policy.permissions_for(actor, namespace_path),
         )
 
-    def apply(self, model, stmt, *, context_id, ancestor_ids):
+    def apply(self, model, stmt, *, context_id, ancestor_ids, include_archived=False):
         """Add actor visibility before caller-controlled query operations."""
         read_scope, write_scope = _MODEL_SCOPES[model]
         scopes = self.permissions.effective_scopes
@@ -64,10 +64,13 @@ class AuthorizedQuery:
         active_ids = [context_id] if model is ProcessRun else ancestor_ids
         predicates = []
         if read_scope in scopes:
+            statuses = [LifecycleStatus.ACTIVE]
+            if include_archived:
+                statuses.append(LifecycleStatus.ARCHIVED)
             predicates.append(
                 and_(
                     namespace_column.in_(active_ids),
-                    model.status == LifecycleStatus.ACTIVE,
+                    model.status.in_(statuses),
                 )
             )
         if write_scope in scopes:

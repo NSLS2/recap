@@ -888,6 +888,7 @@ class LocalBackend(
                 stmt,
                 context_id=context_id,
                 ancestor_ids=ancestor_ids,
+                include_archived=spec.include_archived,
             )
 
         if model is ResourceTemplate and "types__names_in" in spec.filters:

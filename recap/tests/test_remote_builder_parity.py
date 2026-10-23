@@ -10,7 +10,12 @@ from fastapi.testclient import TestClient
 from recap.adapter.rest import RESTAdapter
 from recap.client import RecapClient
 from recap.commands.context import build_local_command_context
-from recap.commands.models import CreateResource, UpdateResource
+from recap.commands.models import (
+    CopyResource,
+    CreateResource,
+    SetLifecycleStatus,
+    UpdateResource,
+)
 from recap.dsl.query import QuerySpec
 from recap.exceptions import (
     RecapAuthenticationError,
@@ -18,8 +23,12 @@ from recap.exceptions import (
     RecapNotFoundError,
 )
 from recap.schemas.namespace import NamespaceContext
-from recap.schemas.process import ProcessTemplateSchema
-from recap.schemas.resource import ResourceCopyOptions, ResourceTemplateSchema
+from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
+from recap.schemas.resource import (
+    ResourceCopyOptions,
+    ResourceSchema,
+    ResourceTemplateSchema,
+)
 from recap.server.app import create_app
 from recap.utils.general import Direction
 
@@ -71,6 +80,162 @@ def test_direct_adapter_replays_original_snapshot_after_update(command_client):
     replay = writer.execute(command, context)
     assert replay.model_dump(mode="json") == snapshot
     assert replay is not original
+
+
+@pytest.mark.parametrize("surface", ["client", "adapter"])
+def test_local_first_workflow_acceptance(command_client, surface):
+    from dataclasses import replace
+
+    from recap.adapter.local import LocalBackend
+
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(
+        name="Acceptance plate", type_names=["container"]
+    ) as template:
+        template.finalize()
+    with scoped.build_resource_template(
+        name="Acceptance sample", type_names=["sample"]
+    ) as template:
+        template.add_properties(
+            {
+                "Measurements": [
+                    {
+                        "name": "Dose",
+                        "type": "int",
+                        "default": None,
+                        "unit": "uL",
+                        "metadata": {"min": 0, "max": 10},
+                    },
+                    {"name": "Readings", "type": "array", "default": [1, 2, 1]},
+                ]
+            }
+        )
+        template.finalize()
+    with scoped.build_resource("acceptance-plate", "Acceptance plate") as builder:
+        builder.add_child("well", "Acceptance sample")
+        builder.finalize()
+    source_plate = builder.resource
+    plate_id = source_plate.id
+    with scoped.build_process_template("Acceptance measurement", "1.0") as template:
+        template.add_resource_slot("plate", "container", Direction.input)
+        template.add_step("Collect").add_parameters(
+            {
+                "Exposure": [
+                    {
+                        "name": "Dwell",
+                        "type": "int",
+                        "default": 1,
+                        "unit": "s",
+                        "metadata": {"min": 0, "max": 10},
+                    },
+                ]
+            }
+        ).bind_slot("input", "plate").close_step()
+        template.finalize()
+    with scoped.build_process_run(
+        "acceptance-run", "shared workflow", "Acceptance measurement", "1.0"
+    ) as builder:
+        builder.assign_resource("plate", source_plate)
+        params = builder.get_params("Collect")
+        params.exposure.dwell = 7
+        builder.set_params(params)
+        builder.finalize()
+    run_id = builder.process_run.id
+    backend = scoped.connection_state.backend
+    backend.identity_map.clear()
+    reader = backend if surface == "client" else backend.reader
+
+    def query(schema, entity_id, **loading):
+        return reader.query(
+            schema,
+            QuerySpec(filters={"id": entity_id}, **loading),
+            namespace_path=scoped.namespace_path,
+        )
+
+    partial = query(ResourceSchema, plate_id, load_mode="none", on_unloaded="raise")[0]
+    assert not partial.is_loaded("children")
+    plate = query(ResourceSchema, plate_id, load_mode="eager", on_unloaded="raise")[0]
+    assert (plate is partial) == (surface == "client")
+    sample = plate.children["well"]
+    assert sample.properties.measurements.dose.value is None
+    assert sample.properties.measurements.dose.unit == "uL"
+    assert sample.properties.measurements.readings.value == [1, 2, 1]
+    run = query(ProcessRunSchema, run_id, preloads=("steps.parameters", "resources"))[0]
+    step = run.steps["Collect"]
+    assigned = run.assigned_resources["plate"].resource
+    assert step.resources["input"] is assigned
+    assert (assigned is plate) == (surface == "client")
+    assert step.parameters.exposure.dwell.value == 7
+    assert step.parameters.exposure.dwell.unit == "s"
+
+    if isinstance(backend.reader, LocalBackend):
+        direct = backend.reader.get_resource(
+            scoped.namespace_context.id,
+            "acceptance-plate",
+            "Acceptance plate",
+            expand=True,
+        )
+        assert direct.id == plate_id and direct is not plate
+        assert direct.children["well"].properties.measurements.readings.value == [
+            1,
+            2,
+            1,
+        ]
+        steps = backend.reader.get_steps(run)
+        assert backend.reader.get_params(steps[0]).exposure.dwell.value == 7
+
+    context = replace(build_local_command_context(), idempotency_key=str(uuid4()))
+    copy_command = CopyResource(
+        source_resource_id=plate_id,
+        destination_namespace_path=scoped.namespace_path,
+        options=ResourceCopyOptions(name="working-plate"),
+    )
+    copied = backend.writer.execute(copy_command, context)
+    assert copied.id != plate_id
+    assert copied.copied_from_id == plate_id
+    assert copied.children["well"].id != sample.id
+    assert copied.children["well"].properties.measurements.readings.value == [1, 2, 1]
+    updated = backend.writer.execute(
+        UpdateResource(
+            resource_id=copied.id,
+            expected_revision=copied.revision,
+            name="working-plate-updated",
+        ),
+        replace(context, idempotency_key=str(uuid4())),
+    )
+    assert updated.id == copied.id and updated.revision == copied.revision + 1
+    with pytest.raises(RecapConflictError):
+        backend.writer.execute(
+            UpdateResource(
+                resource_id=copied.id,
+                expected_revision=copied.revision,
+                name="stale-write",
+            ),
+            replace(context, idempotency_key=str(uuid4())),
+        )
+    replay = backend.writer.execute(copy_command, context)
+    assert replay.id == copied.id
+    assert replay.name == "working-plate" and replay.revision == copied.revision
+    assert (
+        query(ResourceSchema, copied.id, include_mutable=True)[0].name
+        == "working-plate-updated"
+    )
+    assert query(ResourceSchema, plate_id)[0].name == "acceptance-plate"
+    archived = backend.writer.execute(
+        SetLifecycleStatus(
+            object_type="process_run",
+            object_id=run_id,
+            expected_revision=run.revision,
+            status="ARCHIVED",
+        ),
+        replace(context, idempotency_key=str(uuid4())),
+    )
+    assert archived.status.value == "ARCHIVED"
+    assert query(ProcessRunSchema, run_id) == []
+    assert (
+        query(ProcessRunSchema, run_id, include_archived=True)[0].status.value
+        == "ARCHIVED"
+    )
 
 
 def test_overlapping_trees_and_assignments_preserve_generated_properties(

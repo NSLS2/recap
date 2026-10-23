@@ -1,15 +1,20 @@
 from uuid import uuid4
 
+import pytest
 from sqlalchemy.orm import sessionmaker
 
 from recap.adapter.local import LocalBackend
 from recap.adapter.transport import QueryRequest
+from recap.authorization.query import AuthorizedQuery
+from recap.authorization.scopes import Scope
+from recap.client.permissions import EffectivePermissions
 from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate
 from recap.db.resource import Resource, ResourceTemplate
 from recap.dsl.query import Field, QueryDSL, QuerySpec
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
+from recap.schemas.process import ProcessTemplateSchema
 from recap.schemas.resource import ResourceTemplateSchema
 
 
@@ -125,6 +130,64 @@ def test_templates_inherit_active_ancestors_and_archive_is_opt_in(db_session):
         "ancestor",
         "own-active",
     }
+
+
+@pytest.mark.parametrize(
+    "scopes,expected",
+    [
+        (
+            {Scope.PROCESS_TEMPLATE_READ},
+            {"active", "own-archived", "ancestor-archived"},
+        ),
+        ({Scope.PROCESS_TEMPLATE_WRITE}, {"mutable"}),
+        (set(), set()),
+    ],
+)
+def test_authorized_archive_opt_in_preserves_scope_and_namespace_boundaries(
+    db_session, scopes, expected
+):
+    parent = _namespace("archive")
+    own = _namespace("archive/own", parent=parent)
+    sibling = _namespace("archive/sibling", parent=parent)
+    db_session.add_all([parent, own, sibling])
+    for namespace, name, status in [
+        (own, "active", LifecycleStatus.ACTIVE),
+        (own, "mutable", LifecycleStatus.MUTABLE),
+        (own, "own-archived", LifecycleStatus.ARCHIVED),
+        (parent, "ancestor-archived", LifecycleStatus.ARCHIVED),
+        (sibling, "sibling-archived", LifecycleStatus.ARCHIVED),
+    ]:
+        db_session.add(
+            ProcessTemplate(namespace=namespace, name=name, version="1", status=status)
+        )
+    db_session.commit()
+    backend = LocalBackend(sessionmaker(bind=db_session.get_bind()))
+    authorization = AuthorizedQuery(
+        namespace_path=own.path,
+        permissions=EffectivePermissions(
+            identities=(),
+            snapshot_generation=None,
+            effective_scopes=frozenset(scopes),
+            matched_namespace_paths=(own.path,),
+            grants=(),
+        ),
+    )
+    spec = QuerySpec(include_archived=True, include_mutable=True)
+    batch = backend.query_batch_authorized(
+        ProcessTemplateSchema, spec, authorization=authorization
+    )
+    roots = {root.id for root in batch.roots}
+    assert {
+        record.fields["name"] for record in batch.entities if record.id in roots
+    } == expected
+    assert backend.count_authorized(
+        ProcessTemplateSchema, spec, authorization=authorization
+    ) == len(expected)
+    spec = QuerySpec(include_mutable=True)
+    visible = backend.query_authorized(
+        ProcessTemplateSchema, spec, authorization=authorization
+    )
+    assert all(model.status is not LifecycleStatus.ARCHIVED for model in visible)
 
 
 def test_visibility_precedes_filter_pagination_and_count(db_session):

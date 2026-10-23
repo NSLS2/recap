@@ -26,3 +26,8 @@ def test_core_public_exports_are_importable():
 
 def test_namespace_client_facade_is_not_public():
     assert not hasattr(recap, "NamespaceClient")
+
+
+def test_all_declared_public_exports_resolve():
+    assert len(recap.__all__) == len(set(recap.__all__))
+    assert all(getattr(recap, name) is not None for name in recap.__all__)
