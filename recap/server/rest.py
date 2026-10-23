@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, Request, Response
 
 from recap.adapter.local import LocalBackend
-from recap.adapter.transport import QueryRequest, QueryResult, serialize_model
+from recap.adapter.transport import FlatQueryResult, QueryRequest, serialize_model
 from recap.authentication.models import RequestActor
 from recap.authorization.policy import (
     SnapshotNamespacePolicy,
@@ -113,12 +113,12 @@ def _query_request(body: QueryRPCRequest) -> QueryRequest:
         raise RecapValidationError("Invalid query request") from exc
 
 
-@router.post("/query", response_model=QueryResult)
+@router.post("/query", response_model=FlatQueryResult)
 def query(
     body: QueryRPCRequest,
     request: Request,
     actor: Annotated[RequestActor, Depends(authenticate_request)],
-) -> QueryResult:
+) -> FlatQueryResult:
     return _query_service(request).query(
         _query_request(body), actor=actor, policy=_policy(request)
     )

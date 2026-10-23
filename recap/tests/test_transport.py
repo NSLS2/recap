@@ -447,3 +447,36 @@ def test_minimal_process_run_round_trip_restores_private_state():
         "assigned_resources": False,
     }
     assert hydrated._on_unloaded == "silent"
+
+
+def test_flat_batch_roundtrip_preserves_arbitrary_datetime_values_and_metadata():
+    from datetime import datetime
+    from uuid import uuid4
+
+    from recap.adapter.entity_records import EntityBatch, EntityRef, ResourceRecord
+    from recap.adapter.transport import (
+        FlatQueryResult,
+        decode_query_batch,
+        encode_query_batch,
+    )
+    from recap.schemas.resource import ResourceSchema
+
+    stamp = datetime(2026, 1, 1, 12, 30)
+    ref = EntityRef(kind="resource", id=uuid4())
+    batch = EntityBatch(
+        roots=[ref],
+        entities=[
+            ResourceRecord(
+                id=ref.id,
+                revision=1,
+                fields={
+                    "metadata": {"timestamp": stamp, "sequence": [stamp, None, stamp]}
+                },
+            )
+        ],
+        adjacency=[],
+    )
+    wire = encode_query_batch(batch, entity="resource", projection="full")
+    parsed = FlatQueryResult.model_validate_json(wire.model_dump_json())
+    decoded = decode_query_batch(ResourceSchema, parsed)
+    assert decoded.entities[0].fields == batch.entities[0].fields

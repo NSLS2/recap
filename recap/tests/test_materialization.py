@@ -182,7 +182,11 @@ def test_array_values_preserve_order_repetition_and_detached_draft(db_session):
 
 
 @pytest.mark.performance
-def test_local_client_batch_path_does_not_build_recursive_signatures(client):
+@pytest.mark.parametrize(
+    "client_fixture", ["client", "rest_loopback_client"], ids=["local", "rest"]
+)
+def test_client_batch_path_does_not_build_recursive_signatures(request, client_fixture):
+    client = request.getfixturevalue(client_fixture)
     with client.build_resource_template(name="BatchPath", type_names=["sample"]):
         pass
     resource = client.create_resource("sample", "BatchPath")

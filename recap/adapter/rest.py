@@ -11,7 +11,9 @@ from uuid import UUID
 from pydantic import SecretStr, ValidationError
 
 from recap.adapter.http_transport import HTTPResult, HTTPTransport
-from recap.adapter.transport import QueryRequest, QueryResult, hydrate_result
+from recap.adapter.transport import FlatQueryResult, QueryRequest, decode_query_batch
+from recap.client.identity import IdentityMap
+from recap.client.materialization import BatchMaterializer
 from recap.client.permissions import ActorPermissions
 from recap.commands.models import (
     CommandContext,
@@ -135,6 +137,14 @@ class RESTAdapter:
     def query(
         self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
     ) -> list[SchemaT]:
+        """Model-returning adapter for direct callers without a client identity map."""
+        return BatchMaterializer(IdentityMap()).materialize(
+            schema, self.query_batch(schema, spec, namespace_path=namespace_path)
+        )
+
+    def query_batch(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ):
         request = QueryRequest.from_query(schema, spec, namespace_path=namespace_path)
         response = self._request(
             "POST",
@@ -143,8 +153,8 @@ class RESTAdapter:
             idempotent=False,
         )
         try:
-            result = QueryResult.model_validate(response.entity)
-            return hydrate_result(schema, result)
+            result = FlatQueryResult.model_validate(response.entity)
+            return decode_query_batch(schema, result)
         except RecapProtocolError:
             raise
         except (KeyError, TypeError, ValueError, ValidationError):

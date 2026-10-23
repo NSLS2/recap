@@ -34,6 +34,19 @@ class BatchReadBackend(Protocol):
 
 
 @runtime_checkable
+class AuthorizedBatchReadBackend(BatchReadBackend, Protocol):
+    """Normalized server reads with the same authorization scope as model reads."""
+
+    def query_batch_authorized(
+        self,
+        schema: type[SchemaT],
+        spec: QuerySpec,
+        *,
+        authorization: "AuthorizedQuery",
+    ) -> "EntityBatch": ...
+
+
+@runtime_checkable
 class AuthorizedReadBackend(ReadBackend, Protocol):
     """Server-only read contract with authorization-aware query operations."""
 

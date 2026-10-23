@@ -9,6 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from recap.adapter.entity_records import EntityBatch
 from recap.adapter.schema_registry import (
     LEGACY_SCHEMA_KEYS,
     LEGACY_SCHEMAS_BY_NAME,
@@ -23,6 +24,37 @@ from recap.schemas.attribute import AttributeGroupTemplateSchema
 from recap.schemas.common import LoadAware
 
 _SCALAR_TAG = "__recap_transport_scalar_v1__"
+
+
+class FlatQueryResult(EntityBatch):
+    """Normalized REST query envelope; no embedded public entity graphs."""
+
+    entity: str
+    projection: Literal["full", "ref"]
+
+    @model_validator(mode="after")
+    def validate_entity(self):
+        schema_for(self.entity, self.projection)
+        return self
+
+
+def encode_query_batch(batch: EntityBatch, *, entity: str, projection: str):
+    """Tag arbitrary payload scalars without treating their dictionaries as refs."""
+    payload = batch.model_dump()
+    for record in payload["entities"]:
+        record["fields"] = _serialize_value(record["fields"], tag_scalars=True)
+    return FlatQueryResult(entity=entity, projection=projection, **payload)
+
+
+def decode_query_batch(schema, result: FlatQueryResult) -> EntityBatch:
+    if schema_for(result.entity, result.projection) is not schema:
+        raise RecapProtocolError("Query result schema does not match requested schema")
+    payload = result.model_dump()
+    payload.pop("entity")
+    payload.pop("projection")
+    for record in payload["entities"]:
+        record["fields"] = _decode_tagged_scalars(record["fields"])
+    return EntityBatch.model_validate(payload)
 
 
 class QueryRequest(BaseModel):

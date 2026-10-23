@@ -466,7 +466,11 @@ def test_remote_get_resource_uses_read_backend(monkeypatch):
         calls.append((args, kwargs))
         return [expected]
 
-    monkeypatch.setattr(client.connection_state.backend.reader, "query", read)
+    monkeypatch.setattr(
+        type(client.connection_state.backend),
+        "query",
+        lambda self, *args, **kwargs: read(*args, **kwargs),
+    )
     monkeypatch.setattr(
         client.connection_state.backend.writer,
         "get_resource",
@@ -534,7 +538,11 @@ def test_uuid_parent_resolution_uses_read_backend(monkeypatch):
         calls.append((args, kwargs))
         return [expected]
 
-    monkeypatch.setattr(client.connection_state.backend.reader, "query", read)
+    monkeypatch.setattr(
+        type(client.connection_state.backend),
+        "query",
+        lambda self, *args, **kwargs: read(*args, **kwargs),
+    )
 
     assert (
         client._resolve_parent(

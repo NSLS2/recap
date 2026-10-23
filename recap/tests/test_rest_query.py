@@ -43,7 +43,10 @@ def test_rest_query_returns_transport_result(
     assert response.status_code == 200
     body = response.json()
     assert body["entity"] == "resource"
-    assert len(body["items"]) == 1
+    assert len(body["roots"]) == 1
+    assert "items" not in body
+    assert body["entities"]
+    assert all("fields" in record for record in body["entities"])
 
 
 def test_rest_namespace_ref_query_hydrates_namespace_refs(
@@ -66,9 +69,15 @@ def test_rest_namespace_ref_query_hydrates_namespace_refs(
         )
 
     assert response.status_code == 200
-    item = response.json()["items"][0]
-    assert set(item) == {"id", "path"}
-    assert NamespaceRef.model_validate(item).path == query_namespace_path
+    body = response.json()
+    root = body["roots"][0]
+    item = next(record for record in body["entities"] if record["id"] == root["id"])
+    assert (
+        NamespaceRef.model_validate(
+            {"id": root["id"], "path": item["fields"]["path"]}
+        ).path
+        == query_namespace_path
+    )
 
 
 def test_rest_count_permissions_and_namespace_context(
@@ -449,7 +458,11 @@ def test_query_service_validates_and_executes_authorized_query():
     from unittest.mock import Mock
 
     backend = Mock()
-    backend.query_authorized.return_value = []
+    from recap.adapter.entity_records import EntityBatch
+
+    backend.query_batch_authorized.return_value = EntityBatch(
+        roots=[], entities=[], adjacency=[]
+    )
     policy = Mock()
     actor = object()
     request = QueryRequest(
@@ -461,8 +474,8 @@ def test_query_service_validates_and_executes_authorized_query():
 
     QueryService(backend).query(request, actor=actor, policy=policy)
 
-    backend.query_authorized.assert_called_once()
-    assert backend.query_authorized.call_args.args[0] is ResourceSchema
+    backend.query_batch_authorized.assert_called_once()
+    assert backend.query_batch_authorized.call_args.args[0] is ResourceSchema
 
 
 def test_query_service_rejects_invalid_spec():

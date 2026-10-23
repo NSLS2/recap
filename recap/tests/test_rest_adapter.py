@@ -332,10 +332,26 @@ def test_read_operations_send_wire_payloads_and_no_idempotency_headers():
         "groups": [],
         "roles": [],
     }
-    transport = _transport({"entity": "resource", "projection": "full", "items": []})
+    transport = _transport(
+        {
+            "entity": "resource",
+            "projection": "full",
+            "roots": [],
+            "entities": [],
+            "adjacency": [],
+        }
+    )
     transport.request.side_effect = [
         HTTPResult(
-            {"entity": "resource", "projection": "full", "items": []}, None, None
+            {
+                "entity": "resource",
+                "projection": "full",
+                "roots": [],
+                "entities": [],
+                "adjacency": [],
+            },
+            None,
+            None,
         ),
         HTTPResult(4, None, None),
         HTTPResult(permissions, None, None),
@@ -406,11 +422,49 @@ def test_query_rejects_schema_mismatch_in_success_body():
     from recap.adapter.rest import RESTAdapter
     from recap.schemas.resource import ResourceSchema
 
-    transport = _transport({"entity": "process_run", "projection": "full", "items": []})
+    transport = _transport(
+        {
+            "entity": "process_run",
+            "projection": "full",
+            "roots": [],
+            "entities": [],
+            "adjacency": [],
+        }
+    )
     adapter = RESTAdapter("https://recap.test", _transport=transport)
 
     with pytest.raises(RecapProtocolError, match="schema does not match"):
         adapter.query(ResourceSchema, QuerySpec(), namespace_path="beamline/amx")
+
+
+@pytest.mark.parametrize("invalid", ["unknown_kind", "missing_target", "duplicate"])
+def test_flat_query_rejects_invalid_records_and_references(invalid):
+    from recap.adapter.rest import RESTAdapter
+    from recap.schemas.namespace import NamespaceSchema
+
+    body = _namespace_body()
+    record = {
+        "kind": "namespace",
+        "id": body.pop("id"),
+        "revision": body.pop("revision"),
+        "fields": body,
+    }
+    payload = {
+        "entity": "namespace",
+        "projection": "full",
+        "roots": [{"kind": "namespace", "id": record["id"]}],
+        "entities": [record],
+        "adjacency": [],
+    }
+    if invalid == "unknown_kind":
+        record["kind"] = "unknown"
+    elif invalid == "duplicate":
+        payload["entities"].append(record)
+    else:
+        payload["roots"][0]["id"] = str(uuid4())
+    adapter = RESTAdapter("https://recap.test", _transport=_transport(payload))
+    with pytest.raises(RecapProtocolError):
+        adapter.query(NamespaceSchema, QuerySpec(), namespace_path="beamline/amx")
 
 
 def test_close_delegates_to_transport():

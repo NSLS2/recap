@@ -713,10 +713,11 @@ def test_scoped_remote_create_resource_uses_namespace_route(tmp_path):
 
         def query(_adapter, schema, spec, *, namespace_path):
             query_paths.append(namespace_path)
-            return [resource]
+            return original_query(_adapter, schema, spec, namespace_path=namespace_path)
 
+        original_query = RESTAdapter.query_batch
         with (
-            patch.object(RESTAdapter, "query", query),
+            patch.object(RESTAdapter, "query_batch", query),
             namespace.build_resource(resource_id=resource.id) as builder,
         ):
             assert builder.resource.id == resource.id

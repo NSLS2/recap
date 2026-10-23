@@ -6,14 +6,20 @@ from uuid import UUID
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from recap.adapter import AuthorizedReadBackend
+from recap.adapter import AuthorizedBatchReadBackend
 from recap.adapter.schema_registry import (
     SCHEMA_ENTITY_KEYS,
     SCHEMA_PROJECTIONS,
     SCHEMA_REGISTRY,
     SCHEMAS_BY_NAME,
 )
-from recap.adapter.transport import QueryRequest, QueryResult, serialize_model
+from recap.adapter.transport import (
+    FlatQueryResult,
+    QueryRequest,
+    QueryResult,
+    encode_query_batch,
+    serialize_model,
+)
 from recap.authorization.query import AuthorizedQuery
 from recap.client.permissions import ActorPermissions
 from recap.dsl.query import QuerySpec
@@ -21,7 +27,7 @@ from recap.exceptions import RecapProtocolError, RecapValidationError
 
 
 class QueryService:
-    def __init__(self, backend: AuthorizedReadBackend) -> None:
+    def __init__(self, backend: AuthorizedBatchReadBackend) -> None:
         self.backend = backend
 
     @classmethod
@@ -40,16 +46,24 @@ class QueryService:
             schema_name=schema_name,
         )
 
-    def query(self, request: QueryRequest, *, actor, policy) -> QueryResult:
-        self._schema(request)
-        items = self.query_models(request, actor=actor, policy=policy)
-        return QueryResult(
-            entity=request.entity,
-            projection=request.projection,
-            items=[
-                self._serialize_item(item, request.entity, request.projection)
-                for item in items
-            ],
+    def query(self, request: QueryRequest, *, actor, policy) -> FlatQueryResult:
+        schema = self._schema(request)
+        spec = self._spec(request, schema)
+        if policy is None:
+            batch = self.backend.query_batch(
+                schema, spec, namespace_path=request.namespace_path
+            )
+        else:
+            authorization = AuthorizedQuery.from_policy(
+                policy, actor, namespace_path=request.namespace_path
+            )
+            if not spec.include_mutable:
+                authorization = authorization.for_read()
+            batch = self.backend.query_batch_authorized(
+                schema, spec, authorization=authorization
+            )
+        return encode_query_batch(
+            batch, entity=request.entity, projection=request.projection
         )
 
     @staticmethod
