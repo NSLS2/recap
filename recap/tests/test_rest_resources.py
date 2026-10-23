@@ -3,6 +3,8 @@ from dataclasses import replace
 from recap.commands.registry import CommandRegistration
 from recap.server.rest import command_registration, router
 
+from .command_responses import command_data
+
 
 def test_resource_routes_are_canonical(api_client):
     paths = {route.path for route in router.routes}
@@ -40,10 +42,10 @@ def test_create_and_patch_resource(api_client, idempotency_headers, monkeypatch)
     resource = api_client.post(
         "/api/v1/resources/beamline",
         headers=idempotency_headers("resource-1"),
-        json={"name": "plate-1", "template_id": template.json()["id"]},
+        json={"name": "plate-1", "template_id": command_data(template)["id"]},
     )
     assert resource.status_code == 201
-    assert resource.json()["name"] == "plate-1"
+    assert command_data(resource)["name"] == "plate-1"
     from recap.commands.registry import CommandRegistry
 
     decoded = []
@@ -64,18 +66,18 @@ def test_create_and_patch_resource(api_client, idempotency_headers, monkeypatch)
 
     monkeypatch.setattr(CommandRegistry, "by_name", by_name)
     updated = api_client.patch(
-        f"/api/v1/resources/{resource.json()['id']}",
+        f"/api/v1/resources/{command_data(resource)['id']}",
         headers=idempotency_headers(
             "resource-2", **{"If-Match": resource.headers["ETag"]}
         ),
         json={"name": "plate-2"},
     )
     assert updated.status_code == 200
-    assert updated.json()["name"] == "plate-2"
+    assert command_data(updated)["name"] == "plate-2"
     assert updated.request.content == b'{"name":"plate-2"}'
     assert "expected_revision" not in updated.request.content.decode()
     assert updated.headers["ETag"] == '"2"'
-    assert str(decoded[0].resource_id) == resource.json()["id"]
+    assert str(decoded[0].resource_id) == command_data(resource)["id"]
     assert decoded[0].expected_revision == 1
 
 
@@ -96,15 +98,15 @@ def test_create_resource_replays_sequentially_with_same_idempotency_key(
     assert template.status_code == 201
 
     headers = idempotency_headers("resource-replay")
-    payload = {"name": "plate-1", "template_id": template.json()["id"]}
+    payload = {"name": "plate-1", "template_id": command_data(template)["id"]}
     first = api_client.post("/api/v1/resources/beamline", headers=headers, json=payload)
     replay = api_client.post(
         "/api/v1/resources/beamline", headers=headers, json=payload
     )
 
     assert first.status_code == replay.status_code == 201
-    first_body = first.json()
-    replay_body = replay.json()
+    first_body = command_data(first)
+    replay_body = command_data(replay)
     assert first_body["id"] == replay_body["id"]
     assert first_body["name"] == replay_body["name"] == "plate-1"
     assert first_body["revision"] == replay_body["revision"] == 1
@@ -136,13 +138,16 @@ def test_create_resource_response_preserves_dynamic_properties(
         "headers": idempotency_headers("resource-properties"),
         "json": {
             "name": "sample-1",
-            "template_id": template.json()["id"],
+            "template_id": command_data(template)["id"],
             "properties": {"measurements": {"mass": 2.5}},
         },
     }
     first = api_client.post("/api/v1/resources/beamline", **request)
     assert first.status_code == 201
-    assert first.json()["properties"]["measurements"]["values"]["mass"]["value"] == 2.5
+    assert (
+        command_data(first)["properties"]["measurements"]["values"]["mass"]["value"]
+        == 2.5
+    )
 
 
 def test_copy_resource_uses_destination_namespace_in_body(
@@ -162,17 +167,17 @@ def test_copy_resource_uses_destination_namespace_in_body(
     resource = api_client.post(
         "/api/v1/resources/beamline",
         headers=idempotency_headers("resource-copy"),
-        json={"name": "plate-1", "template_id": template.json()["id"]},
+        json={"name": "plate-1", "template_id": command_data(template)["id"]},
     )
 
     copied = api_client.post(
-        f"/api/v1/resources/{resource.json()['id']}/copies",
+        f"/api/v1/resources/{command_data(resource)['id']}/copies",
         headers=idempotency_headers("copy-1"),
         json={"destination_namespace": "beamline", "name": "plate-copy"},
     )
 
     assert copied.status_code == 201
-    assert copied.json()["name"] == "plate-copy"
+    assert command_data(copied)["name"] == "plate-copy"
 
 
 def test_copy_resource_accepts_parent_id(api_client, idempotency_headers):
@@ -189,21 +194,24 @@ def test_copy_resource_accepts_parent_id(api_client, idempotency_headers):
     parent = api_client.post(
         "/api/v1/resources/beamline",
         headers=idempotency_headers("copy-child-parent"),
-        json={"name": "group", "template_id": template.json()["id"]},
+        json={"name": "group", "template_id": command_data(template)["id"]},
     )
     source = api_client.post(
         "/api/v1/resources/beamline",
         headers=idempotency_headers("copy-child-source"),
-        json={"name": "source", "template_id": template.json()["id"]},
+        json={"name": "source", "template_id": command_data(template)["id"]},
     )
     copied = api_client.post(
-        f"/api/v1/resources/{source.json()['id']}/copies",
+        f"/api/v1/resources/{command_data(source)['id']}/copies",
         headers=idempotency_headers("copy-as-child"),
-        json={"destination_namespace": "beamline", "parent_id": parent.json()["id"]},
+        json={
+            "destination_namespace": "beamline",
+            "parent_id": command_data(parent)["id"],
+        },
     )
 
     assert copied.status_code == 201
-    assert copied.json()["copied_from_id"] == source.json()["id"]
+    assert command_data(copied)["copied_from_id"] == command_data(source)["id"]
 
 
 def test_copy_resource_requires_destination_namespace(api_client, idempotency_headers):
@@ -228,9 +236,9 @@ def test_patch_active_resource_requires_in_place(
     resource = api_client.post(
         "/api/v1/resources/beamline",
         headers=idempotency_headers("in-place-resource"),
-        json={"name": "plate-1", "template_id": template.json()["id"]},
+        json={"name": "plate-1", "template_id": command_data(template)["id"]},
     )
-    resource_id = resource.json()["id"]
+    resource_id = command_data(resource)["id"]
     activated = api_client.post(
         f"/api/v1/lifecycle/resource/{resource_id}",
         headers=idempotency_headers("in-place-activate", **{"If-Match": '"1"'}),
@@ -252,7 +260,7 @@ def test_patch_active_resource_requires_in_place(
         json={"name": "plate-fixed", "in_place": True},
     )
     assert updated.status_code == 200, updated.text
-    assert updated.json()["id"] == resource_id
-    assert updated.json()["name"] == "plate-fixed"
-    assert updated.json()["status"] == "ACTIVE"
+    assert command_data(updated)["id"] == resource_id
+    assert command_data(updated)["name"] == "plate-fixed"
+    assert command_data(updated)["status"] == "ACTIVE"
     assert updated.headers["ETag"] == '"3"'

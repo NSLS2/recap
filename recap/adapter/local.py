@@ -253,8 +253,19 @@ class LocalBackend(
         *,
         etag_override: str | None = None,
     ) -> object:
+        return self._execute_command(command, context, batch=False)
+
+    def execute_batch(self, command, context, *, etag_override=None):
+        return self._execute_command(command, context, batch=True)
+
+    def _execute_command(self, command, context, *, batch):
         try:
-            return CommandService(self._session_factory).execute(command, context)
+            service = CommandService(self._session_factory)
+            return (
+                service.execute_batch(command, context)
+                if batch
+                else service.execute(command, context)
+            )
         except AuthorizationDenied as error:
             if error.conceal:
                 raise RecapNotFoundError("Not found") from None

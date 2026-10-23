@@ -47,14 +47,14 @@ def test_reused_resource_clean_exit_skips_update_and_mutation_updates(
         ).close_group()
     client.create_resource("RB-Command-1", "RB-Command-Template")
     commands = []
-    execute = client.connection_state.backend.writer.execute
+    execute = client.connection_state.backend.writer.execute_batch
 
     def recording_execute(command, context):
         commands.append(command)
         return execute(command, context)
 
     monkeypatch.setattr(
-        client.connection_state.backend.writer, "execute", recording_execute
+        client.connection_state.backend.writer, "execute_batch", recording_execute
     )
     with client.build_resource(
         "RB-Command-1", "RB-Command-Template", on_existing="silent"
@@ -94,14 +94,14 @@ def test_reused_resource_template_clean_exit_skips_update_and_mutation_updates(
         pass
     existing = created.template
     commands = []
-    execute = client.connection_state.backend.writer.execute
+    execute = client.connection_state.backend.writer.execute_batch
 
     def recording_execute(command, context):
         commands.append(command)
         return execute(command, context)
 
     monkeypatch.setattr(
-        client.connection_state.backend.writer, "execute", recording_execute
+        client.connection_state.backend.writer, "execute_batch", recording_execute
     )
     with client.build_resource_template(resource_template_id=existing.id):
         pass

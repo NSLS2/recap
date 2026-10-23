@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from recap.adapter import (
     BatchReadBackend,
+    BatchWriteBackend,
     NamespaceCatalog,
     NamespaceContextResolver,
     NamespaceWriter,
@@ -104,10 +105,24 @@ class ClientBackend:
         *,
         etag_override: str | None = None,
     ) -> object:
+        from recap.commands.models import CreateNamespace, UpdateNamespace
+
+        execute = (
+            self.writer.execute_batch
+            if isinstance(self.writer, BatchWriteBackend)
+            and not isinstance(command, (CreateNamespace, UpdateNamespace))
+            else self.writer.execute
+        )
         if etag_override is None:
-            result = self.writer.execute(command, context)
+            result = execute(command, context)
         else:
-            result = self.writer.execute(command, context, etag_override=etag_override)
+            result = execute(command, context, etag_override=etag_override)
+        from recap.adapter.entity_records import POLICIES_BY_KIND, EntityBatch
+
+        if isinstance(result, EntityBatch):
+            return BatchMaterializer(self.identity_map).materialize(
+                POLICIES_BY_KIND[result.roots[0].kind].schema, result
+            )[0]
         return (
             self.identity_map.intern(result, authoritative=True)
             if isinstance(result, BaseModel)

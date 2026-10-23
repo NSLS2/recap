@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from contextvars import ContextVar
 from copy import deepcopy
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -67,6 +68,8 @@ from recap.utils.namespace import (
     is_namespace_ancestor,
     parent_namespace_path,
 )
+
+_BATCH_RESULTS = ContextVar("recap_command_batch_results", default=False)
 
 
 class _CreateFingerprint(BaseModel):
@@ -173,6 +176,57 @@ class CommandService:
             },
         )
 
+    def execute_batch(self, command: CommandModel, context: CommandContext):
+        """Use the same transaction and replay checks with normalized results."""
+        token = _BATCH_RESULTS.set(True)
+        try:
+            return self.execute(command, context)
+        finally:
+            _BATCH_RESULTS.reset(token)
+
+    @staticmethod
+    def _graph_result(row, schema):
+        if not _BATCH_RESULTS.get():
+            return schema.model_validate(row)
+        from recap.adapter.entity_batch import EntityBatchCollector
+        from recap.adapter.entity_records import POLICIES_BY_ORM
+
+        collector = EntityBatchCollector(on_unloaded="silent")
+        policy = POLICIES_BY_ORM[type(row)]
+        requested = set(policy.relations)
+        if policy.kind == "resource":
+            # Match query/hydrator parent-loading semantics; command refreshes
+            # must not upgrade previously unloaded parent state incidentally.
+            requested.discard("parent")
+        if policy.kind == "process_run":
+            requested = {"template", "steps", "steps.parameters", "resources"}
+        collector.add_root(row, requested)
+        return collector.collect()
+
+    @staticmethod
+    def _snapshot(result):
+        from recap.adapter.entity_records import EntityBatch
+        from recap.adapter.transport import encode_query_batch
+
+        if isinstance(result, EntityBatch):
+            return encode_query_batch(
+                result, entity=result.roots[0].kind, projection="full"
+            ).model_dump(mode="json")
+        return result.model_dump(mode="json")
+
+    @staticmethod
+    def _replay_graph(payload, schema):
+        from recap.adapter.transport import FlatQueryResult, decode_query_batch
+        from recap.client.identity import IdentityMap
+        from recap.client.materialization import BatchMaterializer
+
+        if "entities" in payload:
+            batch = decode_query_batch(schema, FlatQueryResult.model_validate(payload))
+            if _BATCH_RESULTS.get():
+                return batch
+            return BatchMaterializer(IdentityMap()).materialize(schema, batch)[0]
+        return schema.model_validate(payload)
+
     def set_lifecycle_status(
         self,
         context: CommandContext,
@@ -224,6 +278,12 @@ class CommandService:
                 )
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
+                    if "entities" in decision.response:
+                        from recap.adapter.entity_records import POLICIES_BY_KIND
+
+                        return self._replay_graph(
+                            decision.response, POLICIES_BY_KIND[object_type].schema
+                        )
                     return COMMAND_REGISTRY.by_type(SetLifecycleStatus).decode_response(
                         decision.response,
                         None,
@@ -257,14 +317,12 @@ class CommandService:
                     expected_revision=expected_revision,
                     status=status,
                 )
-                result = COMMAND_REGISTRY.by_type(SetLifecycleStatus).decode_response(
-                    obj, None, command=lifecycle_command
-                )
+                result = self._lifecycle_result(obj, object_type, lifecycle_command)
                 if decision is not None:
                     idempotency.complete(
                         decision,
                         target_id=str(obj.id),
-                        response=result.model_dump(mode="json"),
+                        response=self._snapshot(result),
                     )
                 self._emit_success(
                     session,
@@ -283,6 +341,15 @@ class CommandService:
                 resource_type=object_type,
             )
             raise
+
+    def _lifecycle_result(self, obj, object_type, command):
+        if _BATCH_RESULTS.get():
+            from recap.adapter.entity_records import POLICIES_BY_KIND
+
+            return self._graph_result(obj, POLICIES_BY_KIND[object_type].schema)
+        return COMMAND_REGISTRY.by_type(SetLifecycleStatus).decode_response(
+            obj, None, command=command
+        )
 
     def create_resource(  # noqa: C901
         self,
@@ -343,7 +410,7 @@ class CommandService:
                 )
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
-                    return ResourceSchema.model_validate(decision.response)
+                    return self._replay_graph(decision.response, ResourceSchema)
                 resource = Resource(
                     id=id or uuid4(),
                     namespace=namespace,
@@ -358,8 +425,8 @@ class CommandService:
                 if properties:
                     self._apply_resource_changes(resource, properties)
                 session.flush()
-                result = ResourceSchema.model_validate(resource)
-                response = result.model_dump(mode="json")
+                result = self._graph_result(resource, ResourceSchema)
+                response = self._snapshot(result)
                 if decision is not None:
                     idempotency.complete(
                         decision, target_id=str(resource.id), response=response
@@ -434,7 +501,7 @@ class CommandService:
                 )
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
-                    return ResourceSchema.model_validate(decision.response)
+                    return self._replay_graph(decision.response, ResourceSchema)
                 root = _resource_root(resource)
                 effective_status = _effective_resource_status(resource, root)
                 if effective_status is LifecycleStatus.ARCHIVED:
@@ -468,8 +535,8 @@ class CommandService:
                 )
                 session.flush()
                 session.refresh(resource)
-                result = ResourceSchema.model_validate(resource)
-                response = result.model_dump(mode="json")
+                result = self._graph_result(resource, ResourceSchema)
+                response = self._snapshot(result)
                 if decision is not None:
                     idempotency.complete(
                         decision, target_id=str(resource.id), response=response
@@ -571,7 +638,7 @@ class CommandService:
                 )
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
-                    return ResourceSchema.model_validate(decision.response)
+                    return self._replay_graph(decision.response, ResourceSchema)
                 flat = self._load_resource_tree(session, source)
                 children = {}
                 for item in flat:
@@ -618,8 +685,8 @@ class CommandService:
                 if source.status is LifecycleStatus.MUTABLE:
                     source.activate()
                 session.flush()
-                result = ResourceSchema.model_validate(copied)
-                response = result.model_dump(mode="json")
+                result = self._graph_result(copied, ResourceSchema)
+                response = self._snapshot(result)
                 if decision is not None:
                     idempotency.complete(
                         decision, target_id=str(copied.id), response=response
@@ -940,7 +1007,7 @@ class CommandService:
                 )
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
-                    return ProcessTemplateSchema.model_validate(decision.response)
+                    return self._replay_graph(decision.response, ProcessTemplateSchema)
 
                 template = ProcessTemplate(
                     id=draft.id or uuid4(),
@@ -952,8 +1019,8 @@ class CommandService:
                 session.add(template)
                 self._materialize_process_template(session, template, draft)
                 session.flush()
-                result = ProcessTemplateSchema.model_validate(template)
-                response = result.model_dump(mode="json")
+                result = self._graph_result(template, ProcessTemplateSchema)
+                response = self._snapshot(result)
                 if decision is not None:
                     idempotency.complete(
                         decision, target_id=str(template.id), response=response
@@ -1022,7 +1089,7 @@ class CommandService:
                 )
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
-                    return ProcessTemplateSchema.model_validate(decision.response)
+                    return self._replay_graph(decision.response, ProcessTemplateSchema)
                 if template.status is not LifecycleStatus.MUTABLE:
                     raise CommandConflictError(
                         "Cannot update an active process template"
@@ -1055,8 +1122,8 @@ class CommandService:
                 self._clear_process_template(session, template)
                 self._materialize_process_template(session, template, draft)
                 session.flush()
-                result = ProcessTemplateSchema.model_validate(template)
-                response = result.model_dump(mode="json")
+                result = self._graph_result(template, ProcessTemplateSchema)
+                response = self._snapshot(result)
                 if decision is not None:
                     idempotency.complete(
                         decision, target_id=str(template.id), response=response
@@ -1113,15 +1180,15 @@ class CommandService:
                     assert decision.response is not None
                     from recap.schemas.resource import ResourceTemplateSchema
 
-                    return ResourceTemplateSchema.model_validate(decision.response)
+                    return self._replay_graph(decision.response, ResourceTemplateSchema)
                 template = self._materialize_resource_template(
                     session, namespace, draft
                 )
                 session.flush()
                 from recap.schemas.resource import ResourceTemplateSchema
 
-                result = ResourceTemplateSchema.model_validate(template)
-                response = result.model_dump(mode="json")
+                result = self._graph_result(template, ResourceTemplateSchema)
+                response = self._snapshot(result)
                 if decision is not None:
                     idempotency.complete(
                         decision, target_id=str(template.id), response=response
@@ -1193,7 +1260,7 @@ class CommandService:
                     assert decision.response is not None
                     from recap.schemas.resource import ResourceTemplateSchema
 
-                    return ResourceTemplateSchema.model_validate(decision.response)
+                    return self._replay_graph(decision.response, ResourceTemplateSchema)
                 if template.status is not LifecycleStatus.MUTABLE:
                     raise CommandConflictError(
                         "Cannot update an active resource template"
@@ -1232,8 +1299,8 @@ class CommandService:
                 session.refresh(template)
                 from recap.schemas.resource import ResourceTemplateSchema
 
-                result = ResourceTemplateSchema.model_validate(template)
-                response = result.model_dump(mode="json")
+                result = self._graph_result(template, ResourceTemplateSchema)
+                response = self._snapshot(result)
                 if decision is not None:
                     idempotency.complete(
                         decision, target_id=str(template.id), response=response
@@ -1662,6 +1729,10 @@ class CommandService:
 
     @staticmethod
     def _process_run_schema(run):
+        if _BATCH_RESULTS.get():
+            from recap.schemas.process import ProcessRunSchema
+
+            return CommandService._graph_result(run, ProcessRunSchema)
         from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
 
         return ProcessRunSchemaHydrator()._construct_process_run_schema(
@@ -1676,14 +1747,23 @@ class CommandService:
 
     @staticmethod
     def _serialize_run(result):
+        from recap.adapter.entity_records import EntityBatch
         from recap.adapter.transport import serialize_model
 
-        return serialize_model(result)
+        return (
+            CommandService._snapshot(result)
+            if isinstance(result, EntityBatch)
+            else serialize_model(result)
+        )
 
     @staticmethod
     def _replay_run(payload):
         from recap.commands.registry import _decode_process_run_response
 
+        if "entities" in payload:
+            from recap.schemas.process import ProcessRunSchema
+
+            return CommandService._replay_graph(payload, ProcessRunSchema)
         return _decode_process_run_response(deepcopy(payload))
 
     @staticmethod

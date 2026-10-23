@@ -109,13 +109,13 @@ def test_resource_parent_lifecycle_waits_for_child_data(client, monkeypatch):
     events = []
     backend = client.connection_state.backend
     writer = backend.writer
-    execute = writer.execute
+    execute = writer.execute_batch
 
     def recording_execute(command, context):
         events.append(type(command).__name__)
         return execute(command, context)
 
-    monkeypatch.setattr(writer, "execute", recording_execute)
+    monkeypatch.setattr(writer, "execute_batch", recording_execute)
     with parent:
         child.finalize()
         parent.finalize()

@@ -1,5 +1,7 @@
 from uuid import UUID
 
+from .command_responses import command_data
+
 
 def draft(labels=None):
     return {
@@ -47,22 +49,24 @@ def test_post_and_patch_process_template_routes(
     )
 
     assert created.status_code == 201
-    UUID(created.json()["id"])
+    UUID(command_data(created)["id"])
     assert (
-        created.json()["step_templates"]["collect"]["resource_slots"]["source"]["name"]
+        command_data(created)["step_templates"]["collect"]["resource_slots"]["source"][
+            "name"
+        ]
         == "sample"
     )
     assert created.headers["ETag"] == '"1"'
 
     updated = api_client.patch(
-        f"/api/v1/process-templates/{created.json()['id']}",
+        f"/api/v1/process-templates/{command_data(created)['id']}",
         headers=idempotency_headers(
             "template-2", **{"If-Match": created.headers["ETag"]}
         ),
         json=draft(["updated"]),
     )
     assert updated.status_code == 200
-    assert updated.json()["labels"] == ["updated"]
+    assert command_data(updated)["labels"] == ["updated"]
     assert updated.headers["ETag"] == '"2"'
 
 

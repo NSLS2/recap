@@ -284,6 +284,35 @@ class RESTAdapter:
         self, command: CommandModel, context, *, etag_override: str | None = None
     ) -> Any:
         """Submit command DTO using its canonical REST route."""
+        result = self.execute_batch(command, context, etag_override=etag_override)
+        from recap.adapter.entity_records import POLICIES_BY_KIND, EntityBatch
+
+        if isinstance(result, EntityBatch):
+            return BatchMaterializer(IdentityMap()).materialize(
+                POLICIES_BY_KIND[result.roots[0].kind].schema, result
+            )[0]
+        return result
+
+    def execute_batch(self, command: CommandModel, context, *, etag_override=None):
         registration = COMMAND_REGISTRY.by_command(command)
         result = self._execute_registered(command, context, etag_override=etag_override)
+        if isinstance(result.entity, dict) and "entities" in result.entity:
+            from recap.adapter.schema_registry import schema_for
+
+            envelope = FlatQueryResult.model_validate(result.entity)
+            expected = (
+                command.object_type
+                if registration.name == "set_lifecycle_status"
+                else registration.name.removeprefix("create_")
+                .removeprefix("update_")
+                .removeprefix("copy_")
+            )
+            if envelope.entity != expected:
+                raise RecapProtocolError("Command result schema does not match command")
+            batch = decode_query_batch(
+                schema_for(envelope.entity, envelope.projection), envelope
+            )
+            if len(batch.roots) != 1:
+                raise RecapProtocolError("Command result must contain one root")
+            return batch
         return registration.decode_response(result.entity, result.etag, command=command)

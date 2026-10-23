@@ -82,6 +82,20 @@ def _policy(request: Request):
 
 
 def _set_etag(response: Response, entity):
+    from recap.adapter.entity_records import EntityBatch
+    from recap.adapter.transport import encode_query_batch
+
+    if isinstance(entity, EntityBatch):
+        root = entity.roots[0]
+        record = next(
+            record
+            for record in entity.entities
+            if record.kind == root.kind and record.id == root.id
+        )
+        response.headers["ETag"] = f'"{record.revision}"'
+        return encode_query_batch(
+            entity, entity=root.kind, projection="full"
+        ).model_dump(mode="json")
     response.headers["ETag"] = f'"{entity.revision}"'
     return (
         serialize_model(entity)
@@ -180,7 +194,7 @@ def create_namespace(
     ],
 ) -> NamespaceSchema:
     command = registration.decode_command({"namespace_path": namespace_path}, {}, body)
-    result = CommandService(request.app.state.session_factory).execute(
+    result = CommandService(request.app.state.session_factory).execute_batch(
         command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
@@ -202,7 +216,7 @@ def update_namespace(
     command = registration.decode_command(
         {"namespace_id": namespace_id}, {"If-Match": if_match}, body
     )
-    result = CommandService(request.app.state.session_factory).execute(
+    result = CommandService(request.app.state.session_factory).execute_batch(
         command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
@@ -237,7 +251,7 @@ def list_child_namespaces(
 
 @router.post(
     "/process-templates/{namespace_path:path}",
-    response_model=ProcessTemplateSchema,
+    response_model=None,
     status_code=201,
 )
 def create_process_template(
@@ -252,13 +266,13 @@ def create_process_template(
     ],
 ) -> ProcessTemplateSchema:
     command = registration.decode_command({"namespace_path": namespace_path}, {}, body)
-    result = CommandService(request.app.state.session_factory).execute(
+    result = CommandService(request.app.state.session_factory).execute_batch(
         command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
 
 
-@router.patch("/process-templates/{template_id}", response_model=ProcessTemplateSchema)
+@router.patch("/process-templates/{template_id}", response_model=None)
 def update_process_template(
     template_id: UUID,
     body: ProcessTemplateDraft,
@@ -274,7 +288,7 @@ def update_process_template(
     command = registration.decode_command(
         {"template_id": template_id}, {"If-Match": if_match}, body
     )
-    result = CommandService(request.app.state.session_factory).execute(
+    result = CommandService(request.app.state.session_factory).execute_batch(
         command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
@@ -282,7 +296,7 @@ def update_process_template(
 
 @router.post(
     "/resource-templates/{namespace_path:path}",
-    response_model=ResourceTemplateSchema,
+    response_model=None,
     status_code=201,
 )
 def create_resource_template(
@@ -297,15 +311,13 @@ def create_resource_template(
     ],
 ) -> ResourceTemplateSchema:
     command = registration.decode_command({"namespace_path": namespace_path}, {}, body)
-    result = CommandService(request.app.state.session_factory).execute(
+    result = CommandService(request.app.state.session_factory).execute_batch(
         command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
 
 
-@router.patch(
-    "/resource-templates/{template_id}", response_model=ResourceTemplateSchema
-)
+@router.patch("/resource-templates/{template_id}", response_model=None)
 def update_resource_template(
     template_id: UUID,
     body: ResourceTemplateDraft,
@@ -321,7 +333,7 @@ def update_resource_template(
     command = registration.decode_command(
         {"template_id": template_id}, {"If-Match": if_match}, body
     )
-    result = CommandService(request.app.state.session_factory).execute(
+    result = CommandService(request.app.state.session_factory).execute_batch(
         command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
@@ -346,7 +358,7 @@ def copy_resource(
     command = registration.decode_command(
         {"source_resource_id": source_resource_id}, {}, body
     )
-    result = CommandService(request.app.state.session_factory).execute(
+    result = CommandService(request.app.state.session_factory).execute_batch(
         command,
         _context(request, actor, idempotency_key),
     )
@@ -366,7 +378,7 @@ def create_resource(
     ],
 ) -> ResourceSchema:
     command = registration.decode_command({"namespace_path": namespace_path}, {}, body)
-    result = CommandService(request.app.state.session_factory).execute(
+    result = CommandService(request.app.state.session_factory).execute_batch(
         command,
         _context(request, actor, idempotency_key),
     )
@@ -391,7 +403,7 @@ def update_resource(
         headers={"If-Match": if_match},
         body=body,
     )
-    result = CommandService(request.app.state.session_factory).execute(
+    result = CommandService(request.app.state.session_factory).execute_batch(
         command,
         _context(request, actor, idempotency_key),
     )
@@ -413,7 +425,7 @@ def create_process_run(
     ],
 ) -> ProcessRunSchema:
     command = registration.decode_command({"namespace_path": namespace_path}, {}, body)
-    result = CommandService(request.app.state.session_factory).execute(
+    result = CommandService(request.app.state.session_factory).execute_batch(
         command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
@@ -436,7 +448,7 @@ def copy_process_run(
     command = registration.decode_command(
         {"source_process_run_id": source_process_run_id}, {}, body
     )
-    result = CommandService(request.app.state.session_factory).execute(
+    result = CommandService(request.app.state.session_factory).execute_batch(
         command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
@@ -458,7 +470,7 @@ def update_process_run(
     command = registration.decode_command(
         {"process_run_id": process_run_id}, {"If-Match": if_match}, body
     )
-    result = CommandService(request.app.state.session_factory).execute(
+    result = CommandService(request.app.state.session_factory).execute_batch(
         command, _context(request, actor, idempotency_key)
     )
     return _set_etag(response, result)
@@ -483,7 +495,7 @@ def set_lifecycle_status(
         {"If-Match": if_match},
         body,
     )
-    result = CommandService(request.app.state.session_factory).execute(
+    result = CommandService(request.app.state.session_factory).execute_batch(
         command,
         _context(request, actor, idempotency_key),
     )

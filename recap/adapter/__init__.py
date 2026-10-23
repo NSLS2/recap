@@ -96,6 +96,19 @@ class WriteBackend(Protocol):
 
 
 @runtime_checkable
+class BatchWriteBackend(Protocol):
+    """Optional normalized graph command results."""
+
+    def execute_batch(
+        self,
+        command: CommandModel,
+        context: CommandContext,
+        *,
+        etag_override: str | None = None,
+    ) -> object: ...
+
+
+@runtime_checkable
 class NamespaceWriter(Protocol):
     def create_namespace(
         self,

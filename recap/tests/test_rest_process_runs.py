@@ -4,6 +4,8 @@ from fastapi.testclient import TestClient
 
 from recap.server.app import create_app
 
+from .command_responses import command_data
+
 
 def test_process_run_create_update_finalize_and_replay(tmp_path):
     with TestClient(create_app(tmp_path / "runs.db", api_key="secret")) as client:
@@ -51,7 +53,7 @@ def test_process_run_create_update_finalize_and_replay(tmp_path):
         body = {
             "name": "run-1",
             "description": "first",
-            "template_id": template.json()["id"],
+            "template_id": command_data(template)["id"],
             "steps": {"collect": {"parameters": {"settings": {"exposure": 2.5}}}},
         }
         created = client.post(
@@ -60,8 +62,8 @@ def test_process_run_create_update_finalize_and_replay(tmp_path):
             json=body,
         )
         assert created.status_code == 201, created.text
-        assert UUID(created.json()["id"])
-        assert "collect" in created.json()["steps"]
+        assert UUID(command_data(created)["id"])
+        assert "collect" in command_data(created)["steps"]
         assert created.headers["ETag"] == '"1"'
         assert (
             client.post(
@@ -73,7 +75,7 @@ def test_process_run_create_update_finalize_and_replay(tmp_path):
         )
 
         updated = client.patch(
-            f"/api/v1/process-runs/{created.json()['id']}",
+            f"/api/v1/process-runs/{command_data(created)['id']}",
             headers={**auth, "Idempotency-Key": "run-update", "If-Match": '"1"'},
             json={"description": "finished", "status": "ACTIVE"},
         )
@@ -82,12 +84,12 @@ def test_process_run_create_update_finalize_and_replay(tmp_path):
             updated.request.content == b'{"description":"finished","status":"ACTIVE"}'
         )
         assert "expected_revision" not in updated.request.content.decode()
-        assert updated.json()["description"] == "finished"
-        assert updated.json()["status"] == "ACTIVE"
+        assert command_data(updated)["description"] == "finished"
+        assert command_data(updated)["status"] == "ACTIVE"
         assert updated.headers["ETag"] == '"2"'
 
         empty = client.patch(
-            f"/api/v1/process-runs/{created.json()['id']}",
+            f"/api/v1/process-runs/{command_data(created)['id']}",
             headers={**auth, "Idempotency-Key": "empty-update", "If-Match": '"2"'},
             json={},
         )
@@ -115,13 +117,13 @@ def test_process_run_update_rejects_revision_in_json(tmp_path):
             json={
                 "name": "run",
                 "description": "initial",
-                "template_id": template.json()["id"],
+                "template_id": command_data(template)["id"],
                 "steps": {},
             },
         )
 
         response = client.patch(
-            f"/api/v1/process-runs/{created.json()['id']}",
+            f"/api/v1/process-runs/{command_data(created)['id']}",
             headers={**auth, "Idempotency-Key": "update", "If-Match": '"1"'},
             json={"description": "updated", "expected_revision": 1},
         )
@@ -146,7 +148,7 @@ def test_process_run_create_rolls_back_on_bad_parameter(tmp_path):
             json={
                 "name": "bad",
                 "description": "bad",
-                "template_id": template.json()["id"],
+                "template_id": command_data(template)["id"],
                 "steps": {"missing": {"parameters": {}}},
             },
         )
@@ -158,7 +160,7 @@ def test_process_run_create_rolls_back_on_bad_parameter(tmp_path):
                 json={
                     "name": "bad",
                     "description": "bad",
-                    "template_id": template.json()["id"],
+                    "template_id": command_data(template)["id"],
                     "steps": {},
                 },
             ).status_code
