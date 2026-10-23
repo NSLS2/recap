@@ -167,7 +167,7 @@ def test_service_dispatches_update_resource_via_registered_handler(monkeypatch):
         calls.append(kwargs)
         return result
 
-    monkeypatch.setattr(CommandService, "update_resource", handler)
+    monkeypatch.setattr(CommandService, "_update_resource", handler)
 
     returned = CommandService(None).execute(command, context=object())
 
@@ -563,7 +563,7 @@ def test_service_dispatches_process_run_via_registered_handler(monkeypatch):
         calls.append(kwargs)
         return result
 
-    monkeypatch.setattr(CommandService, "update_process_run", handler)
+    monkeypatch.setattr(CommandService, "_update_process_run", handler)
     assert CommandService(None).execute(command, context=object()) is result
     assert calls == [
         {

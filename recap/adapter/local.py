@@ -31,12 +31,10 @@ from recap.adapter import (
 )
 from recap.adapter.entity_batch import EntityBatch, EntityBatchCollector
 from recap.adapter.hydration_relations import index_children
-from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
 from recap.adapter.query_loaders import (
     preload_options,
     resolve_loader_options,
 )
-from recap.adapter.resource_construct import ResourceSchemaHydrator
 from recap.adapter.schema_registry import SCHEMA_REGISTRY
 from recap.authorization.query import AuthorizedQuery
 from recap.commands.models import (
@@ -102,30 +100,6 @@ SCHEMA_MODEL_MAPPING: dict[type[BaseModel], type[Base]] = {
     ResourceRef: Resource,
     ProcessTemplateSchema: ProcessTemplate,
 }
-
-
-def _set_template_load_flags(
-    value: BaseModel, schema: type[BaseModel], spec: QuerySpec
-) -> BaseModel:
-    relation_fields = {
-        ProcessTemplateSchema: {"step_templates", "resource_slots"},
-        ResourceTemplateSchema: {
-            "types",
-            "parent",
-            "children",
-            "attribute_group_templates",
-        },
-    }.get(schema)
-    if relation_fields is None:
-        return value
-    preloads = set(spec.preloads)
-    return value.set_loaded_relations(
-        {
-            relation: spec.load_mode == "eager" or relation in preloads
-            for relation in relation_fields
-        },
-        on_unloaded=spec.on_unloaded or "warn",
-    )
 
 
 def _coerce_field_value(field_name: str, column, value):
@@ -253,19 +227,16 @@ class LocalBackend(
         *,
         etag_override: str | None = None,
     ) -> object:
-        return self._execute_command(command, context, batch=False)
+        result = self.execute_batch(command, context, etag_override=etag_override)
+        return CommandService._model_result(result)
 
     def execute_batch(self, command, context, *, etag_override=None):
-        return self._execute_command(command, context, batch=True)
+        return self._execute_command(command, context)
 
-    def _execute_command(self, command, context, *, batch):
+    def _execute_command(self, command, context):
         try:
             service = CommandService(self._session_factory)
-            return (
-                service.execute_batch(command, context)
-                if batch
-                else service.execute(command, context)
-            )
+            return service.execute_batch(command, context)
         except AuthorizationDenied as error:
             if error.conceal:
                 raise RecapNotFoundError("Not found") from None
@@ -346,16 +317,16 @@ class LocalBackend(
             statement = statement.where(ProcessTemplate.id == id)
         if not name and not id:
             raise ValueError("name or id required to fetch ProcessTemplate")
-        if expand:
-            statement = statement.options(
-                chain_load(ProcessTemplate.step_templates),
-                chain_load(ProcessTemplate.resource_slots),
-            )
+        spec = QuerySpec(load_mode="eager" if expand else "none")
+        statement = statement.options(
+            *self._relationship_loaders(ProcessTemplateSchema, [], spec)
+        )
         with self._session_scope() as session:
             process_template = load_single(session, statement, label="ProcessTemplate")
-            if expand:
-                return ProcessTemplateSchema.model_validate(process_template)
-            return ProcessTemplateRef.model_validate(process_template)
+            batch = self._collect_query_rows(
+                session, [process_template], ProcessTemplateSchema, spec
+            )
+        return self._materialize_batch(ProcessTemplateSchema, batch)[0]
 
     def get_resource_template(
         self,
@@ -381,18 +352,16 @@ class LocalBackend(
             statement = statement.where(ResourceTemplate.id == id)
         if parent:
             statement = statement.where(ResourceTemplate.parent_id == parent.id)
-        if expand:
-            statement = statement.options(
-                chain_load(ResourceTemplate.types),
-                chain_load(ResourceTemplate.parent),
-                chain_load(ResourceTemplate.children),
-                chain_load(ResourceTemplate.attribute_group_templates),
-            )
+        spec = QuerySpec(load_mode="eager" if expand else "none")
+        statement = statement.options(
+            *self._relationship_loaders(ResourceTemplateSchema, [], spec)
+        )
         with self._session_scope() as session:
             template = load_single(session, statement, label="ResourceTemplate")
-            if expand:
-                return ResourceTemplateSchema.model_validate(template)
-            return ResourceTemplateRef.model_validate(template)
+            batch = self._collect_query_rows(
+                session, [template], ResourceTemplateSchema, spec
+            )
+        return self._materialize_batch(ResourceTemplateSchema, batch)[0]
 
     def find_resources_by_identity(
         self,
@@ -440,29 +409,13 @@ class LocalBackend(
                 ResourceTemplate.version == template_version,
             )
         )
+        spec = QuerySpec(load_mode="eager" if expand else "none")
+        if not expand:
+            stmt = stmt.options(*self._relationship_loaders(ResourceSchema, [], spec))
         with self._session_scope() as session:
             resource = load_single(session, stmt, label="Resource")
-
-            if expand:
-                # Fetch the whole subtree (root + all descendants) in one
-                # query via _load_resource_subtrees, then build the schema tree
-                # from that flat list. Hydrating from the pre-fetched list keeps
-                # the statement count bounded and independent of tree depth;
-                # walking Resource.children directly would instead lazy-load
-                # each level on demand (an N+1 that grows with depth).
-                root_ids = [resource.id]
-                flat = self._load_resource_subtrees(session, root_ids)
-                trees = ResourceSchemaHydrator().construct_tree(
-                    flat,
-                    root_ids,
-                    include_template=True,
-                    include_properties=True,
-                    full=True,
-                    on_unloaded="warn",
-                )
-                return trees[0]
-
-            return ResourceRef.model_validate(resource)
+            batch = self._collect_query_rows(session, [resource], ResourceSchema, spec)
+        return self._materialize_batch(ResourceSchema, batch)[0]
 
     def get_steps(self, process_run: ProcessRunSchema) -> list[StepSchema]:
         statement = (
@@ -478,8 +431,30 @@ class LocalBackend(
             )
         )
         with self._session_scope() as session:
-            steps = session.scalars(statement).all()
-            return [StepSchema.model_validate(step) for step in steps]
+            steps = list(session.scalars(statement).unique())
+            resource_ids = list(
+                dict.fromkeys(
+                    resource.id
+                    for step in steps
+                    for resource in step.resources.values()
+                )
+            )
+            children_map = index_children(
+                self._load_resource_subtrees(session, resource_ids)
+            )
+            batch = self._collect_batch(
+                steps,
+                {
+                    "template",
+                    "children",
+                    "parameters",
+                    "resources",
+                    "resource_overrides",
+                },
+                QuerySpec(load_mode="eager"),
+                children_map,
+            )
+        return self._materialize_batch(StepSchema, batch)
 
     def get_params(self, step_schema: StepSchema) -> type[BaseModel]:
         statement = select(Step).where(
@@ -489,46 +464,48 @@ class LocalBackend(
             step: Step | None = session.scalars(statement).one_or_none()
             if step is None:
                 raise RecapNotFoundError(f"Step not found: {step_schema.name}")
-            params: dict[str, tuple] = {
-                "step_name": (
-                    Literal[f"{step_schema.name}"],
-                    Field(default=step_schema.name),
-                ),
-                "step_id": (UUID, Field(default=step.id)),
-            }
-            for param in step.parameters.values():
-                template_key = tuple(
-                    (
-                        value_template.name,
-                        value_template.slug,
-                        value_template.value_type,
-                        value_template.metadata_json,
-                        value_template.unit,
-                    )
-                    for value_template in param.template.attribute_templates
+            batch = self._collect_batch([step], {"parameters"}, QuerySpec())
+        materialized = self._materialize_batch(StepSchema, batch)[0]
+        params: dict[str, tuple] = {
+            "step_name": (
+                Literal[f"{step_schema.name}"],
+                Field(default=step_schema.name),
+            ),
+            "step_id": (UUID, Field(default=materialized.id)),
+        }
+        groups = materialized.parameters
+        for param in groups.values():
+            template_key = tuple(
+                (
+                    value_template.name,
+                    value_template.slug,
+                    value_template.value_type,
+                    value_template.metadata,
+                    value_template.unit,
                 )
-                values_model = build_param_values_model(
-                    param.template.slug, template_key
-                )
-                raw_values = {
-                    value.template.name: {
-                        "value": value.value,
-                        "unit": value.unit,
-                    }
-                    for value in param._values.values()
-                }
-                params[param.template.slug] = (
-                    values_model,
-                    Field(
-                        default_factory=lambda vm=values_model,
-                        values=raw_values: vm.model_validate(values),
-                        alias=param.template.name,
-                    ),
-                )
-            model = create_model(
-                f"{step_schema.name}", **params, __base__=(AliasMixin, BaseModel)
+                for value_template in param.template.attribute_templates
             )
-            return model()
+            values_model = build_param_values_model(param.template.slug, template_key)
+            raw_values = {
+                field.alias or name: {
+                    "value": value.value,
+                    "unit": value.unit,
+                }
+                for name, field in type(param.values).model_fields.items()
+                if (value := param.values.__dict__.get(name)) is not None
+            }
+            params[param.template.slug] = (
+                values_model,
+                Field(
+                    default_factory=lambda vm=values_model,
+                    values=raw_values: vm.model_validate(values),
+                    alias=param.template.name,
+                ),
+            )
+        model = create_model(
+            f"{step_schema.name}", **params, __base__=(AliasMixin, BaseModel)
+        )
+        return model()
 
     def _coerce_value(self, pf, left_expr):
         # For int/float, SQLite stores JSON numbers as native numeric types,
@@ -795,14 +772,6 @@ class LocalBackend(
                     _add(resource)
         return root_ids
 
-    @staticmethod
-    def _build_children_map(
-        flat_resources: list[Resource],
-    ) -> dict[UUID, list[Resource]]:
-        """Build a ``parent_id -> [child]`` map from a flat resource list, so a
-        hydrator can assemble child trees without lazy-loading per node."""
-        return index_children(flat_resources)
-
     def _namespace_visibility(self, namespace_path: str) -> tuple[UUID, list[UUID]]:
         paths = namespace_ancestors(namespace_path)
         with self._session_scope() as session:
@@ -975,7 +944,9 @@ class LocalBackend(
     def query(
         self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
     ) -> list[SchemaT]:
-        return self._query(schema, spec, namespace_path, authorization=None)
+        return self._materialize_batch(
+            schema, self.query_batch(schema, spec, namespace_path=namespace_path)
+        )
 
     def query_authorized(
         self,
@@ -984,18 +955,16 @@ class LocalBackend(
         *,
         authorization: AuthorizedQuery,
     ) -> list[SchemaT]:
-        return self._query(
+        return self._materialize_batch(
             schema,
-            spec,
-            authorization.namespace_path,
-            authorization=authorization,
+            self.query_batch_authorized(schema, spec, authorization=authorization),
         )
 
     def query_batch(
         self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
     ) -> EntityBatch:
         """Collect normalized records directly while ORM rows remain attached."""
-        return self._query(schema, spec, namespace_path, authorization=None, batch=True)
+        return self._query(schema, spec, namespace_path, authorization=None)
 
     def query_batch_authorized(
         self, schema: type[SchemaT], spec: QuerySpec, *, authorization: AuthorizedQuery
@@ -1005,7 +974,6 @@ class LocalBackend(
             spec,
             authorization.namespace_path,
             authorization=authorization,
-            batch=True,
         )
 
     def _query(
@@ -1015,8 +983,7 @@ class LocalBackend(
         namespace_path: str,
         *,
         authorization: AuthorizedQuery | None,
-        batch: bool = False,
-    ) -> list[SchemaT] | EntityBatch:
+    ) -> EntityBatch:
         stmt = self._build_select(
             schema, spec, namespace_path, authorization=authorization
         )
@@ -1038,107 +1005,15 @@ class LocalBackend(
         stmt = self._paginate(stmt, spec)
 
         with self._session_scope() as session:
-            if batch:
-                return self._query_batch_rows(session, stmt, schema, spec)
-            if schema is ProcessRunSchema:
-                process_run_hydrator = ProcessRunSchemaHydrator()
-                include_step_parameters = (
-                    spec.load_mode == "eager" or "steps.parameters" in spec.preloads
-                )
-                include_resources = (
-                    spec.load_mode == "eager" or "resources" in spec.preloads
-                )
-                include_steps = (
-                    spec.load_mode == "eager"
-                    or "steps" in spec.preloads
-                    or include_step_parameters
-                    or include_resources
-                )
-                runs = list(session.scalars(stmt).unique())
-                children_map: dict[UUID, list[Resource]] | None = None
-                if include_resources:
-                    # Bulk-load the full subtree of every assigned resource
-                    # (run-level and step-level) in one recursive-CTE query, so
-                    # the hydrator can build each resource's child tree from the
-                    # flat result instead of lazy-loading per node (N+1).
-                    root_ids = self._assigned_resource_root_ids(runs)
-                    flat = self._load_resource_subtrees(session, root_ids)
-                    children_map = self._build_children_map(flat)
-                return process_run_hydrator.construct_many(
-                    runs,
-                    include_steps=include_steps,
-                    include_step_parameters=include_step_parameters,
-                    include_resources=include_resources,
-                    include_template=spec.load_mode == "eager"
-                    or "template" in spec.preloads,
-                    full=spec.load_mode == "eager",
-                    on_unloaded=spec.on_unloaded or "warn",
-                    children_map=children_map,
-                )
-            if schema is ResourceSchema:
-                resource_hydrator = ResourceSchemaHydrator()
-                include_template = (
-                    spec.load_mode == "eager" or "template" in spec.preloads
-                )
-                include_properties = (
-                    spec.load_mode == "eager" or "properties" in spec.preloads
-                )
-                include_children = (
-                    spec.load_mode == "eager" or "children" in spec.preloads
-                )
-                if include_children:
-                    # Bulk-load the whole subtree (roots + all descendants) in a
-                    # single recursive-CTE query, then hydrate from the flat
-                    # list. Avoids the per-node lazy load (N+1) that walking
-                    # ``Resource.children`` would trigger. Preserve root order.
-                    root_ids = list(session.scalars(stmt).unique())
-                    root_ids = [r.id for r in root_ids]
-                    flat = self._load_resource_subtrees(session, root_ids)
-                    return resource_hydrator.construct_tree(
-                        flat,
-                        root_ids,
-                        include_template=include_template,
-                        include_properties=include_properties,
-                        full=spec.load_mode == "eager",
-                        on_unloaded=spec.on_unloaded or "warn",
-                    )
-                return resource_hydrator.construct_many(
-                    list(session.scalars(stmt).unique()),
-                    include_template=include_template,
-                    include_properties=include_properties,
-                    include_children=include_children,
-                    full=spec.load_mode == "eager",
-                    on_unloaded=spec.on_unloaded or "warn",
-                )
-            if spec.load_mode != "eager" and not spec.preloads:
-                relation_fields = {
-                    ProcessTemplateSchema: {"step_templates", "resource_slots"},
-                    ResourceTemplateSchema: {
-                        "types",
-                        "parent",
-                        "children",
-                        "attribute_group_templates",
-                    },
-                }.get(schema, set())
-                return [
-                    _set_template_load_flags(
-                        schema.model_construct(
-                            **{
-                                name: value
-                                for name, value in obj.__dict__.items()
-                                if name in schema.model_fields
-                                and name not in relation_fields
-                            }
-                        ),
-                        schema,
-                        spec,
-                    )
-                    for obj in list(session.scalars(stmt).unique())
-                ]
-            return [
-                _set_template_load_flags(schema.model_validate(obj), schema, spec)
-                for obj in list(session.scalars(stmt).unique())
-            ]
+            return self._query_batch_rows(session, stmt, schema, spec)
+
+    @staticmethod
+    def _materialize_batch(schema: type[SchemaT], batch: EntityBatch) -> list[SchemaT]:
+        # Import lazily: client package initialization imports LocalBackend.
+        from recap.client.identity import IdentityMap
+        from recap.client.materialization import BatchMaterializer
+
+        return BatchMaterializer(IdentityMap()).materialize(schema, batch)
 
     @staticmethod
     def _paginate(stmt, spec):
@@ -1149,6 +1024,10 @@ class LocalBackend(
         return stmt
 
     def _query_batch_rows(self, session, stmt, schema, spec) -> EntityBatch:
+        rows = list(session.scalars(stmt).unique())
+        return self._collect_query_rows(session, rows, schema, spec)
+
+    def _collect_query_rows(self, session, rows, schema, spec) -> EntityBatch:
         requested = set(spec.preloads)
         full = spec.load_mode == "eager"
         # Existing resource hydrator exposes parent data only for eager reads;
@@ -1157,7 +1036,6 @@ class LocalBackend(
             requested.discard("parent")
         if full:
             requested.update(SCHEMA_REGISTRY.by_model(schema).loader_capabilities)
-        rows = list(session.scalars(stmt).unique())
         children_map = None
         if schema is ResourceSchema and "children" in requested:
             root_ids = [row.id for row in rows]
@@ -1177,7 +1055,19 @@ class LocalBackend(
                     session, self._assigned_resource_root_ids(rows)
                 )
                 children_map = index_children(flat)
-        return self._collect_batch(rows, requested, spec, children_map)
+        batch = self._collect_batch(rows, requested, spec, children_map)
+        if schema is ResourceTemplateSchema and "parent" not in requested:
+            self._mark_root_relation_unloaded(batch, "parent")
+        return batch
+
+    @staticmethod
+    def _mark_root_relation_unloaded(batch: EntityBatch, relation: str) -> None:
+        # Back-references may collect ancestor support without advertising an
+        # unrequested relationship on query roots.
+        roots = set(batch.roots)
+        for edge in batch.adjacency:
+            if edge.source in roots and edge.relation == relation:
+                edge.loaded = False
 
     @staticmethod
     def _collect_batch(rows, requested, spec, children_map=None) -> EntityBatch:

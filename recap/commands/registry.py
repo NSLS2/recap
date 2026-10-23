@@ -102,6 +102,11 @@ class CommandRegistration:
     ]
     decode_response: Callable[..., Any]
 
+    @property
+    def batch_service_handler(self) -> str:
+        """Private transaction handler, before public result materialization."""
+        return f"_{self.service_handler}"
+
 
 class CommandRegistry:
     def __init__(self, registrations: Collection[CommandRegistration]) -> None:
@@ -458,7 +463,9 @@ def _decode_process_run_response(
                     "resources": True,
                     "resource_overrides": True,
                 },
-                on_unloaded=(step.__pydantic_private__ or {}).get("_on_unloaded", "warn"),
+                on_unloaded=(step.__pydantic_private__ or {}).get(
+                    "_on_unloaded", "warn"
+                ),
             )
     return result
 

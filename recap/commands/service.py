@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from contextvars import ContextVar
 from copy import deepcopy
+from functools import wraps
+from inspect import signature
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
@@ -13,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload, sessionmaker
 
+from recap.adapter.entity_records import EntityBatch
 from recap.authorization.scopes import Scope
 from recap.client.permissions import DenialCode
 from recap.commands.audit import DurableAuditSink, record_failure_after_rollback
@@ -26,7 +28,6 @@ from recap.commands.idempotency import command_fingerprint
 from recap.commands.models import (
     CommandContext,
     CommandModel,
-    SetLifecycleStatus,
 )
 from recap.commands.registry import COMMAND_REGISTRY
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
@@ -55,6 +56,7 @@ from recap.schemas.attribute import AttributeTemplateValidator
 from recap.schemas.namespace import NamespaceSchema
 from recap.schemas.process import (
     ProcessRunCopyOptions,
+    ProcessRunSchema,
     ProcessTemplateSchema,
 )
 from recap.schemas.resource import (
@@ -69,7 +71,20 @@ from recap.utils.namespace import (
     parent_namespace_path,
 )
 
-_BATCH_RESULTS = ContextVar("recap_command_batch_results", default=False)
+
+def _model_result_adapter(handler, schema=None):
+    """Preserve direct service signatures while adapting committed results."""
+
+    @wraps(handler)
+    def model_result(self, *args, **kwargs):
+        return self._model_result(handler(self, *args, **kwargs))
+
+    if schema is not None:
+        model_result.__annotations__ = {**handler.__annotations__, "return": schema}
+        model_result.__signature__ = signature(handler).replace(
+            return_annotation=schema
+        )
+    return model_result
 
 
 class _CreateFingerprint(BaseModel):
@@ -166,8 +181,12 @@ class CommandService:
         self._session_factory = session_factory
 
     def execute(self, command: CommandModel, context: CommandContext):
+        return self._model_result(self.execute_batch(command, context))
+
+    def execute_batch(self, command: CommandModel, context: CommandContext):
+        """Execute one transaction and return its normalized committed result."""
         registration = COMMAND_REGISTRY.by_command(command)
-        handler = getattr(self, registration.service_handler)
+        handler = getattr(self, registration.batch_service_handler)
         return handler(
             context,
             **{
@@ -176,23 +195,28 @@ class CommandService:
             },
         )
 
-    def execute_batch(self, command: CommandModel, context: CommandContext):
-        """Use the same transaction and replay checks with normalized results."""
-        token = _BATCH_RESULTS.set(True)
-        try:
-            return self.execute(command, context)
-        finally:
-            _BATCH_RESULTS.reset(token)
+    @staticmethod
+    def _model_result(result):
+        from recap.adapter.entity_records import POLICIES_BY_KIND, EntityBatch
+        from recap.client.identity import IdentityMap
+        from recap.client.materialization import BatchMaterializer
+
+        if isinstance(result, EntityBatch):
+            if len(result.roots) != 1:
+                raise CommandValidationError("Command result must contain one root")
+            schema = POLICIES_BY_KIND[result.roots[0].kind].schema
+            return BatchMaterializer(IdentityMap()).materialize(schema, result)[0]
+        return result
 
     @staticmethod
     def _graph_result(row, schema):
-        if not _BATCH_RESULTS.get():
-            return schema.model_validate(row)
         from recap.adapter.entity_batch import EntityBatchCollector
         from recap.adapter.entity_records import POLICIES_BY_ORM
 
         collector = EntityBatchCollector(on_unloaded="silent")
         policy = POLICIES_BY_ORM[type(row)]
+        if policy.schema is not schema:
+            raise CommandValidationError("Command result schema does not match handler")
         requested = set(policy.relations)
         if policy.kind == "resource":
             # Match query/hydrator parent-loading semantics; command refreshes
@@ -217,17 +241,10 @@ class CommandService:
     @staticmethod
     def _replay_graph(payload, schema):
         from recap.adapter.transport import FlatQueryResult, decode_query_batch
-        from recap.client.identity import IdentityMap
-        from recap.client.materialization import BatchMaterializer
 
-        if "entities" in payload:
-            batch = decode_query_batch(schema, FlatQueryResult.model_validate(payload))
-            if _BATCH_RESULTS.get():
-                return batch
-            return BatchMaterializer(IdentityMap()).materialize(schema, batch)[0]
-        return schema.model_validate(payload)
+        return decode_query_batch(schema, FlatQueryResult.model_validate(payload))
 
-    def set_lifecycle_status(
+    def _set_lifecycle_status(
         self,
         context: CommandContext,
         *,
@@ -278,21 +295,10 @@ class CommandService:
                 )
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
-                    if "entities" in decision.response:
-                        from recap.adapter.entity_records import POLICIES_BY_KIND
+                    from recap.adapter.entity_records import POLICIES_BY_KIND
 
-                        return self._replay_graph(
-                            decision.response, POLICIES_BY_KIND[object_type].schema
-                        )
-                    return COMMAND_REGISTRY.by_type(SetLifecycleStatus).decode_response(
-                        decision.response,
-                        None,
-                        command=SetLifecycleStatus(
-                            object_type=object_type,
-                            object_id=object_id,
-                            expected_revision=expected_revision,
-                            status=status,
-                        ),
+                    return self._replay_graph(
+                        decision.response, POLICIES_BY_KIND[object_type].schema
                     )
                 validate_transition(obj.status, target_status)
                 if target_status is LifecycleStatus.ACTIVE:
@@ -311,13 +317,9 @@ class CommandService:
                 )
                 session.flush()
                 session.refresh(obj)
-                lifecycle_command = SetLifecycleStatus(
-                    object_type=object_type,
-                    object_id=object_id,
-                    expected_revision=expected_revision,
-                    status=status,
-                )
-                result = self._lifecycle_result(obj, object_type, lifecycle_command)
+                from recap.adapter.entity_records import POLICIES_BY_KIND
+
+                result = self._graph_result(obj, POLICIES_BY_KIND[object_type].schema)
                 if decision is not None:
                     idempotency.complete(
                         decision,
@@ -342,16 +344,7 @@ class CommandService:
             )
             raise
 
-    def _lifecycle_result(self, obj, object_type, command):
-        if _BATCH_RESULTS.get():
-            from recap.adapter.entity_records import POLICIES_BY_KIND
-
-            return self._graph_result(obj, POLICIES_BY_KIND[object_type].schema)
-        return COMMAND_REGISTRY.by_type(SetLifecycleStatus).decode_response(
-            obj, None, command=command
-        )
-
-    def create_resource(  # noqa: C901
+    def _create_resource(  # noqa: C901
         self,
         context: CommandContext,
         *,
@@ -362,7 +355,7 @@ class CommandService:
         parent_id: UUID | None = None,
         properties: dict[str, dict[str, object]] | None = None,
         children=(),
-    ) -> ResourceSchema:
+    ) -> EntityBatch:
         try:
             canonical_path = canonicalize_namespace_path(namespace_path)
         except ValueError as error:
@@ -451,7 +444,7 @@ class CommandService:
             )
             raise
 
-    def update_resource(  # noqa: C901
+    def _update_resource(  # noqa: C901
         self,
         context: CommandContext,
         *,
@@ -461,7 +454,7 @@ class CommandService:
         properties: dict[str, dict[str, object]] | None = None,
         in_place: bool = False,
         children=(),
-    ) -> ResourceSchema:
+    ) -> EntityBatch:
         if expected_revision < 1:
             raise CommandValidationError("Expected revision must be positive")
         if name is None and not properties and not children:
@@ -559,14 +552,14 @@ class CommandService:
             )
             raise
 
-    def copy_resource(  # noqa: C901
+    def _copy_resource(  # noqa: C901
         self,
         context: CommandContext,
         *,
         source_resource_id: UUID,
         destination_namespace_path: str,
         options: ResourceCopyOptions | None = None,
-    ) -> ResourceSchema:
+    ) -> EntityBatch:
         options = options or ResourceCopyOptions()
         try:
             destination_path = canonicalize_namespace_path(destination_namespace_path)
@@ -824,7 +817,7 @@ class CommandService:
                 else:
                     value.set_value(deepcopy(raw_value))
 
-    def create_namespace(
+    def _create_namespace(
         self,
         context: CommandContext,
         *,
@@ -895,7 +888,7 @@ class CommandService:
             self._emit_failure(context, "create_namespace", None, error)
             raise
 
-    def update_namespace(
+    def _update_namespace(
         self,
         context: CommandContext,
         *,
@@ -974,13 +967,13 @@ class CommandService:
             self._emit_failure(context, "update_namespace", str(namespace_id), error)
             raise
 
-    def create_process_template(
+    def _create_process_template(
         self,
         context: CommandContext,
         *,
         namespace_path: str,
         draft: ProcessTemplateDraft,
-    ) -> ProcessTemplateSchema:
+    ) -> EntityBatch:
         try:
             canonical_path = canonicalize_namespace_path(namespace_path)
         except ValueError as error:
@@ -1053,14 +1046,14 @@ class CommandService:
             )
             raise
 
-    def update_process_template(
+    def _update_process_template(
         self,
         context: CommandContext,
         *,
         template_id: UUID,
         expected_revision: int,
         draft: ProcessTemplateDraft,
-    ) -> ProcessTemplateSchema:
+    ) -> EntityBatch:
         if expected_revision < 1:
             raise CommandValidationError("Expected revision must be positive")
         fingerprint = command_fingerprint(
@@ -1146,7 +1139,7 @@ class CommandService:
             )
             raise
 
-    def create_resource_template(
+    def _create_resource_template(
         self,
         context: CommandContext,
         *,
@@ -1223,7 +1216,7 @@ class CommandService:
             )
             raise
 
-    def update_resource_template(
+    def _update_resource_template(
         self,
         context: CommandContext,
         *,
@@ -1323,7 +1316,7 @@ class CommandService:
             )
             raise
 
-    def create_process_run(
+    def _create_process_run(
         self, context: CommandContext, *, namespace_path: str, draft: ProcessRunDraft
     ):
         try:
@@ -1363,7 +1356,7 @@ class CommandService:
                     lambda _id: None,
                 )
                 if decision is not None and decision.replayed:
-                    return self._replay_run(decision.response)
+                    return self._replay_graph(decision.response, ProcessRunSchema)
                 run = ProcessRun(
                     id=draft.id or uuid4(),
                     namespace=namespace,
@@ -1379,13 +1372,13 @@ class CommandService:
                 session.flush()
                 session.expire_all()
                 run = session.get(ProcessRun, run.id)
-                result = self._process_run_schema(run)
+                result = self._graph_result(run, ProcessRunSchema)
                 if decision is not None:
                     idempotency = IdempotencyRepository(session)
                     idempotency.complete(
                         decision,
                         target_id=str(run.id),
-                        response=self._serialize_run(result),
+                        response=self._snapshot(result),
                     )
                 self._emit_success(
                     session,
@@ -1407,7 +1400,7 @@ class CommandService:
             )
             raise
 
-    def update_process_run(  # noqa: C901
+    def _update_process_run(  # noqa: C901
         self,
         context: CommandContext,
         *,
@@ -1464,7 +1457,7 @@ class CommandService:
                     lambda _id: None,
                 )
                 if decision is not None and decision.replayed:
-                    return self._replay_run(decision.response)
+                    return self._replay_graph(decision.response, ProcessRunSchema)
                 if (
                     description is None
                     and status is None
@@ -1530,12 +1523,12 @@ class CommandService:
                 session.expire_all()
                 run = session.get(ProcessRun, process_run_id)
                 session.refresh(run)
-                result = self._process_run_schema(run)
+                result = self._graph_result(run, ProcessRunSchema)
                 if decision is not None:
                     IdempotencyRepository(session).complete(
                         decision,
                         target_id=str(run.id),
-                        response=self._serialize_run(result),
+                        response=self._snapshot(result),
                     )
                 self._emit_success(
                     session,
@@ -1555,7 +1548,7 @@ class CommandService:
             )
             raise
 
-    def copy_process_run(  # noqa: C901
+    def _copy_process_run(  # noqa: C901
         self,
         context: CommandContext,
         *,
@@ -1601,7 +1594,7 @@ class CommandService:
                     lambda _id: None,
                 )
                 if decision is not None and decision.replayed:
-                    return self._replay_run(decision.response)
+                    return self._replay_graph(decision.response, ProcessRunSchema)
 
                 changes = options.changes
                 copied = ProcessRun(
@@ -1702,12 +1695,12 @@ class CommandService:
                 ]
                 self._apply_child_steps(session, copied, additions, context)
                 session.flush()
-                result = self._process_run_schema(copied)
+                result = self._graph_result(copied, ProcessRunSchema)
                 if decision is not None:
                     IdempotencyRepository(session).complete(
                         decision,
                         target_id=str(copied.id),
-                        response=self._serialize_run(result),
+                        response=self._snapshot(result),
                     )
                 self._emit_success(
                     session,
@@ -1727,44 +1720,23 @@ class CommandService:
             )
             raise
 
-    @staticmethod
-    def _process_run_schema(run):
-        if _BATCH_RESULTS.get():
-            from recap.schemas.process import ProcessRunSchema
-
-            return CommandService._graph_result(run, ProcessRunSchema)
-        from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
-
-        return ProcessRunSchemaHydrator()._construct_process_run_schema(
-            run,
-            include_steps=True,
-            include_step_parameters=True,
-            include_resources=True,
-            include_template=True,
-            full=True,
-            on_unloaded="silent",
-        )
-
-    @staticmethod
-    def _serialize_run(result):
-        from recap.adapter.entity_records import EntityBatch
-        from recap.adapter.transport import serialize_model
-
-        return (
-            CommandService._snapshot(result)
-            if isinstance(result, EntityBatch)
-            else serialize_model(result)
-        )
-
-    @staticmethod
-    def _replay_run(payload):
-        from recap.commands.registry import _decode_process_run_response
-
-        if "entities" in payload:
-            from recap.schemas.process import ProcessRunSchema
-
-            return CommandService._replay_graph(payload, ProcessRunSchema)
-        return _decode_process_run_response(deepcopy(payload))
+    create_resource = _model_result_adapter(_create_resource, ResourceSchema)
+    update_resource = _model_result_adapter(_update_resource, ResourceSchema)
+    copy_resource = _model_result_adapter(_copy_resource, ResourceSchema)
+    create_namespace = _model_result_adapter(_create_namespace)
+    update_namespace = _model_result_adapter(_update_namespace)
+    create_process_template = _model_result_adapter(
+        _create_process_template, ProcessTemplateSchema
+    )
+    update_process_template = _model_result_adapter(
+        _update_process_template, ProcessTemplateSchema
+    )
+    create_resource_template = _model_result_adapter(_create_resource_template)
+    update_resource_template = _model_result_adapter(_update_resource_template)
+    create_process_run = _model_result_adapter(_create_process_run)
+    update_process_run = _model_result_adapter(_update_process_run)
+    copy_process_run = _model_result_adapter(_copy_process_run)
+    set_lifecycle_status = _model_result_adapter(_set_lifecycle_status)
 
     @staticmethod
     def _apply_child_steps(session, run, additions, context):

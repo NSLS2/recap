@@ -53,19 +53,27 @@ def _walk_depth(resource):
 
 
 @pytest.mark.performance
-def test_get_resource_expand_is_depth_independent(client):
+@pytest.mark.parametrize("direct", [False, True])
+def test_get_resource_expand_is_depth_independent(client, direct):
     """``get_resource(expand=True)`` must issue a bounded, depth-independent
     number of SQL statements regardless of tree depth."""
     _make_template(client, "GetResPerfT")
     _make_chain(client, depth=3, template="GetResPerfT", prefix="three")
     _make_chain(client, depth=4, template="GetResPerfT", prefix="four")
 
+    def get_resource(name):
+        if direct:
+            return client.connection_state.backend.reader.get_resource(
+                client.namespace_context.id, name, "GetResPerfT", expand=True
+            )
+        return client.get_resource(name, "GetResPerfT", expand=True)
+
     with count_statements(client) as counter_3:
-        tree_3 = client.get_resource("three-0", "GetResPerfT", expand=True)
+        tree_3 = get_resource("three-0")
     n_three = counter_3["n"]
 
     with count_statements(client) as counter_4:
-        tree_4 = client.get_resource("four-0", "GetResPerfT", expand=True)
+        tree_4 = get_resource("four-0")
     n_four = counter_4["n"]
 
     # Correctness: the full depth must be hydrated.

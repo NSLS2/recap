@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 
 from recap.adapter.rest import RESTAdapter
 from recap.client import RecapClient
+from recap.commands.context import build_local_command_context
+from recap.commands.models import CreateResource, UpdateResource
 from recap.dsl.query import QuerySpec
 from recap.exceptions import (
     RecapAuthenticationError,
@@ -38,6 +40,37 @@ def seed_command_namespace(client):
     client.create_namespace("beamline/amx")
     scoped = client.namespace("beamline/amx")
     return scoped
+
+
+def test_direct_adapter_replays_original_snapshot_after_update(command_client):
+    from dataclasses import replace
+
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(
+        name="Replay sample", type_names=["sample"]
+    ) as builder:
+        builder.add_properties(
+            {"Measurements": [{"name": "Dose", "type": "int", "default": 1}]}
+        )
+    writer = scoped.connection_state.backend.writer
+    context = replace(build_local_command_context(), idempotency_key=str(uuid4()))
+    command = CreateResource(
+        namespace_path=scoped.namespace_path,
+        name="original",
+        template_id=builder.template.id,
+    )
+    original = writer.execute(command, context)
+    snapshot = original.model_dump(mode="json")
+    updated = writer.execute(
+        UpdateResource(
+            resource_id=original.id, expected_revision=original.revision, name="later"
+        ),
+        replace(context, idempotency_key=str(uuid4())),
+    )
+    assert updated.name == "later"
+    replay = writer.execute(command, context)
+    assert replay.model_dump(mode="json") == snapshot
+    assert replay is not original
 
 
 def test_overlapping_trees_and_assignments_preserve_generated_properties(

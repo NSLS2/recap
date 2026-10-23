@@ -17,11 +17,24 @@ from recap.adapter.local import LocalBackend
 from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
 from recap.adapter.resource_construct import ResourceSchemaHydrator
 from recap.adapter.schema_registry import SCHEMA_REGISTRY
+from recap.authorization.query import AuthorizedQuery
+from recap.authorization.scopes import Scope
+from recap.client.permissions import EffectivePermissions
 from recap.db.process import allow_in_place_edit
 from recap.db.step import Step
 from recap.dsl.query import QuerySpec
-from recap.schemas.process import ProcessRunSchema
-from recap.schemas.resource import ResourceSchema
+from recap.exceptions import RecapNotFoundError
+from recap.schemas.process import (
+    ProcessRunSchema,
+    ProcessTemplateRef,
+    ProcessTemplateSchema,
+)
+from recap.schemas.resource import (
+    ResourceRef,
+    ResourceSchema,
+    ResourceTemplateRef,
+    ResourceTemplateSchema,
+)
 
 from .conftest import count_statements
 from .test_hydration_cache import _seed_process_template, _seed_resource_graph
@@ -167,6 +180,193 @@ def test_local_batch_query_is_direct_and_preserves_requested_scope(db_session):
     assert not any(edge.relation == "properties" for edge in batch.adjacency)
 
 
+@pytest.mark.parametrize("authorized", [False, True])
+def test_direct_local_query_materializes_batch_entry_point(db_session, authorized):
+    parent, child, _, _ = _seed_resource_graph(db_session)
+    parent_id, child_id, path = parent.id, child.id, parent.namespace.path
+    db_session.commit()
+    backend = LocalBackend(sessionmaker(bind=db_session.get_bind()))
+    spec = QuerySpec(filters={"id": parent_id}, load_mode="eager", include_mutable=True)
+    authorization = AuthorizedQuery(
+        namespace_path=path,
+        permissions=EffectivePermissions(
+            identities=(),
+            snapshot_generation=None,
+            effective_scopes=frozenset({Scope.RESOURCE_READ, Scope.RESOURCE_WRITE}),
+            matched_namespace_paths=(path,),
+            grants=(),
+        ),
+    )
+    entry = "query_batch_authorized" if authorized else "query_batch"
+    with patch.object(backend, entry, wraps=getattr(backend, entry)) as collect:
+        if authorized:
+            models = backend.query_authorized(
+                ResourceSchema, spec, authorization=authorization
+            )
+        else:
+            models = backend.query(ResourceSchema, spec, namespace_path=path)
+    collect.assert_called_once()
+    assert models[0].children["child"].id == child_id
+    assert models[0].properties.measurements.values.dose.value == 1
+    assert models[0].is_loaded("children")
+    again = backend.query(ResourceSchema, spec, namespace_path=path)[0]
+    assert again is not models[0]
+
+
+@pytest.mark.parametrize("expand", [False, True])
+@pytest.mark.parametrize("kind", ["resource", "resource_template", "process_template"])
+def test_direct_getters_collect_records_and_preserve_return_types(
+    db_session, kind, expand
+):
+    parent, _, template, _ = _seed_resource_graph(db_session)
+    process_template, _ = _seed_process_template(db_session)
+    namespace_id, name, template_name, version = (
+        parent.namespace_id,
+        parent.name,
+        template.name,
+        template.version,
+    )
+    template_id = template.id
+    process_namespace, process_id = process_template.namespace_id, process_template.id
+    process_version = process_template.version
+    db_session.commit()
+    backend = LocalBackend(sessionmaker(bind=db_session.get_bind()))
+    with patch.object(
+        EntityBatchCollector,
+        "collect",
+        autospec=True,
+        side_effect=EntityBatchCollector.collect,
+    ) as collect:
+        if kind == "resource":
+            result = backend.get_resource(
+                namespace_id, name, template_name, version, expand=expand
+            )
+            expected = ResourceSchema if expand else ResourceRef
+        elif kind == "resource_template":
+            result = backend.get_resource_template(
+                namespace_id, None, id=str(template_id), expand=expand
+            )
+            expected = ResourceTemplateSchema if expand else ResourceTemplateRef
+        else:
+            result = backend.get_process_template(
+                process_namespace,
+                None,
+                process_version,
+                id=str(process_id),
+                expand=expand,
+            )
+            expected = ProcessTemplateSchema if expand else ProcessTemplateRef
+    collect.assert_called_once()
+    assert type(result) is expected
+    if expand and kind == "resource":
+        assert result.properties.measurements.values.dose.value == 1
+        assert "child" in result.children
+    if expand and kind == "process_template":
+        assert "Collect" in result.step_templates
+
+
+def test_direct_step_and_parameter_getters_materialize_records(db_session):
+    run = _seed_run_with_resource_chain(db_session, name="direct-getters", depth=2)
+    run_id, path = run.id, run.namespace.path
+    backend = LocalBackend(sessionmaker(bind=db_session.get_bind()))
+    model = backend.query_batch(
+        ProcessRunSchema, QuerySpec(filters={"id": run_id}), namespace_path=path
+    )
+    from recap.client.identity import IdentityMap
+    from recap.client.materialization import BatchMaterializer
+
+    run_schema = BatchMaterializer(IdentityMap()).materialize(ProcessRunSchema, model)[
+        0
+    ]
+    with patch.object(
+        EntityBatchCollector,
+        "collect",
+        autospec=True,
+        side_effect=EntityBatchCollector.collect,
+    ) as collect:
+        steps = backend.get_steps(run_schema)
+    collect.assert_called_once()
+    assert len(steps) == 1
+    step = steps[0]
+    assert step.resources["input"].name == "direct-getters-0"
+    assert (
+        next(iter(type(step.parameters).model_fields.values())).alias
+        == "Parameters-direct-getters"
+    )
+    with patch.object(
+        EntityBatchCollector,
+        "collect",
+        autospec=True,
+        side_effect=EntityBatchCollector.collect,
+    ) as collect:
+        params = backend.get_params(step)
+    collect.assert_called_once()
+    assert params.step_id == step.id
+    assert params.step_name == step.name
+    group = next(
+        value
+        for key, value in params.__dict__.items()
+        if key not in {"step_id", "step_name"}
+    )
+    assert group.dwell.value == 1
+    missing_step = step.model_copy(update={"id": uuid4()})
+    with pytest.raises(RecapNotFoundError, match="Step not found"):
+        backend.get_params(missing_step)
+
+
+def test_direct_getters_preserve_selection_errors_and_parent_filter(db_session):
+    parent, child, template, child_template = _seed_resource_graph(db_session)
+    namespace_id, template_id, child_id = (
+        parent.namespace_id,
+        template.id,
+        child_template.id,
+    )
+    version, name = template.version, template.name
+    db_session.commit()
+    backend = LocalBackend(sessionmaker(bind=db_session.get_bind()))
+    parent_ref = backend.get_resource_template(namespace_id, None, id=template_id)
+    assert (
+        backend.get_resource_template(namespace_id, "child", parent=parent_ref).id
+        == child_id
+    )
+    with pytest.raises(LookupError, match="no rows matched"):
+        backend.get_resource_template(namespace_id, name, version="missing")
+    with pytest.raises(LookupError, match="no rows matched"):
+        backend.get_resource(namespace_id, "missing", name, version)
+    with pytest.raises(ValueError, match="name or id required"):
+        backend.get_resource_template(namespace_id, None)
+    # ORM identity lookup remains a database/domain operation.
+    found = backend.find_resources_by_identity(
+        namespace_id, parent.name, None, template_id
+    )
+    from recap.db.resource import Resource
+
+    assert len(found) == 1
+    assert isinstance(found[0], Resource)
+    with pytest.raises(LookupError, match="no rows matched"):
+        backend.get_resource_template(
+            namespace_id, "child", parent=parent_ref.model_copy(update={"id": uuid4()})
+        )
+
+
+def test_template_child_backreferences_do_not_expand_root_load_state(db_session):
+    parent, _, template, _ = _seed_resource_graph(db_session)
+    template_id, path = template.id, parent.namespace.path
+    db_session.commit()
+    backend = LocalBackend(sessionmaker(bind=db_session.get_bind()))
+    batch = backend.query_batch(
+        ResourceTemplateSchema,
+        QuerySpec(filters={"id": template_id}, preloads=("children",)),
+        namespace_path=path,
+    )
+    root_parent = next(
+        edge
+        for edge in batch.adjacency
+        if edge.source.id == template_id and edge.relation == "parent"
+    )
+    assert not root_parent.loaded
+
+
 def test_registry_exposes_matching_record_policies():
     for key in list(SCHEMA_REGISTRY.keys()):
         registration = SCHEMA_REGISTRY.by_key(key)
@@ -175,7 +375,10 @@ def test_registry_exposes_matching_record_policies():
 
 
 @pytest.mark.performance
-def test_batch_resource_subtrees_have_depth_independent_sql_budget(db_session):
+@pytest.mark.parametrize("model_results", [False, True])
+def test_batch_resource_subtrees_have_depth_independent_sql_budget(
+    db_session, model_results
+):
     run3 = _seed_run_with_resource_chain(db_session, name="batch-three", depth=3)
     run4 = _seed_run_with_resource_chain(db_session, name="batch-four", depth=4)
     backend = LocalBackend(sessionmaker(bind=db_session.get_bind()))
@@ -195,7 +398,7 @@ def test_batch_resource_subtrees_have_depth_independent_sql_budget(db_session):
             ),
             count_statements(db_session.get_bind()) as counter,
         ):
-            batch = backend.query_batch(
+            result = (backend.query if model_results else backend.query_batch)(
                 ProcessRunSchema,
                 QuerySpec(
                     filters={"id": run_id}, preloads=("resources", "steps.parameters")
@@ -203,6 +406,16 @@ def test_batch_resource_subtrees_have_depth_independent_sql_budget(db_session):
                 namespace_path=path,
             )
         counts.append(counter["n"])
+        if model_results:
+            assert len(result) == 1
+            from .test_process_run_resource_tree_perf import _walk_depth
+
+            assert (
+                _walk_depth(next(iter(result[0].assigned_resources.values())).resource)
+                == depth
+            )
+            continue
+        batch = result
         assert (
             len([record for record in batch.entities if record.kind == "resource"])
             == depth

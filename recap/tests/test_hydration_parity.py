@@ -1,5 +1,7 @@
 from uuid import uuid4
 
+import pytest
+
 from recap.adapter.entity_hydration import EntityHydrationContext
 from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
 from recap.adapter.resource_construct import ResourceSchemaHydrator
@@ -9,6 +11,9 @@ from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate
 from recap.db.resource import Resource, ResourceTemplate, ResourceType
 from recap.db.step import StepTemplate
+from recap.dsl.query import FieldOrdering, QuerySpec
+from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
+from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
 
 
 def _seed_metadata_graph(db_session):
@@ -123,3 +128,45 @@ def test_shared_context_reuses_resource_across_direct_and_embedded_paths(db_sess
     assert embedded_resource is direct
     assert embedded_resource.is_loaded("children")
     assert embedded_resource.is_loaded("properties")
+
+
+@pytest.mark.parametrize(
+    "schema,preloads",
+    [
+        (ResourceSchema, ("properties", "children")),
+        (ResourceTemplateSchema, ("attribute_group_templates", "children")),
+        (ProcessRunSchema, ("steps.parameters", "resources")),
+        (ProcessTemplateSchema, ("step_templates", "resource_slots")),
+    ],
+)
+@pytest.mark.parametrize("mode", ["none", "included", "eager", "empty"])
+def test_direct_adapter_and_client_read_semantics_match(
+    read_client, schema, preloads, mode
+):
+    backend = read_client.connection_state.backend
+    spec = QuerySpec(
+        filters={"id": uuid4()} if mode == "empty" else {},
+        preloads=preloads if mode == "included" else (),
+        load_mode="eager" if mode == "eager" else "none",
+        on_unloaded="raise",
+        orderings=(FieldOrdering(field="name", direction="asc"),),
+        limit=1,
+        offset=0,
+    )
+    direct = backend.reader.query(
+        schema, spec, namespace_path=read_client.namespace_path
+    )
+    canonical = backend.query(schema, spec, namespace_path=read_client.namespace_path)
+    assert [model.model_dump(mode="json") for model in direct] == [
+        model.model_dump(mode="json") for model in canonical
+    ]
+    if mode == "empty":
+        assert direct == []
+        return
+    assert len(direct) == 1
+    for relation in schema._relation_fields:
+        assert direct[0].is_loaded(relation) == canonical[0].is_loaded(relation)
+    if mode == "none":
+        relation = next(iter(schema._relation_fields))
+        with pytest.raises(RuntimeError, match="not loaded"):
+            getattr(direct[0], relation)
