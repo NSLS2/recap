@@ -12,7 +12,7 @@ from json_merge_patch import merge
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import joinedload, sessionmaker
+from sqlalchemy.orm import joinedload, object_session, sessionmaker
 
 from recap.adapter.entity_records import EntityBatch
 from recap.authorization.scopes import Scope
@@ -210,10 +210,9 @@ class CommandService:
 
     @staticmethod
     def _graph_result(row, schema):
-        from recap.adapter.entity_batch import EntityBatchCollector
+        from recap.adapter.entity_loading import prepare_batch_graph
         from recap.adapter.entity_records import POLICIES_BY_ORM
 
-        collector = EntityBatchCollector(on_unloaded="silent")
         policy = POLICIES_BY_ORM[type(row)]
         if policy.schema is not schema:
             raise CommandValidationError("Command result schema does not match handler")
@@ -224,8 +223,10 @@ class CommandService:
             requested.discard("parent")
         if policy.kind == "process_run":
             requested = {"template", "steps", "steps.parameters", "resources"}
-        collector.add_root(row, requested)
-        return collector.collect()
+        session = object_session(row)
+        if session is None:
+            raise CommandValidationError("Command result is not attached to a session")
+        return prepare_batch_graph(session, [row], schema, requested, "silent")
 
     @staticmethod
     def _snapshot(result):

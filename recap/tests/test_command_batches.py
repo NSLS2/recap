@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import datetime
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -8,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from recap.adapter.entity_records import EntityBatch
 from recap.commands.context import build_local_command_context
-from recap.commands.errors import CommandValidationError
+from recap.commands.errors import CommandConflictError, CommandValidationError
 from recap.commands.models import (
     CreateProcessRun,
     CreateResource,
@@ -18,12 +19,14 @@ from recap.commands.models import (
 )
 from recap.commands.service import CommandService
 from recap.db.idempotency import IdempotencyRecord
+from recap.db.process import ProcessRun
 from recap.db.resource import Resource
 from recap.dsl.drafts import ProcessRunDraft
 from recap.schemas.process import ProcessRunSchema
 from recap.schemas.resource import ResourceSchema
+from scripts.profile_bulk_loading import capture_sql
 
-from .entity_fixtures import _seed_resource_graph
+from .entity_fixtures import _seed_process_template, _seed_resource_graph
 from .test_process_run_resource_tree_perf import _seed_run_with_resource_chain
 
 
@@ -177,8 +180,9 @@ def test_lifecycle_execution_and_replay_have_typed_single_batch_root(db_session,
     assert replay.status.value == "ARCHIVED"
 
 
+@pytest.mark.parametrize("failure_phase", ["snapshot", "preparation"])
 def test_result_collection_failure_rolls_back_write_and_replay_claim(
-    blank_database_path, copy_database, tmp_path
+    blank_database_path, copy_database, tmp_path, failure_phase
 ):
     database = copy_database(blank_database_path, tmp_path / "rollback.db")
     engine = create_engine(f"sqlite:///{database}")
@@ -191,12 +195,20 @@ def test_result_collection_failure_rolls_back_write_and_replay_claim(
     command = CreateResource(
         namespace_path=path, name="rolled-back-result", template_id=template_id
     )
-    with (
+    failure = (
         patch.object(
             service,
             "_graph_result",
             side_effect=CommandValidationError("Invalid result"),
-        ),
+        )
+        if failure_phase == "snapshot"
+        else patch(
+            "recap.adapter.entity_loading.prepare_batch_graph",
+            side_effect=CommandValidationError("Invalid result"),
+        )
+    )
+    with (
+        failure,
         pytest.raises(CommandValidationError, match="Invalid result"),
     ):
         service.execute(command, context)
@@ -216,3 +228,93 @@ def test_result_collection_failure_rolls_back_write_and_replay_claim(
     created = service.execute(command, context)
     assert created.name == command.name
     engine.dispose()
+
+
+@pytest.mark.parametrize("kind", ["resource", "process_run"])
+def test_prepared_command_snapshots_are_fresh_and_replay_without_graph_reads(
+    blank_database_path, copy_database, tmp_path, kind
+):
+    database = copy_database(blank_database_path, tmp_path / "fresh-snapshot.db")
+    engine = create_engine(f"sqlite:///{database}")
+    factory = sessionmaker(bind=engine)
+    try:
+        with factory.begin() as session:
+            if kind == "resource":
+                row, _, _, _ = _seed_resource_graph(session)
+            else:
+                template, _ = _seed_process_template(session)
+                row = ProcessRun(
+                    name="fresh-run",
+                    description="Before",
+                    template=template,
+                    namespace=template.namespace,
+                )
+                session.add(row)
+            row.modified_date = datetime(2000, 1, 1)
+            session.flush()
+            object_id = row.id
+        value = {
+            "value": 17,
+            "unit": "s",
+            "metadata_json": {"source": ["updated", "updated"]},
+        }
+        if kind == "resource":
+            command = UpdateResource(
+                resource_id=object_id,
+                expected_revision=1,
+                name="After",
+                properties={"Measurements": {"dose": value}},
+            )
+            later = UpdateResource(
+                resource_id=object_id, expected_revision=2, name="Later"
+            )
+            model = Resource
+        else:
+            command = UpdateProcessRun(
+                process_run_id=object_id,
+                expected_revision=1,
+                description="After",
+                steps={"Collect": {"parameters": {"Exposure": {"dwell": value}}}},
+            )
+            later = UpdateProcessRun(
+                process_run_id=object_id, expected_revision=2, description="Later"
+            )
+            model = ProcessRun
+        service = CommandService(factory)
+        context = replace(build_local_command_context(), idempotency_key=str(uuid4()))
+        with capture_sql(engine) as profile:
+            first = service.execute_batch(command, context)
+        record = next(
+            record
+            for record in first.entities
+            if record.id == object_id and record.kind == kind
+        )
+        assert record.revision == 2
+        assert record.fields["name" if kind == "resource" else "description"] == "After"
+        assert record.fields["modified_date"] > datetime(2000, 1, 1)
+        assert any(
+            record.kind == "attribute_value"
+            and record.fields["value"] == 17
+            and record.fields["unit"] == "s"
+            and record.fields["metadata_json"] == value["metadata_json"]
+            for record in first.entities
+        )
+        with factory() as session:
+            stored = session.get(model, object_id)
+            assert stored.revision == record.revision
+            assert stored.modified_date == record.fields["modified_date"]
+        assert profile.sql_by_phase["collection"] == 0
+        service.execute_batch(later, replace(context, idempotency_key=str(uuid4())))
+        with patch.object(
+            service, "_graph_result", side_effect=AssertionError("Replay graph read")
+        ):
+            replay = service.execute_batch(command, context)
+        assert replay.model_dump(mode="json") == first.model_dump(mode="json")
+        with pytest.raises(CommandConflictError):
+            service.execute_batch(
+                command, replace(context, idempotency_key=str(uuid4()))
+            )
+        with factory() as session:
+            assert session.get(model, object_id).revision == 3
+    finally:
+        engine.dispose()

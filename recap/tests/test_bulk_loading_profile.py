@@ -15,6 +15,7 @@ from recap.adapter.local import LocalBackend
 from recap.adapter.query_loaders import resolve_loader_options
 from recap.client.identity import IdentityMap
 from recap.client.materialization import BatchMaterializer
+from recap.commands.service import CommandService
 from recap.db.process import ProcessRun
 from recap.db.resource import Resource, ResourceTemplate
 from recap.dsl.query import Field, QuerySpec
@@ -526,16 +527,68 @@ def test_prepared_graph_matches_original_relation_traversal(loaded_plate, kind):
 
 @pytest.mark.parametrize("root", ["plate", "well", "run"])
 @pytest.mark.performance
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Command snapshots collect unprepared ORM graphs",
-)
 def test_snapshot_collection_issues_no_sql(loaded_plate, root):
     factory, graph = loaded_plate
     kind = "process_run" if root == "run" else "resource"
     _, profile = read_graph(factory, graph, root, kind, (), True)
     assert profile.sql_by_phase["collection"] == 0
+    assert profile.total_sql <= (50 if root == "run" else 20), profile.report()
+
+
+@pytest.mark.parametrize("root", ["plate", "well", "run"])
+def test_expired_snapshots_preserve_updated_scalars_values_and_units(
+    loaded_plate, root
+):
+    factory, graph = loaded_plate
+    model = ProcessRun if root == "run" else Resource
+    schema = ProcessRunSchema if root == "run" else ResourceSchema
+    object_id = graph.well_ids[0] if root == "well" else getattr(graph, f"{root}_id")
+    with factory() as session:
+        row = session.get(model, object_id)
+        CommandService._graph_result(row, schema)
+        value = (
+            session.get(Resource, graph.well_ids[0])
+            .properties["Measurements"]
+            ._values["Mass"]
+        )
+        value.value = 13.5
+        value.unit = "g"
+        value.metadata_json = {"source": ["updated", "updated"]}
+        if root == "run":
+            row.description = "Updated before expiry"
+        else:
+            row.name = "Updated before expiry"
+        row.revision += 1
+        session.flush()
+        revision, modified_date = row.revision, row.modified_date
+        with capture_sql(factory.kw["bind"]) as profile:
+            session.expire_all()
+            batch = CommandService._graph_result(row, schema)
+        record = next(
+            record
+            for record in batch.entities
+            if record.id == object_id and record.kind == batch.roots[0].kind
+        )
+        assert record.revision == revision
+        assert record.fields["modified_date"] == modified_date
+        assert (
+            record.fields["description" if root == "run" else "name"]
+            == "Updated before expiry"
+        )
+        assert any(
+            record.kind == "attribute_value"
+            and record.fields["value"] == 13.5
+            and record.fields["unit"] == "g"
+            and record.fields["metadata_json"] == {"source": ["updated", "updated"]}
+            for record in batch.entities
+        )
+        if root != "run":
+            assert not any(
+                edge.source == batch.roots[0] and edge.relation == "parent"
+                for edge in batch.adjacency
+            )
+        assert not profile.lazy_relationships, profile.lazy_relationships
+        assert profile.sql_by_phase["collection"] == 0
 
 
 @pytest.mark.parametrize("snapshot", [False, True], ids=["query", "snapshot"])
