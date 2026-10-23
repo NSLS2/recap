@@ -126,7 +126,33 @@ class BatchMaterializer:
                         f"Invalid relationship target: {edge.relation}"
                     )
             edges[key] = edge
+        self._validate_required_relations(records, edges)
         return records, edges
+
+    def _validate_required_relations(self, records, edges):
+        for ref in records:
+            policy = POLICIES_BY_KIND[ref.kind]
+            schema = policy.schema
+            if schema is None:
+                continue
+            current = self.identity_map.get((ref.kind, ref.id))
+            for name in policy.relations:
+                field = schema.model_fields.get(name)
+                # Persisted aggregates need template support even though draft
+                # schemas allow an absent template during builder construction.
+                required = field is not None and (
+                    field.is_required() or name == "template"
+                )
+                if not required:
+                    continue
+                edge = edges.get((ref, name))
+                cached = current is not None and name in current.__dict__
+                if (edge is None and not cached) or (
+                    isinstance(edge, SingleAdjacency) and edge.target is None
+                ):
+                    raise RecapProtocolError(
+                        f"Missing required {ref.kind} relationship: {name}"
+                    )
 
     def _fields(self, record):
         policy = POLICIES_BY_KIND[record.kind]
@@ -149,6 +175,21 @@ class BatchMaterializer:
             )
         if isinstance(record, RevisionedRecord):
             fields["revision"] = record.revision
+        current = self.identity_map.get((record.kind, record.id))
+        available = fields.keys() | (
+            current.__dict__.keys() if current is not None else set()
+        )
+        missing = {
+            name
+            for name, field in schema.model_fields.items()
+            if field.is_required()
+            and name not in policy.relations
+            and name not in available
+        }
+        if missing:
+            raise RecapProtocolError(
+                f"Missing required {record.kind} fields: {sorted(missing)}"
+            )
         return fields
 
     def _materialize(self, schema, batch):
@@ -334,6 +375,7 @@ class BatchMaterializer:
                     else [templates[target] for target in edge.targets],
                 )
         validated_values = {}
+        cached_groups = self._cached_groups(edges)
         for (ref, relation), edge in edges.items():
             if relation != "values":
                 continue
@@ -341,24 +383,60 @@ class BatchMaterializer:
             if template_edge is None or template_edge.target not in groups:
                 raise RecapProtocolError("Attribute group is missing its template")
             template = groups[template_edge.target]
+            unknown = edge.targets.keys() - {
+                attribute.name for attribute in template.attribute_templates
+            }
+            if unknown:
+                raise RecapProtocolError(f"Unknown attribute names: {sorted(unknown)}")
             value_type = attribute_values_model(template)
-            payload = {}
-            for attribute in template.attribute_templates:
-                target = edge.targets.get(attribute.name)
-                data = (
-                    records[target].fields
-                    if target is not None
-                    else {"value": None, "unit": attribute.unit, "metadata_json": {}}
-                )
-                if attribute.value_type == "enum":
-                    validate_enum_value(
-                        data.get("value"), attribute.metadata, name=attribute.name
-                    )
-                payload[attribute.slug] = {
-                    name: data.get(name) for name in ("value", "unit", "metadata_json")
-                }
+            payload = self._value_payload(
+                template, edge, records, cached_groups.get(ref)
+            )
             validated_values[ref] = value_type.model_validate(payload)
         return validated_values
+
+    def _cached_groups(self, edges):
+        groups = {}
+        for (source, relation), edge in edges.items():
+            if relation not in {"properties", "parameters"}:
+                continue
+            owner = self.identity_map.get((source.kind, source.id))
+            if owner is None:
+                continue
+            current = _items(owner.__dict__.get(relation))
+            for name, target in edge.targets.items():
+                group = current.get(name)
+                if group is None:
+                    group = next(
+                        (item for item in current.values() if item.id == target.id),
+                        None,
+                    )
+                if group is not None and group.id == target.id:
+                    groups[target] = group
+        return groups
+
+    @staticmethod
+    def _value_payload(template, edge, records, current):
+        existing = _items(current.__dict__.get("values")) if current is not None else {}
+        payload = {}
+        for attribute in template.attribute_templates:
+            target = edge.targets.get(attribute.name)
+            old = existing.get(attribute.name)
+            defaults = {"value": None, "unit": attribute.unit, "metadata_json": {}}
+            # Completeness describes membership, not supplied scalar fields.
+            # Present values retain omitted fields; absent values retain state
+            # only for partial adjacency.
+            if old is not None and (target is not None or not edge.complete):
+                defaults.update(old.__dict__)
+            data = defaults | (records[target].fields if target is not None else {})
+            if attribute.value_type == "enum":
+                validate_enum_value(
+                    data["value"], attribute.metadata, name=attribute.name
+                )
+            payload[attribute.slug] = {
+                name: data[name] for name in ("value", "unit", "metadata_json")
+            }
+        return payload
 
     def _build_values(self, models, accepted, edges, validated_values):
         for ref, validated in validated_values.items():
@@ -367,9 +445,7 @@ class BatchMaterializer:
             group = models[ref]
             value_type = type(validated)
             current = group.__dict__.get("values")
-            if isinstance(current, BaseModel) and set(
-                type(current).model_fields
-            ) == set(value_type.model_fields):
+            if type(current) is value_type:
                 for name in value_type.model_fields:
                     existing = current.__dict__[name]
                     self._apply_fields(existing, validated.__dict__[name].__dict__)
@@ -410,9 +486,7 @@ class BatchMaterializer:
                 for group in groups.values()
             }
             current = model.__dict__.get(relation)
-            if isinstance(current, BaseModel) and set(
-                type(current).model_fields
-            ) == set(group_type.model_fields):
+            if type(current) is group_type:
                 current.__dict__.update(values)
             else:
                 model.__dict__[relation] = group_type.model_construct(**values)
