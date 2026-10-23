@@ -1,36 +1,27 @@
-from functools import lru_cache
 from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel
 
 from recap.adapter.entity_hydration import EntityHydrationContext
+from recap.adapter.hydration_relations import (
+    index_children,
+    resource_relations,
+    resource_template_relations,
+)
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.resource import Property, Resource, ResourceTemplate, ResourceType
 from recap.schemas.attribute import (
     AttributeGroupTemplateSchema,
     AttributeTemplateSchema,
 )
-from recap.schemas.common import SIMPLE_FIELD
 from recap.schemas.resource import (
     PropertySchema,
     ResourceSchema,
     ResourceTemplateSchema,
     ResourceTypeSchema,
 )
-from recap.utils.dsl import build_param_values_model
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
-
-
-@lru_cache(maxsize=128)
-def _simple_field_mapping(
-    schema: type[BaseModel],
-) -> tuple[tuple[str, str | None], ...]:
-    return tuple(
-        (field_name, field_info.alias)
-        for field_name, field_info in schema.model_fields.items()
-        if SIMPLE_FIELD in field_info.metadata
-    )
 
 
 class ResourceSchemaHydrator:
@@ -47,14 +38,7 @@ class ResourceSchemaHydrator:
         schema: type[SchemaT],
         source: Any,
     ) -> dict[str, Any]:
-        values: dict[str, Any] = {}
-        for field_name, alias in _simple_field_mapping(schema):
-            if hasattr(source, field_name):
-                values[field_name] = getattr(source, field_name)
-                continue
-            if alias and hasattr(source, alias):
-                values[field_name] = getattr(source, alias)
-        return values
+        return self._context.simple_field_values(schema, source)
 
     def _construct_with_simple_fields(
         self,
@@ -62,38 +46,19 @@ class ResourceSchemaHydrator:
         source: Any,
         **overrides: Any,
     ) -> SchemaT:
-        values = self._simple_field_values(schema, source)
-        values.update(overrides)
-        return schema.model_construct(**values)
+        return self._context.construct_with_simple_fields(schema, source, **overrides)
 
     def _build_param_values_model_from_template(
         self,
         template: AttributeGroupTemplateSchema,
     ) -> type[BaseModel]:
-        tmpl_key = tuple(
-            (
-                at.name,
-                at.slug,
-                at.value_type,
-                at.metadata,
-                at.unit,
-            )
-            for at in template.attribute_templates
-        )
-        return build_param_values_model(template.slug or template.name, tmpl_key)
+        return self._context.build_param_values_model(template)
 
     def _construct_attribute_template(
         self,
         attr_template: AttributeTemplate,
     ) -> AttributeTemplateSchema:
-        cached = self._attr_template_cache.get(attr_template.id)
-        if cached is not None:
-            return cached
-        schema = AttributeTemplateSchema.model_validate(
-            attr_template, from_attributes=True
-        )
-        self._attr_template_cache[attr_template.id] = schema
-        return schema
+        return self._context.construct_attribute_template(attr_template)
 
     def _construct_attribute_group_template(
         self,
@@ -118,12 +83,7 @@ class ResourceSchemaHydrator:
         self,
         resource_type: ResourceType,
     ) -> ResourceTypeSchema:
-        cached = self._resource_type_cache.get(resource_type.id)
-        if cached is not None:
-            return cached
-        schema = ResourceTypeSchema.model_validate(resource_type, from_attributes=True)
-        self._resource_type_cache[resource_type.id] = schema
-        return schema
+        return self._context.construct_resource_type(resource_type)
 
     def _ensure_resource_template(
         self,
@@ -168,19 +128,27 @@ class ResourceSchemaHydrator:
         self._context.begin("resource_template", template.id)
         loaded_now: dict[str, bool] = {}
         try:
+            relations = resource_template_relations(
+                template,
+                {
+                    name
+                    for name, include in requested.items()
+                    if include and not schema.is_loaded(name)
+                },
+            )
             if requested["types"] and not schema.is_loaded("types"):
                 schema.types = [
-                    self._construct_resource_type(item) for item in template.types
+                    self._construct_resource_type(item) for item in relations["types"]
                 ]
                 loaded_now["types"] = True
 
             if requested["parent"] and not schema.is_loaded("parent"):
                 schema.parent = (
                     self._construct_resource_template_ref(
-                        template.parent,
+                        relations["parent"],
                         on_unloaded=on_unloaded,
                     )
-                    if template.parent is not None
+                    if relations["parent"] is not None
                     else None
                 )
                 loaded_now["parent"] = True
@@ -191,7 +159,7 @@ class ResourceSchemaHydrator:
                         child,
                         on_unloaded=on_unloaded,
                     )
-                    for child in template.children.values()
+                    for child in relations["children"].values()
                 }
                 loaded_now["children"] = True
 
@@ -200,7 +168,7 @@ class ResourceSchemaHydrator:
             ):
                 schema.attribute_group_templates = [
                     self._construct_attribute_group_template(group)
-                    for group in template.attribute_group_templates
+                    for group in relations["attribute_group_templates"]
                 ]
                 loaded_now["attribute_group_templates"] = True
 
@@ -326,9 +294,18 @@ class ResourceSchemaHydrator:
         self._context.begin("resource", resource.id)
         loaded_now: dict[str, bool] = {}
         try:
+            relations = resource_relations(
+                resource,
+                {
+                    name
+                    for name, include in requested.items()
+                    if include and not schema.is_loaded(name)
+                },
+                children_map,
+            )
             if requested["template"] and not schema.is_loaded("template"):
                 schema.template = self._construct_resource_template(
-                    resource.template,
+                    relations["template"],
                     on_unloaded=on_unloaded,
                 )
                 loaded_now["template"] = True
@@ -336,20 +313,15 @@ class ResourceSchemaHydrator:
             if requested["parent"] and not schema.is_loaded("parent"):
                 schema.parent = (
                     self._construct_resource_ref(
-                        resource.parent,
+                        relations["parent"],
                         on_unloaded=on_unloaded,
                     )
-                    if resource.parent is not None
+                    if relations["parent"] is not None
                     else None
                 )
                 loaded_now["parent"] = True
 
             if requested["children"] and not schema.is_loaded("children"):
-                child_resources = (
-                    children_map.get(resource.id, [])
-                    if children_map is not None
-                    else resource.children.values()
-                )
                 schema.children = {
                     child.name: self._construct_resource_schema(
                         child,
@@ -360,14 +332,14 @@ class ResourceSchemaHydrator:
                         on_unloaded=on_unloaded,
                         children_map=children_map,
                     )
-                    for child in child_resources
+                    for child in relations["children"].values()
                 }
                 loaded_now["children"] = True
 
             if requested["properties"] and not schema.is_loaded("properties"):
                 schema.properties = {
                     prop.template.name: self._construct_property_schema(prop)
-                    for prop in resource.properties.values()
+                    for prop in relations["properties"].values()
                 }
                 loaded_now["properties"] = True
 
@@ -448,11 +420,7 @@ class ResourceSchemaHydrator:
         zero per-node lazy loads. One schema is returned per id in ``root_ids``,
         in order.
         """
-        children_map: dict[Any, list[Resource]] = {}
-        for resource in flat_resources:
-            parent_id = resource.parent_id
-            if parent_id is not None:
-                children_map.setdefault(parent_id, []).append(resource)
+        children_map = index_children(flat_resources)
 
         by_id = {resource.id: resource for resource in flat_resources}
         results: list[ResourceSchema] = []

@@ -3,6 +3,11 @@ from typing import Any, Literal, TypeVar
 from pydantic import BaseModel
 
 from recap.adapter.entity_hydration import EntityHydrationContext
+from recap.adapter.hydration_fields import construct_model
+from recap.adapter.hydration_relations import (
+    included_step_relations,
+    process_run_relations,
+)
 from recap.adapter.resource_construct import ResourceSchemaHydrator
 from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
 from recap.db.resource import Resource
@@ -139,33 +144,48 @@ class ProcessRunSchemaHydrator:
         on_unloaded: Literal["silent", "warn", "raise"],
         children_map: dict[Any, list[Resource]] | None = None,
     ) -> ProcessRunSchema:
+        requested = {"template"}
+        if include_steps:
+            requested.add("steps")
+        if include_resources:
+            requested.add("assigned_resources")
+        relations = process_run_relations(run, requested)
         template = (
-            self._construct_process_template(run.template, on_unloaded=on_unloaded)
+            self._construct_process_template(
+                relations["template"], on_unloaded=on_unloaded
+            )
             if full or include_template
             else self._construct_process_template_minimal(
-                run.template, on_unloaded=on_unloaded
+                relations["template"], on_unloaded=on_unloaded
             )
         )
 
         steps: dict[str, StepSchema] = {}
-        step_models = run.steps.values() if include_steps else []
+        step_models = list(relations["steps"].values()) if include_steps else []
+        step_relationships = {}
         for step in step_models:
+            step_relation = included_step_relations(
+                step,
+                include_parameters=include_step_parameters,
+                include_resources=include_resources,
+            )
+            step_relationships[step.id] = step_relation
             step_schema = self._construct_with_simple_fields(
                 StepSchema,
                 step,
                 template=(
                     self._construct_step_template(
-                        step.template, on_unloaded=on_unloaded
+                        step_relation["template"], on_unloaded=on_unloaded
                     )
                     if full
                     else self._construct_step_template_minimal(
-                        step.template, on_unloaded=on_unloaded
+                        step_relation["template"], on_unloaded=on_unloaded
                     )
                 ),
                 parameters=(
                     {
                         param.template.name: self._construct_parameter_schema(param)
-                        for param in step.parameters.values()
+                        for param in step_relation["parameters"].values()
                     }
                     if include_step_parameters
                     else {}
@@ -176,15 +196,16 @@ class ProcessRunSchemaHydrator:
                         role: self._construct_resource_schema(
                             res, children_map, on_unloaded=on_unloaded
                         )
-                        for role, res in step.resources.items()
+                        for role, res in step_relation["resources"].items()
                     }
                     if include_resources
                     else {}
                 ),
                 resource_overrides={
                     role: assignment.resource.id
-                    for role, slot in step.template.resource_slots.items()
-                    if (assignment := step.assignments.get(slot.id)) is not None
+                    for role, slot in step_relation["template"].resource_slots.items()
+                    if (assignment := step_relation["assignments"].get(slot.id))
+                    is not None
                 }
                 if include_resources and step.parent_id is not None
                 else {},
@@ -203,16 +224,16 @@ class ProcessRunSchemaHydrator:
 
         if include_steps:
             id_to_step = steps
-            for step in run.steps.values():
+            for step in step_models:
                 step_schema = steps[step.id]
                 step_schema.children = {
                     child.name: id_to_step[child.id]
-                    for child in step.children
+                    for child in step_relationships[step.id]["children"]
                     if child.id in id_to_step
                 }
             steps = {
                 step.name: steps[step.id]
-                for step in run.steps.values()
+                for step in step_models
                 if step.parent_id is None
             }
             for schema in id_to_step.values():
@@ -221,17 +242,17 @@ class ProcessRunSchemaHydrator:
 
         assigned_resources = {}
         if include_resources:
-            for assigned in run.assigned_resources:
-                assigned_resources[assigned.slot.name] = (
-                    ResourceAssignmentSchema.model_construct(
-                        slot=self._construct_resource_slot(assigned.slot),
-                        resource=self._construct_resource_schema(
-                            assigned.resource,
-                            children_map,
-                            on_unloaded=on_unloaded,
-                        ),
-                        step_id=None,
-                    )
+            for assigned in relations["assigned_resources"]:
+                assigned_resources[assigned.slot.name] = construct_model(
+                    ResourceAssignmentSchema,
+                    {},
+                    slot=self._construct_resource_slot(assigned.slot),
+                    resource=self._construct_resource_schema(
+                        assigned.resource,
+                        children_map,
+                        on_unloaded=on_unloaded,
+                    ),
+                    step_id=None,
                 )
 
         process_run = self._construct_with_simple_fields(

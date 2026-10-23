@@ -29,6 +29,7 @@ from recap.adapter import (
     ReadBackend,
     WriteBackend,
 )
+from recap.adapter.hydration_relations import index_children
 from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
 from recap.adapter.query_loaders import (
     preload_options,
@@ -788,12 +789,7 @@ class LocalBackend(
     ) -> dict[UUID, list[Resource]]:
         """Build a ``parent_id -> [child]`` map from a flat resource list, so a
         hydrator can assemble child trees without lazy-loading per node."""
-        children_map: dict[UUID, list[Resource]] = {}
-        for resource in flat_resources:
-            parent_id = resource.parent_id
-            if parent_id is not None:
-                children_map.setdefault(parent_id, []).append(resource)
-        return children_map
+        return index_children(flat_resources)
 
     def _namespace_visibility(self, namespace_path: str) -> tuple[UUID, list[UUID]]:
         paths = namespace_ancestors(namespace_path)
