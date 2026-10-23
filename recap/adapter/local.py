@@ -1140,6 +1140,10 @@ class LocalBackend(
     def _query_batch_rows(self, session, stmt, schema, spec) -> EntityBatch:
         requested = set(spec.preloads)
         full = spec.load_mode == "eager"
+        # Existing resource hydrator exposes parent data only for eager reads;
+        # preserve that public loading rule while changing representation.
+        if schema is ResourceSchema and not full:
+            requested.discard("parent")
         if full:
             requested.update(SCHEMA_REGISTRY.by_model(schema).loader_capabilities)
         rows = list(session.scalars(stmt).unique())

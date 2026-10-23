@@ -488,7 +488,11 @@ def test_get_resource_uses_supported_relationship_filters(monkeypatch, tmp_path)
         calls.append((args, kwargs))
         return [expected]
 
-    monkeypatch.setattr(client.connection_state.backend.reader, "query", read)
+    monkeypatch.setattr(
+        type(client.connection_state.backend),
+        "query",
+        lambda self, *args, **kwargs: read(*args, **kwargs),
+    )
 
     assert client.get_resource("sample", "Sample", "2.0") is expected
     assert calls[0][0][1].filters == {
@@ -506,7 +510,7 @@ def test_get_resource_rejects_multiple_matches(monkeypatch, tmp_path):
         ResourceRef.model_construct(id=UUID(int=6), name="sample"),
     ]
     monkeypatch.setattr(
-        client.connection_state.backend.reader, "query", lambda *args, **kwargs: matches
+        type(client.connection_state.backend), "query", lambda *args, **kwargs: matches
     )
 
     with pytest.raises(ValueError, match="[Mm]ultiple resources"):

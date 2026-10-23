@@ -8,6 +8,7 @@ from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
 
 if TYPE_CHECKING:
+    from recap.adapter.entity_records import EntityBatch
     from recap.authorization.query import AuthorizedQuery
 
 
@@ -21,6 +22,15 @@ class ReadBackend(Protocol):
     def count(
         self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
     ) -> int: ...
+
+
+@runtime_checkable
+class BatchReadBackend(Protocol):
+    """Optional normalized reads; model-only adapters retain ReadBackend fallback."""
+
+    def query_batch(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ) -> "EntityBatch": ...
 
 
 @runtime_checkable

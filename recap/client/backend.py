@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from recap.adapter import (
+    BatchReadBackend,
     NamespaceCatalog,
     NamespaceContextResolver,
     NamespaceWriter,
@@ -14,6 +15,7 @@ from recap.adapter import (
     WriteBackend,
 )
 from recap.client.identity import IdentityMap
+from recap.client.materialization import BatchMaterializer
 from recap.commands.models import CommandContext, CommandModel
 from recap.dsl.query import QuerySpec, SchemaT
 from recap.lifecycle import LifecycleStatus
@@ -54,6 +56,9 @@ class ClientBackend:
     def query(
         self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
     ) -> list[SchemaT]:
+        if isinstance(self.reader, BatchReadBackend):
+            batch = self.reader.query_batch(schema, spec, namespace_path=namespace_path)
+            return BatchMaterializer(self.identity_map).materialize(schema, batch)
         models = self.reader.query(schema, spec, namespace_path=namespace_path)
         result = []
         for item in models:
