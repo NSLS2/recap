@@ -99,7 +99,7 @@ class BatchMaterializer:
         self.identity_map = identity_map
 
     def materialize(self, schema, batch: EntityBatch):
-        with self.identity_map._lock:
+        with self.identity_map.locked():
             return self._materialize(schema, batch)
 
     def _validate(self, schema, batch):
@@ -255,21 +255,17 @@ class BatchMaterializer:
             policy = POLICIES_BY_KIND[ref.kind]
             if policy.ownership != "canonical":
                 continue
-            if accepted[ref]:
-                self.identity_map._invalidate_canonicalized(model)
-                if hasattr(model, "set_loaded_relations"):
-                    old = (model.__pydantic_private__ or {}).get(
-                        "_loaded_relations", {}
-                    )
-                    flags = {
-                        name: old.get(name, False)
-                        for name in getattr(type(model), "_relation_fields", ())
-                    }
-                    for relation, loaded in by_source.get(ref, {}).items():
-                        if relation in flags:
-                            flags[relation] = flags[relation] or loaded
-                    model.set_loaded_relations(flags, on_unloaded=on_unloaded)
-            self.identity_map._models[ref.kind, ref.id] = model
+            if accepted[ref] and hasattr(model, "set_loaded_relations"):
+                old = (model.__pydantic_private__ or {}).get("_loaded_relations", {})
+                flags = {
+                    name: old.get(name, False)
+                    for name in getattr(type(model), "_relation_fields", ())
+                }
+                for relation, loaded in by_source.get(ref, {}).items():
+                    if relation in flags:
+                        flags[relation] = flags[relation] or loaded
+                model.set_loaded_relations(flags, on_unloaded=on_unloaded)
+            self.identity_map.register((ref.kind, ref.id), model)
 
     @staticmethod
     def _apply_fields(model, fields):

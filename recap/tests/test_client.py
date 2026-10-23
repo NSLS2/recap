@@ -12,9 +12,11 @@ from recap.exceptions import RecapNotFoundError
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceRef, ResourceSchema
+from recap.tests.batch_fakes import BatchReaderFake, BatchWriterFake
+from recap.tests.transport_factories import minimal_resource
 
 
-class _Reader:
+class _Reader(BatchReaderFake):
     def __init__(self, result=None):
         self.result = result or []
 
@@ -25,7 +27,7 @@ class _Reader:
         return len(self.result)
 
 
-class _Writer:
+class _Writer(BatchWriterFake):
     def __init__(self, result=None):
         self.commands = []
         self.result = result
@@ -55,7 +57,7 @@ class _NamespaceContextResolver:
         return NamespaceContext(id=uuid4(), path=path)
 
 
-class _ClosableFake:
+class _ClosableFake(BatchReaderFake, BatchWriterFake):
     def __init__(self):
         self.close_count = 0
 
@@ -105,7 +107,7 @@ def test_client_backend_accepts_distinct_capability_objects():
 
 def test_client_backend_delegates_query_count_and_execute():
     reader = _Reader()
-    reader.result = ["read"]
+    reader.result = [minimal_resource("read")]
     writer = _Writer("written")
     backend = ClientBackend(
         reader=reader,
@@ -116,7 +118,7 @@ def test_client_backend_delegates_query_count_and_execute():
     )
     spec = QuerySpec()
 
-    assert backend.query(ResourceSchema, spec, namespace_path="scope") == ["read"]
+    assert backend.query(ResourceSchema, spec, namespace_path="scope")[0].name == "read"
     assert backend.count(ResourceSchema, spec, namespace_path="scope") == 1
     assert backend._execute("command", "context") == "written"
 
@@ -193,6 +195,50 @@ def test_client_backend_rejects_missing_required_capability(field):
         ClientBackend(**values)
 
 
+@pytest.mark.parametrize(
+    "field,capability",
+    [
+        (
+            "reader",
+            type(
+                "ModelReader",
+                (),
+                {
+                    "query": lambda *args, **kwargs: [],
+                    "count": lambda *args, **kwargs: 0,
+                },
+            )(),
+        ),
+        (
+            "writer",
+            type("ModelWriter", (), {"execute": lambda *args, **kwargs: None})(),
+        ),
+    ],
+)
+def test_client_backend_rejects_model_only_capabilities(field, capability):
+    values = _backend_values()
+    values[field] = capability
+    with pytest.raises(TypeError, match="Batch"):
+        ClientBackend(**values)
+
+
+def test_graph_writer_cannot_return_model_instead_of_batch():
+    from recap.commands.models import CopyResource
+
+    writer = _Writer()
+    writer.execute_batch = lambda *args, **kwargs: minimal_resource()
+    values = _backend_values()
+    values["writer"] = writer
+    backend = ClientBackend(**values)
+    with pytest.raises(TypeError, match="EntityBatch"):
+        backend._execute(
+            CopyResource(
+                source_resource_id=uuid4(), destination_namespace_path="scope"
+            ),
+            object(),
+        )
+
+
 def test_client_stores_typed_reader_and_writer():
     reader = _Reader()
     writer = _Writer()
@@ -212,7 +258,7 @@ def test_client_stores_typed_reader_and_writer():
 
 
 def test_copy_resource_routes_through_write_capability():
-    expected = ResourceSchema.model_construct(id=UUID(int=1), name="copy")
+    expected = minimal_resource("copy").model_copy(update={"id": UUID(int=1)})
     reader = _Reader()
     writer = _Writer(expected)
     backend = ClientBackend(
@@ -224,7 +270,7 @@ def test_copy_resource_routes_through_write_capability():
     )
     client = RecapClient._from_backends(backend, namespace="scope")
 
-    assert client.copy_resource(UUID(int=2)) is expected
+    assert client.copy_resource(UUID(int=2)).id == expected.id
     assert writer.commands[0][0].source_resource_id == UUID(int=2)
     client.close()
 

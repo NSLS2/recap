@@ -10,8 +10,9 @@ def test_process_run_builder_command_mode_submits_namespace_owned_command():
     from recap.client.backend import ClientBackend
     from recap.dsl.process_builder import ProcessRunBuilder
     from recap.schemas.namespace import NamespaceContext
+    from recap.tests.batch_fakes import BatchReaderFake, BatchWriterFake
 
-    class Backend:
+    class Backend(BatchReaderFake, BatchWriterFake):
         def query(self, schema, *args, **kwargs):
             if schema.__name__ == "ProcessTemplateSchema":
                 return [type("Template", (), {"id": template_id})()]

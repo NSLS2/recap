@@ -5,9 +5,10 @@ from recap.client.backend import ClientBackend
 from recap.commands.models import UpdateProcessTemplate
 from recap.dsl.process_builder import ProcessTemplateBuilder
 from recap.schemas.namespace import NamespaceContext
+from recap.tests.batch_fakes import BatchReaderFake, BatchWriterFake
 
 
-class RecordingBackend:
+class RecordingBackend(BatchReaderFake, BatchWriterFake):
     def __init__(self, existing):
         self.existing = existing
         self.commands = []

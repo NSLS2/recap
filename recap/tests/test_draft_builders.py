@@ -15,11 +15,12 @@ from recap.dsl.resource_builder import ResourceBuilder, ResourceTemplateBuilder
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
+from recap.tests.batch_fakes import BatchReaderFake, BatchWriterFake
 from recap.tests.transport_factories import minimal_resource, resource_template
 from recap.utils.general import Direction
 
 
-class RecordingBackend:
+class RecordingBackend(BatchReaderFake, BatchWriterFake):
     def __init__(self, existing=None):
         self.commands = []
         self.existing = existing
@@ -73,7 +74,7 @@ class RecordingBackend:
         return None
 
 
-class RecordingReader:
+class RecordingReader(BatchReaderFake):
     def __init__(self, existing=None):
         self.existing = existing
         self.queries = []
@@ -96,7 +97,7 @@ class RecordingReader:
         return 0
 
 
-class RecordingWriter:
+class RecordingWriter(BatchWriterFake):
     def __init__(self, existing=None):
         self.existing = existing
         self.commands = []

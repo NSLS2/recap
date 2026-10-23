@@ -26,7 +26,7 @@ class ReadBackend(Protocol):
 
 @runtime_checkable
 class BatchReadBackend(Protocol):
-    """Optional normalized reads; model-only adapters retain ReadBackend fallback."""
+    """Normalized reads required by ClientBackend for shared materialization."""
 
     def query_batch(
         self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
@@ -97,7 +97,7 @@ class WriteBackend(Protocol):
 
 @runtime_checkable
 class BatchWriteBackend(Protocol):
-    """Optional normalized graph command results."""
+    """Normalized graph command results required by ClientBackend."""
 
     def execute_batch(
         self,

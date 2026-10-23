@@ -10,6 +10,7 @@ from recap.commands.models import UpdateNamespace
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext, NamespaceSchema
 from recap.schemas.resource import ResourceRef, ResourceSchema, ResourceTemplateRef
+from recap.tests.batch_fakes import BatchReaderFake, BatchWriterFake
 
 
 def _namespace(
@@ -64,7 +65,7 @@ def _resource(
     )
 
 
-class _FakeBackendBase:
+class _FakeBackendBase(BatchReaderFake, BatchWriterFake):
     def __init__(self, result_factory, command_result_factory=None):
         self._result_factory = result_factory
         self._command_result_factory = command_result_factory

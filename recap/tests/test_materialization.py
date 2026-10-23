@@ -1,5 +1,3 @@
-from unittest.mock import patch
-
 import pytest
 from pydantic import ValidationError
 
@@ -62,7 +60,7 @@ def test_batch_materialization_preserves_cycles_identity_and_typed_values(
     assert first.properties.measurements.values is second.properties.measurements.values
 
 
-def test_newer_child_updates_under_unchanged_parent_without_recursive_signatures(
+def test_newer_child_updates_under_unchanged_parent(
     db_session,
     materializer,
 ):
@@ -71,12 +69,7 @@ def test_newer_child_updates_under_unchanged_parent_without_recursive_signatures
     original_child = first.children["child"]
     child.name = "updated"
     child.revision += 1
-    with patch.object(
-        IdentityMap,
-        "_relation_signature",
-        side_effect=AssertionError("Graph signature"),
-    ):
-        second = materializer.materialize(ResourceSchema, _batch(parent))[0]
+    second = materializer.materialize(ResourceSchema, _batch(parent))[0]
     assert second is first
     assert original_child.name == "updated"
     assert original_child.revision == child.revision
@@ -460,26 +453,36 @@ def test_value_refresh_preserves_omitted_metadata_and_unit(db_session, materiali
     assert dose.metadata_json == {"source": "scan"}
 
 
+def test_concurrent_materialization_returns_one_canonical_graph(
+    db_session, materializer
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    parent, _, _, _ = _seed_resource_graph(db_session)
+    batch = _batch(parent)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        models = list(
+            executor.map(
+                lambda _index: materializer.materialize(ResourceSchema, batch)[0],
+                range(32),
+            )
+        )
+    assert all(model is models[0] for model in models)
+    assert all(model.properties is models[0].properties for model in models)
+    assert all(model.children["child"].parent is models[0] for model in models)
+
+
 @pytest.mark.performance
 @pytest.mark.parametrize(
     "client_fixture", ["client", "rest_loopback_client"], ids=["local", "rest"]
 )
-def test_client_batch_path_does_not_build_recursive_signatures(request, client_fixture):
+def test_client_batch_reads_reuse_canonical_identity(request, client_fixture):
     client = request.getfixturevalue(client_fixture)
     with client.build_resource_template(name="BatchPath", type_names=["sample"]):
         pass
     resource = client.create_resource("sample", "BatchPath")
     with client.build_resource(resource_id=resource.id) as builder:
         builder.finalize()
-    with patch.object(
-        IdentityMap,
-        "_relation_signature",
-        side_effect=AssertionError("Recursive signature"),
-    ):
-        first = (
-            client.query_maker().resources(load="eager").filter(id=resource.id).first()
-        )
-        second = (
-            client.query_maker().resources(load="eager").filter(id=resource.id).first()
-        )
+    first = client.query_maker().resources(load="eager").filter(id=resource.id).first()
+    second = client.query_maker().resources(load="eager").filter(id=resource.id).first()
     assert first is second

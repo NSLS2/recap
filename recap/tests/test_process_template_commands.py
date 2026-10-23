@@ -32,6 +32,7 @@ from recap.dsl.drafts import (
 from recap.dsl.process_builder import ProcessTemplateBuilder
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.namespace import NamespaceContext
+from recap.tests.batch_fakes import BatchReaderFake, BatchWriterFake
 from recap.utils.general import Direction
 
 
@@ -242,7 +243,7 @@ def test_first_use_freezes_template_and_rejects_update(command_setup):
     assert audit.records[-1].outcome.value == "error"
 
 
-class RecordingCommandBackend:
+class RecordingCommandBackend(BatchReaderFake, BatchWriterFake):
     def __init__(self, existing=None):
         self.commands = []
         self.existing = existing

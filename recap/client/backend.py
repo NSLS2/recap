@@ -24,8 +24,8 @@ from recap.lifecycle import LifecycleStatus
 
 @dataclass(frozen=True, slots=True)
 class ClientBackend:
-    reader: ReadBackend
-    writer: WriteBackend
+    reader: BatchReadBackend
+    writer: BatchWriteBackend
     namespaces: NamespaceCatalog
     namespace_writer: NamespaceWriter
     context_resolver: NamespaceContextResolver
@@ -45,6 +45,8 @@ class ClientBackend:
     def __post_init__(self) -> None:
         require_capability(self.reader, ReadBackend, "reader")
         require_capability(self.writer, WriteBackend, "writer")
+        require_capability(self.reader, BatchReadBackend, "reader")
+        require_capability(self.writer, BatchWriteBackend, "writer")
         require_capability(self.namespaces, NamespaceCatalog, "namespaces")
         require_capability(self.namespace_writer, NamespaceWriter, "namespace_writer")
         if self.context_resolver is not None:
@@ -57,14 +59,8 @@ class ClientBackend:
     def query(
         self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
     ) -> list[SchemaT]:
-        if isinstance(self.reader, BatchReadBackend):
-            batch = self.reader.query_batch(schema, spec, namespace_path=namespace_path)
-            return BatchMaterializer(self.identity_map).materialize(schema, batch)
-        models = self.reader.query(schema, spec, namespace_path=namespace_path)
-        result = []
-        for item in models:
-            result.append(self.identity_map.intern(item))
-        return result
+        batch = self.reader.query_batch(schema, spec, namespace_path=namespace_path)
+        return BatchMaterializer(self.identity_map).materialize(schema, batch)
 
     def count(
         self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
@@ -109,25 +105,46 @@ class ClientBackend:
 
         execute = (
             self.writer.execute_batch
-            if isinstance(self.writer, BatchWriteBackend)
-            and not isinstance(command, (CreateNamespace, UpdateNamespace))
+            if not isinstance(command, (CreateNamespace, UpdateNamespace))
             else self.writer.execute
         )
         if etag_override is None:
             result = execute(command, context)
         else:
             result = execute(command, context, etag_override=etag_override)
-        from recap.adapter.entity_records import POLICIES_BY_KIND, EntityBatch
+        from recap.adapter.entity_records import (
+            POLICIES_BY_KIND,
+            EntityBatch,
+            EntityRef,
+            NamespaceRecord,
+        )
+        from recap.schemas.namespace import NamespaceSchema
+
+        if isinstance(result, NamespaceSchema) and isinstance(
+            command, (CreateNamespace, UpdateNamespace)
+        ):
+            # Namespace commands have a scalar response rather than graph
+            # transport; canonical namespace reads still share their identity.
+            fields = result.model_dump(exclude={"id", "revision"})
+            result = EntityBatch(
+                roots=[EntityRef(kind="namespace", id=result.id)],
+                entities=[
+                    NamespaceRecord(
+                        id=result.id, revision=result.revision, fields=fields
+                    )
+                ],
+                adjacency=[],
+            )
 
         if isinstance(result, EntityBatch):
             return BatchMaterializer(self.identity_map).materialize(
                 POLICIES_BY_KIND[result.roots[0].kind].schema, result
             )[0]
-        return (
-            self.identity_map.intern(result, authoritative=True)
-            if isinstance(result, BaseModel)
-            else result
-        )
+        if isinstance(result, BaseModel) and not isinstance(
+            command, (CreateNamespace, UpdateNamespace)
+        ):
+            raise TypeError("Graph command writer must return EntityBatch")
+        return result
 
     def close(self, *, clear_identity: bool = True) -> None:
         with self._close_lock:

@@ -24,6 +24,7 @@ from recap.db.namespace import Namespace
 from recap.db.resource import ResourceTemplate
 from recap.dsl.drafts import AttributeDraft, AttributeGroupDraft, ResourceTemplateDraft
 from recap.schemas.namespace import NamespaceContext
+from recap.tests.batch_fakes import BatchReaderFake, BatchWriterFake
 
 
 class AuditCollector:
@@ -212,7 +213,7 @@ def test_failed_update_preserves_graph_and_revision(command_setup, monkeypatch):
         assert stored.attribute_group_templates[0].name == "dimensions"
 
 
-class RecordingBackend:
+class RecordingBackend(BatchReaderFake, BatchWriterFake):
     def __init__(self, existing=None):
         self.commands = []
         self.existing = existing
