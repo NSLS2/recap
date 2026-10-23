@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from recap.adapter.entity_records import POLICIES_BY_KIND, RecordPolicy
 from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
 from recap.adapter.resource_construct import ResourceSchemaHydrator
 from recap.db.base import Base
@@ -91,6 +92,11 @@ class SchemaRegistration:
     hydrator: Callable[..., Any]
     loader_capabilities: tuple[str, ...]
     projections: tuple[str, ...] = ("full", "ref")
+
+    @property
+    def record_policy(self) -> RecordPolicy:
+        """Normalized row policy shared by both query representations."""
+        return POLICIES_BY_KIND[self.key]
 
 
 class SchemaRegistry:

@@ -29,6 +29,7 @@ from recap.adapter import (
     ReadBackend,
     WriteBackend,
 )
+from recap.adapter.entity_batch import EntityBatch, EntityBatchCollector
 from recap.adapter.hydration_relations import index_children
 from recap.adapter.process_run_construct import ProcessRunSchemaHydrator
 from recap.adapter.query_loaders import (
@@ -979,6 +980,23 @@ class LocalBackend(
             authorization=authorization,
         )
 
+    def query_batch(
+        self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
+    ) -> EntityBatch:
+        """Collect normalized records directly while ORM rows remain attached."""
+        return self._query(schema, spec, namespace_path, authorization=None, batch=True)
+
+    def query_batch_authorized(
+        self, schema: type[SchemaT], spec: QuerySpec, *, authorization: AuthorizedQuery
+    ) -> EntityBatch:
+        return self._query(
+            schema,
+            spec,
+            authorization.namespace_path,
+            authorization=authorization,
+            batch=True,
+        )
+
     def _query(
         self,
         schema: type[SchemaT],
@@ -986,7 +1004,8 @@ class LocalBackend(
         namespace_path: str,
         *,
         authorization: AuthorizedQuery | None,
-    ) -> list[SchemaT]:
+        batch: bool = False,
+    ) -> list[SchemaT] | EntityBatch:
         stmt = self._build_select(
             schema, spec, namespace_path, authorization=authorization
         )
@@ -1005,12 +1024,11 @@ class LocalBackend(
             if loader_options:
                 stmt = stmt.options(*loader_options)
 
-        if spec.limit is not None:
-            stmt = stmt.limit(spec.limit)
-        if spec.offset is not None:
-            stmt = stmt.offset(spec.offset)
+        stmt = self._paginate(stmt, spec)
 
         with self._session_scope() as session:
+            if batch:
+                return self._query_batch_rows(session, stmt, schema, spec)
             if schema is ProcessRunSchema:
                 process_run_hydrator = ProcessRunSchemaHydrator()
                 include_step_parameters = (
@@ -1110,6 +1128,50 @@ class LocalBackend(
                 _set_template_load_flags(schema.model_validate(obj), schema, spec)
                 for obj in list(session.scalars(stmt).unique())
             ]
+
+    @staticmethod
+    def _paginate(stmt, spec):
+        if spec.limit is not None:
+            stmt = stmt.limit(spec.limit)
+        if spec.offset is not None:
+            stmt = stmt.offset(spec.offset)
+        return stmt
+
+    def _query_batch_rows(self, session, stmt, schema, spec) -> EntityBatch:
+        requested = set(spec.preloads)
+        full = spec.load_mode == "eager"
+        if full:
+            requested.update(SCHEMA_REGISTRY.by_model(schema).loader_capabilities)
+        rows = list(session.scalars(stmt).unique())
+        children_map = None
+        if schema is ResourceSchema and "children" in requested:
+            root_ids = [row.id for row in rows]
+            flat = self._load_resource_subtrees(session, root_ids)
+            by_id = {row.id: row for row in flat}
+            rows = [by_id[root_id] for root_id in root_ids]
+            children_map = index_children(flat)
+        if schema in {ResourceSchema, ResourceTemplateSchema} and full:
+            requested.add("parent")
+        if schema is ProcessRunSchema:
+            if full:
+                requested.add("template")
+            if requested & {"steps.parameters", "resources"}:
+                requested.add("steps")
+            if "resources" in requested:
+                flat = self._load_resource_subtrees(
+                    session, self._assigned_resource_root_ids(rows)
+                )
+                children_map = index_children(flat)
+        return self._collect_batch(rows, requested, spec, children_map)
+
+    @staticmethod
+    def _collect_batch(rows, requested, spec, children_map=None) -> EntityBatch:
+        collector = EntityBatchCollector(
+            children_map=children_map, on_unloaded=spec.on_unloaded or "warn"
+        )
+        for row in rows:
+            collector.add_root(row, requested)
+        return collector.collect()
 
     def count(
         self, schema: type[SchemaT], spec: QuerySpec, *, namespace_path: str
