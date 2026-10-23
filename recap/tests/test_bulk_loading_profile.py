@@ -10,8 +10,10 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from recap.adapter.entity_batch import EntityBatchCollector
+from recap.adapter.query_loaders import resolve_loader_options
 from recap.client.identity import IdentityMap
 from recap.client.materialization import BatchMaterializer
+from recap.db.process import ProcessRun
 from recap.db.resource import Resource
 from recap.schemas.process import ProcessRunSchema
 from recap.schemas.resource import ResourceSchema
@@ -63,7 +65,7 @@ def test_statement_attribution_matches_existing_counter(loaded_plate):
     assert profile.total_sql == counter["n"]
     assert sum(profile.sql_by_phase.values()) == profile.total_sql
     assert profile.loaded_types["Resource"] == len(graph.well_ids) + 1
-    assert profile.lazy_relationships
+    assert not profile.lazy_relationships
     assert profile.planned_relationships
     assert profile.callers
     assert batch.roots[0].id == graph.plate_id
@@ -224,6 +226,38 @@ def test_expired_columns_are_not_relationship_loads(loaded_plate):
     assert not profile.planned_relationships
 
 
+def test_plain_relationship_access_is_classified_as_lazy(loaded_plate):
+    factory, graph = loaded_plate
+    with factory() as session:
+        plate = session.get(Resource, graph.plate_id)
+        with capture_sql(factory.kw["bind"]) as profile:
+            assert len(plate.children) == len(graph.well_ids)
+    assert profile.total_sql == sum(profile.lazy_relationships.values()) == 1
+    assert not profile.planned_relationships
+    assert profile.loaded_types["Resource"] == len(graph.well_ids)
+
+
+def test_resources_include_loads_assignment_keys_with_rows(loaded_plate):
+    factory, graph = loaded_plate
+    with factory() as session, capture_sql(factory.kw["bind"]) as profile:
+        run = session.scalar(
+            select(ProcessRun)
+            .where(ProcessRun.id == graph.run_id)
+            .options(*resolve_loader_options(ProcessRunSchema, ["resources"], None))
+        )
+        assert {slot.name for slot in run.assignments} == {"group", "plate"}
+        assert (
+            next(
+                assignment.resource.id
+                for slot, assignment in run.assignments.items()
+                if slot.name == "plate"
+            )
+            == graph.plate_id
+        )
+    assert profile.loaded_types["ResourceAssignment"] == 2
+    assert not profile.lazy_relationships, profile.lazy_relationships
+
+
 def test_collector_patch_restored_after_collection_exception(loaded_plate):
     factory, graph = loaded_plate
     original = EntityBatchCollector.collect
@@ -267,11 +301,6 @@ def test_readonly_database_rejects_writes_and_keeps_contents(loaded_plate):
 
 @pytest.mark.parametrize("root", ["plate", "run"])
 @pytest.mark.performance
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Mapped collection keys lazily load property/parameter/value templates",
-)
 def test_collection_keys_do_not_trigger_lazy_loads(loaded_plate, root):
     factory, graph = loaded_plate
     kind = "process_run" if root == "run" else "resource"
@@ -283,7 +312,16 @@ def test_collection_keys_do_not_trigger_lazy_loads(loaded_plate, root):
             f"{owner}.template" in path
             for owner in ("Property", "Parameter", "AttributeValue")
         )
+        or "ResourceAssignment.resource_slot" in path
     ), profile.lazy_relationships
+    group_batches = sum(
+        count
+        for path, count in profile.planned_relationships.items()
+        if "Property.template" in path
+        and "AttributeGroupTemplate.attribute_templates" in path
+    )
+    # These widths fit one select-in batch; runs also prepare assigned roots.
+    assert 1 <= group_batches <= 2, profile.planned_relationships
 
 
 @pytest.mark.performance

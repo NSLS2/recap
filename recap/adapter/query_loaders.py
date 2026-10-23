@@ -29,6 +29,26 @@ def _dedupe_preserve_order(values: list[str]) -> list[str]:
     return result
 
 
+def property_loader_options(*prefix) -> list:
+    """Load property/value collection keys with their rows, preserving batching."""
+    return [
+        chain_load(
+            *prefix,
+            Resource.properties,
+            Property._values,
+            AttributeValue.template,
+            joined=(AttributeValue.template,),
+        ),
+        chain_load(
+            *prefix,
+            Resource.properties,
+            Property.template,
+            AttributeGroupTemplate.attribute_templates,
+            joined=(Property.template,),
+        ),
+    ]
+
+
 PRELOAD_STATEMENTS = {
     (ProcessRunSchema, "template"): [
         chain_load(ProcessRun.template, ProcessTemplate.resource_slots),
@@ -49,7 +69,12 @@ PRELOAD_STATEMENTS = {
     (ProcessRunSchema, "steps"): [
         chain_load(ProcessRun.steps, Step.assignments, ResourceAssignment.resource),
         chain_load(ProcessRun.steps, Step.children),
-        chain_load(ProcessRun.steps, Step.parameters),
+        chain_load(
+            ProcessRun.steps,
+            Step.parameters,
+            Parameter.template,
+            joined=(Parameter.template,),
+        ),
         chain_load(
             ProcessRun.steps,
             Step.template,
@@ -65,12 +90,19 @@ PRELOAD_STATEMENTS = {
         ),
     ],
     (ProcessRunSchema, "steps.parameters"): [
-        chain_load(ProcessRun.steps, Step.parameters, Parameter._values),
+        chain_load(
+            ProcessRun.steps,
+            Step.parameters,
+            Parameter._values,
+            AttributeValue.template,
+            joined=(AttributeValue.template,),
+        ),
         chain_load(
             ProcessRun.steps,
             Step.parameters,
             Parameter.template,
             AttributeGroupTemplate.attribute_templates,
+            joined=(Parameter.template,),
         ),
     ],
     (ProcessRunSchema, "resources"): [
@@ -79,6 +111,7 @@ PRELOAD_STATEMENTS = {
             ProcessRun.assignments,
             ResourceAssignment.resource_slot,
             ResourceSlot.resource_type,
+            joined=(ResourceAssignment.resource_slot,),
         ),
         chain_load(
             ProcessRun.assignments,
@@ -86,19 +119,7 @@ PRELOAD_STATEMENTS = {
             Resource.template,
             ResourceTemplate.types,
         ),
-        chain_load(
-            ProcessRun.assignments,
-            ResourceAssignment.resource,
-            Resource.properties,
-            Property._values,
-        ),
-        chain_load(
-            ProcessRun.assignments,
-            ResourceAssignment.resource,
-            Resource.properties,
-            Property.template,
-            AttributeGroupTemplate.attribute_templates,
-        ),
+        *property_loader_options(ProcessRun.assignments, ResourceAssignment.resource),
     ],
     (ProcessTemplateSchema, "step_templates"): [
         chain_load(ProcessTemplate.step_templates)
@@ -111,22 +132,8 @@ PRELOAD_STATEMENTS = {
         chain_load(ResourceTemplate.attribute_group_templates)
     ],
     (ResourceTemplateSchema, "types"): [chain_load(ResourceTemplate.types)],
-    (ResourceSchema, "properties"): [
-        chain_load(Resource.properties, Property._values, AttributeValue.template),
-        chain_load(
-            Resource.properties,
-            Property.template,
-            AttributeGroupTemplate.attribute_templates,
-        ),
-    ],
-    (ResourceRef, "properties"): [
-        chain_load(Resource.properties, Property._values, AttributeValue.template),
-        chain_load(
-            Resource.properties,
-            Property.template,
-            AttributeGroupTemplate.attribute_templates,
-        ),
-    ],
+    (ResourceSchema, "properties"): property_loader_options(),
+    (ResourceRef, "properties"): property_loader_options(),
     (ResourceSchema, "children"): [chain_load(Resource.children)],
     (ResourceRef, "children"): [chain_load(Resource.children)],
     (ResourceSchema, "template"): [chain_load(Resource.template)],

@@ -688,12 +688,7 @@ class LocalBackend(
         on a full-load tree, so flat-list hydration triggers zero lazy loads."""
         return (
             chain_load(Resource.parent),
-            chain_load(Resource.properties, Property._values),
-            chain_load(
-                Resource.properties,
-                Property.template,
-                AttributeGroupTemplate.attribute_templates,
-            ),
+            *preload_options(ResourceSchema, "properties"),
             chain_load(Resource.template, ResourceTemplate.types),
             chain_load(
                 Resource.template, ResourceTemplate.parent, ResourceTemplate.types
