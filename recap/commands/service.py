@@ -14,6 +14,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload, object_session, sessionmaker
 
+from recap.adapter.entity_loading import (
+    load_resource_ancestors,
+    prepare_graph_rows,
+    prepare_lifecycle_links,
+    prepare_run_links,
+)
 from recap.adapter.entity_records import EntityBatch
 from recap.authorization.scopes import Scope
 from recap.client.permissions import DenialCode
@@ -62,6 +68,7 @@ from recap.schemas.process import (
 from recap.schemas.resource import (
     ResourceCopyOptions,
     ResourceSchema,
+    ResourceTemplateSchema,
 )
 from recap.server.audit import AuditOutcome, AuditRecord
 from recap.server.errors import ErrorCode
@@ -302,6 +309,9 @@ class CommandService:
                         decision.response, POLICIES_BY_KIND[object_type].schema
                     )
                 validate_transition(obj.status, target_status)
+                prepare_lifecycle_links(
+                    session, obj, activating=target_status is LifecycleStatus.ACTIVE
+                )
                 if target_status is LifecycleStatus.ACTIVE:
                     if isinstance(obj, ProcessRun):
                         obj.finalize(bump_revision=False)
@@ -405,6 +415,12 @@ class CommandService:
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
                     return self._replay_graph(decision.response, ResourceSchema)
+                prepare_graph_rows(
+                    session,
+                    [template],
+                    ResourceTemplateSchema,
+                    {"children", "attribute_group_templates", "parent"},
+                )
                 resource = Resource(
                     id=id or uuid4(),
                     namespace=namespace,
@@ -496,6 +512,8 @@ class CommandService:
                 if decision is not None and decision.replayed:
                     assert decision.response is not None
                     return self._replay_graph(decision.response, ResourceSchema)
+                if resource.parent_id is not None:
+                    load_resource_ancestors(session, [resource.id])
                 root = _resource_root(resource)
                 effective_status = _effective_resource_status(resource, root)
                 if effective_status is LifecycleStatus.ARCHIVED:
@@ -518,6 +536,9 @@ class CommandService:
                         )
                     resource.name = name
                 if properties:
+                    prepare_graph_rows(
+                        session, [resource], ResourceSchema, {"properties"}
+                    )
                     self._apply_resource_changes(resource, properties)
                 self._apply_resource_children(session, resource, children, context)
                 compare_and_swap_revision(
@@ -1358,6 +1379,12 @@ class CommandService:
                 )
                 if decision is not None and decision.replayed:
                     return self._replay_graph(decision.response, ProcessRunSchema)
+                prepare_graph_rows(
+                    session,
+                    [template],
+                    ProcessTemplateSchema,
+                    {"step_templates", "resource_slots"},
+                )
                 run = ProcessRun(
                     id=draft.id or uuid4(),
                     namespace=namespace,
@@ -1365,8 +1392,16 @@ class CommandService:
                     description=draft.description,
                     template=template,
                 )
+                run.assignments = {}
+                for step in run.steps.values():
+                    step.assignments = {}
+                    step.children = []
                 session.add(run)
                 session.flush()
+                if draft.assignments or draft.steps or draft.child_steps:
+                    prepare_run_links(
+                        session, run, template_slots=bool(draft.assignments)
+                    )
                 self._apply_run_assignments(session, run, draft.assignments, context)
                 self._apply_run_steps(session, run, draft.steps, context)
                 self._apply_child_steps(session, run, draft.child_steps, context)
@@ -1481,6 +1516,13 @@ class CommandService:
                             "Cannot update a finalized process run"
                         )
                     allow_in_place_edit(session, run)
+                if (
+                    assignments is not None
+                    or steps is not None
+                    or child_steps
+                    or status == "ACTIVE"
+                ):
+                    prepare_run_links(session, run, template_slots=bool(assignments))
                 if assignments is not None:
                     self._apply_run_assignments(session, run, assignments, context)
                     if run.status is LifecycleStatus.ACTIVE:
@@ -1761,6 +1803,7 @@ class CommandService:
                 )
             with session.no_autoflush:
                 child = Step(id=draft.id, template=parent.template, name=draft.name)
+                child.assignments = {}
                 session.add(child)
                 child.parent = parent
                 child.parent_id = parent.id
@@ -1778,12 +1821,20 @@ class CommandService:
         """Validate role-scoped refinements and persist explicit overrides."""
         if resources and step.parent_id is None:
             raise CommandValidationError("Resource overrides require a child step")
+        prepared_resources = (
+            {
+                resource.id: resource
+                for resource in load_resource_ancestors(session, resources.values())
+            }
+            if resources
+            else {}
+        )
         for role, resource_id in resources.items():
             slot = step.template.resource_slots.get(role)
             if slot is None:
                 raise CommandValidationError(f"Unknown step resource role {role!r}")
             assignment = run.assignments.get(slot)
-            resource = session.get(Resource, resource_id)
+            resource = prepared_resources.get(resource_id)
             if assignment is None or resource is None:
                 raise CommandValidationError(
                     "Child override requires an assigned run resource"

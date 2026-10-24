@@ -14,6 +14,7 @@ from recap.db.process import ProcessRun, ResourceAssignment, ResourceSlot
 from recap.db.resource import Resource, ResourceTemplate
 from recap.db.step import Parameter, Step, StepTemplate, StepTemplateResourceSlotBinding
 from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
+from recap.schemas.step import StepTemplateSchema
 from recap.utils.loaders import chain_load
 
 
@@ -404,8 +405,8 @@ class _GraphPreparation(EntityBatchCollector):
         _load_missing(self.session, rows, required, options)
 
 
-def prepare_batch_graph(session, rows, schema, requested, on_unloaded="warn"):
-    """Prepare the same requested/supporting closure used by the batch collector."""
+def prepare_graph_rows(session, rows, schema, requested):
+    """Load requested/supporting ORM coverage without constructing response records."""
     rows = list(rows)
     if any(POLICIES_BY_ORM[type(row)].schema is not schema for row in rows):
         raise ValueError("Graph root schema does not match ORM rows")
@@ -413,9 +414,103 @@ def prepare_batch_graph(session, rows, schema, requested, on_unloaded="warn"):
     for row in rows:
         preparation.add_root(row, requested)
     preparation.prepare()
-    collector = EntityBatchCollector(
-        children_map=preparation.children_map, on_unloaded=on_unloaded
+    return preparation.children_map
+
+
+def load_resource_ancestors(session, root_ids):
+    """Load validation lineage in bounded batches without expanding properties."""
+    return _tree_rows(
+        session, Resource, root_ids, [joinedload(Resource.parent)], ancestors=True
     )
+
+
+def prepare_lifecycle_links(session, row, *, activating=False):
+    """Prepare aggregate ownership and activation references before flush guards."""
+    if isinstance(row, Resource) and row.parent_id is not None:
+        load_resource_ancestors(session, [row.id])
+    if isinstance(row, ProcessRun) and activating:
+        prepare_run_links(session, row)
+
+
+def _step_link_options(missing):
+    options = []
+    if "template" in missing:
+        options.append(joinedload(Step.template))
+    if "children" in missing:
+        options.append(selectinload(Step.children))
+    if "assignments" in missing:
+        options.append(selectinload(Step.assignments))
+    if "parameters" in missing:
+        options.extend(
+            [
+                chain_load(
+                    Step.parameters, Parameter.template, joined=(Parameter.template,)
+                ),
+                chain_load(
+                    Step.parameters,
+                    Parameter._values,
+                    AttributeValue.template,
+                    joined=(AttributeValue.template,),
+                ),
+            ]
+        )
+    return options
+
+
+def prepare_run_links(session, run, *, template_slots=False):
+    """Prepare missing validation links without reloading resource contents."""
+    missing = {"template", "steps", "assignments"} & inspect(run).unloaded
+    options = []
+    if "template" in missing:
+        options.append(joinedload(ProcessRun.template))
+    if "steps" in missing:
+        options.append(selectinload(ProcessRun.steps).joinedload(Step.template))
+    if "assignments" in missing:
+        options.extend(
+            [
+                chain_load(
+                    ProcessRun.assignments,
+                    ResourceAssignment.resource_slot,
+                    ResourceSlot.resource_type,
+                    joined=(
+                        ResourceAssignment.resource_slot,
+                        ResourceSlot.resource_type,
+                    ),
+                ),
+                chain_load(
+                    ProcessRun.assignments,
+                    ResourceAssignment.resource,
+                    Resource.template,
+                    joined=(ResourceAssignment.resource, Resource.template),
+                ),
+            ]
+        )
+    _load_missing(session, [run], missing, options)
+    if template_slots:
+        prepare_graph_rows(
+            session, [run.template], ProcessTemplateSchema, {"resource_slots"}
+        )
+    prepare_graph_rows(
+        session,
+        list(dict.fromkeys(step.template for step in run.steps.values())),
+        StepTemplateSchema,
+        {"attribute_group_templates", "resource_slots"},
+    )
+    groups = defaultdict(list)
+    for step in run.steps.values():
+        missing = {"template", "children", "parameters", "assignments"} & inspect(
+            step
+        ).unloaded
+        groups[frozenset(missing)].append(step)
+    for missing, steps in groups.items():
+        _load_missing(session, steps, set(missing), _step_link_options(missing))
+
+
+def prepare_batch_graph(session, rows, schema, requested, on_unloaded="warn"):
+    """Prepare the same requested/supporting closure used by the batch collector."""
+    rows = list(rows)
+    children_map = prepare_graph_rows(session, rows, schema, requested)
+    collector = EntityBatchCollector(children_map=children_map, on_unloaded=on_unloaded)
     for row in rows:
         collector.add_root(row, requested)
     return collector.collect()

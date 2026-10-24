@@ -32,6 +32,8 @@ from recap.schemas.resource import (
 from recap.server.app import create_app
 from recap.utils.general import Direction
 
+from .entity_fixtures import record_loaded_plate, setup_plate_workflow
+
 
 @pytest.fixture(params=["local", "remote"], ids=["local", "remote"])
 def command_client(request, tmp_path, rest_loopback_client):
@@ -49,6 +51,51 @@ def seed_command_namespace(client):
     client.create_namespace("beamline/amx")
     scoped = client.namespace("beamline/amx")
     return scoped
+
+
+@pytest.mark.parametrize("well_count", [12, 96], ids=["12-wells", "96-wells"])
+def test_two_transfer_plate_workflow_has_local_remote_parity(
+    command_client, well_count
+):
+    scoped = seed_command_namespace(command_client)
+    inputs = setup_plate_workflow(scoped, well_count)
+    result = record_loaded_plate(scoped, inputs)
+    plate = scoped.get_resource("Recorded plate", "Loaded plate", expand=True)
+    run = (
+        scoped.query_maker().process_runs(load="eager").filter(id=result.run_id).first()
+    )
+    assert plate.id == result.plate_id
+    assert plate.status.value == run.status.value == "ACTIVE"
+    assert len(plate.children) == well_count
+    assert len({child.template.id for child in plate.children.values()}) == well_count
+    parent = run.steps["Transfer"]
+    assert len(parent.children) == 2
+    assert run.assigned_resources["plate"].resource.id == plate.id
+    assert run.assigned_resources["group"].resource.id == inputs.group_id
+    assert {child.resources["source"].id for child in parent.children.values()} == set(
+        inputs.source_ids
+    )
+    for child in parent.children.values():
+        destination = child.resources["destination"]
+        assert destination.id == plate.children[child.name].id
+        assert child.parent_id == parent.id and child.process_run_id == run.id
+        assert child.parameters["Transfer details"].values["Volume"].value == 10.0
+        assert child.parameters["Transfer details"].values["Volume"].unit == "uL"
+        mass = destination.properties["Measurements"].values["Mass"]
+        assert mass.value in {2.5, 3.5} and mass.unit == "mg"
+        assert mass.metadata_json["source_id"] == str(child.resources["source"].id)
+        assert destination.properties["Measurements"].values["Readings"].value == [
+            1,
+            1,
+            2,
+        ]
+        assert (
+            destination.properties["Identity"].values["Note"].value == "synthetic-batch"
+        )
+    untouched = next(
+        child for child in plate.children.values() if child.name not in parent.children
+    )
+    assert untouched.properties["Measurements"].values["Mass"].value is None
 
 
 def test_direct_adapter_replays_original_snapshot_after_update(command_client):

@@ -1,6 +1,7 @@
 """Cold distinct-template graphs expose preparation and extraction SQL separately."""
 
 import hashlib
+from contextlib import contextmanager
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -15,6 +16,8 @@ from recap.adapter.local import LocalBackend
 from recap.adapter.query_loaders import resolve_loader_options
 from recap.client.identity import IdentityMap
 from recap.client.materialization import BatchMaterializer
+from recap.commands.context import build_local_command_context
+from recap.commands.models import CreateResource
 from recap.commands.service import CommandService
 from recap.db.process import ProcessRun
 from recap.db.resource import Resource, ResourceTemplate
@@ -29,7 +32,11 @@ from scripts.profile_bulk_loading import (
 )
 
 from .conftest import count_statements
-from .entity_fixtures import seed_loaded_well_plate
+from .entity_fixtures import (
+    record_loaded_plate,
+    seed_loaded_well_plate,
+    setup_plate_workflow,
+)
 
 
 @pytest.fixture(params=[12, 96], ids=["12-wells", "96-wells"])
@@ -75,11 +82,18 @@ def test_statement_attribution_matches_existing_counter(loaded_plate):
     assert batch.roots[0].id == graph.plate_id
 
 
-def test_capture_ignores_other_engines_and_cleans_up_on_error(loaded_plate):
+@pytest.mark.parametrize("command_phases", [False, True], ids=["reads", "commands"])
+def test_capture_ignores_other_engines_and_cleans_up_on_error(
+    loaded_plate, command_phases
+):
     factory, graph = loaded_plate
     other = create_engine(factory.kw["bind"].url)
+    original_snapshot, original_flush = CommandService._graph_result, Session.flush
     try:
-        with pytest.raises(RuntimeError), capture_sql(factory.kw["bind"]) as profile:
+        with (
+            pytest.raises(RuntimeError),
+            capture_sql(factory.kw["bind"], command_phases=command_phases) as profile,
+        ):
             with other.connect() as connection:
                 connection.exec_driver_sql("SELECT 1")
             with Session(other) as session:
@@ -96,6 +110,8 @@ def test_capture_ignores_other_engines_and_cleans_up_on_error(loaded_plate):
         with factory() as session:
             session.get(Resource, graph.plate_id)
         assert profile.total_sql == before
+        assert CommandService._graph_result is original_snapshot
+        assert Session.flush is original_flush
     finally:
         other.dispose()
 
@@ -598,3 +614,80 @@ def test_diagnostics_reject_missing_or_wrong_namespace_roots(loaded_plate, snaps
         profile_read(factory, graph.namespace_path, uuid4(), snapshot=snapshot)
     with pytest.raises(ValueError, match="namespace"):
         profile_read(factory, "", graph.plate_id, snapshot=snapshot)
+
+
+def test_command_sql_is_attributed_to_mutation_flush_and_snapshot(loaded_plate):
+    factory, graph = loaded_plate
+    engine = factory.kw["bind"]
+    with factory() as session:
+        template_id = session.get(Resource, graph.plate_id).resource_template_id
+    original_snapshot = CommandService._graph_result
+    original_flush = Session.flush
+    with (
+        count_statements(engine) as count,
+        capture_sql(engine, command_phases=True) as profile,
+    ):
+        result = CommandService(sessionmaker(bind=engine)).execute_batch(
+            CreateResource(
+                namespace_path=graph.namespace_path,
+                name="Measured plate",
+                template_id=template_id,
+            ),
+            build_local_command_context(),
+        )
+    assert count["n"] == profile.total_sql == sum(profile.sql_by_phase.values())
+    assert all(
+        profile.sql_by_phase[phase] > 0
+        for phase in ("mutation", "flush", "snapshot_preparation")
+    )
+    assert profile.sql_by_phase["collection"] == 0
+    assert profile.sql_by_kind["insert"] > 0
+    assert profile.sql_by_kind["select"] > 0
+    assert sum(profile.sql_by_kind.values()) == profile.total_sql
+    assert profile.collected_records["snapshot_preparation"] == len(result.entities)
+    assert CommandService._graph_result is original_snapshot
+    assert Session.flush is original_flush
+    assert not any(".pixi" in caller for caller in profile.callers)
+    assert not profile.lazy_by_phase.get("mutation"), profile.lazy_by_phase
+    assert not profile.lazy_by_phase.get("flush"), profile.lazy_by_phase
+
+
+@pytest.mark.performance
+@pytest.mark.parametrize("well_count", [12, 96], ids=["12-wells", "96-wells"])
+def test_two_transfer_workflow_phase_budgets(client, well_count):
+    inputs = setup_plate_workflow(client, well_count)
+    profiles = {}
+
+    @contextmanager
+    def measure(label):
+        with capture_sql(
+            client.connection_state.engine, command_phases=True
+        ) as profile:
+            if label in {"source_reads", "children_read"}:
+                profile.phase = "query"
+            yield
+        profiles[label] = profile
+
+    result = record_loaded_plate(client, inputs, measure=measure)
+    assert len(result.well_ids) == well_count
+    for label, profile in profiles.items():
+        assert profile.sql_by_phase["collection"] == 0, (label, profile.report())
+        assert sum(profile.sql_by_kind.values()) == profile.total_sql
+        assert sum(profile.sql_by_phase.values()) == profile.total_sql
+        print(
+            well_count,
+            label,
+            profile.total_sql,
+            dict(profile.sql_by_phase),
+            dict(profile.sql_by_kind),
+            {phase: dict(counts) for phase, counts in profile.lazy_by_phase.items()},
+            sep=" | ",
+        )
+        assert not profile.lazy_by_phase.get("flush"), (label, profile.lazy_by_phase)
+        assert all(
+            ".namespace]" in path for path in profile.lazy_by_phase.get("mutation", {})
+        ), (label, profile.lazy_by_phase)
+        if label == "create_run":
+            assert profile.sql_by_kind["select"] <= 75
+        if label == "finalize_run":
+            assert profile.sql_by_kind["select"] <= 200

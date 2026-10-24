@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 from collections import Counter
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -15,7 +15,8 @@ from uuid import UUID
 
 from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.exc import UnboundExecutionError
+from sqlalchemy.orm import Session, object_session, sessionmaker
 
 from recap.adapter.entity_batch import EntityBatchCollector
 from recap.adapter.local import LocalBackend
@@ -36,7 +37,21 @@ class SQLProfile:
     column_refreshes: int = 0
     loaded_types: Counter[str] = field(default_factory=Counter)
     callers: Counter[str] = field(default_factory=Counter)
+    sql_by_kind: Counter[str] = field(default_factory=Counter)
+    sql_kinds_by_phase: dict[str, Counter[str]] = field(default_factory=dict)
+    lazy_by_phase: dict[str, Counter[str]] = field(default_factory=dict)
+    callers_by_phase: dict[str, Counter[str]] = field(default_factory=dict)
+    collected_records: Counter[str] = field(default_factory=Counter)
     phase: str = "preparation"
+
+    @contextmanager
+    def in_phase(self, phase):
+        previous = self.phase
+        self.phase = phase
+        try:
+            yield
+        finally:
+            self.phase = previous
 
     def report(self):
         return {
@@ -47,7 +62,21 @@ class SQLProfile:
             "column_refreshes": self.column_refreshes,
             "loaded_types": dict(self.loaded_types),
             "callers": dict(self.callers),
+            "sql_by_kind": dict(self.sql_by_kind),
+            "sql_kinds_by_phase": {
+                phase: dict(counts) for phase, counts in self.sql_kinds_by_phase.items()
+            },
+            "lazy_by_phase": {
+                phase: dict(counts) for phase, counts in self.lazy_by_phase.items()
+            },
+            "callers_by_phase": {
+                phase: dict(counts) for phase, counts in self.callers_by_phase.items()
+            },
+            "collected_records": dict(self.collected_records),
         }
+
+
+_PACKAGE_ROOT = str(Path(__file__).resolve().parents[1] / "recap") + "/"
 
 
 def _recap_callers():
@@ -57,8 +86,8 @@ def _recap_callers():
     try:
         while frame is not None:
             filename = frame.f_code.co_filename.replace("\\", "/")
-            if "/recap/" in filename:
-                relative = "recap/" + filename.rsplit("/recap/", 1)[1]
+            if filename.startswith(_PACKAGE_ROOT):
+                relative = "recap/" + filename[len(_PACKAGE_ROOT) :]
                 locations.append(f"{relative}:{frame.f_lineno}:{frame.f_code.co_name}")
             frame = frame.f_back
     finally:
@@ -79,52 +108,95 @@ def _orm_attribution(state, token):
     )
 
 
-def _count_statement(profile, token, context):
+def _count_statement(profile, token, context, statement):
     profile.total_sql += 1
     profile.sql_by_phase[profile.phase] += 1
+    keyword = statement.lstrip().split(None, 1)[0].lower()
+    kind = (
+        "select"
+        if keyword in {"select", "with"}
+        else keyword
+        if keyword in {"insert", "update", "delete"}
+        else "other"
+    )
+    profile.sql_by_kind[kind] += 1
+    profile.sql_kinds_by_phase.setdefault(profile.phase, Counter())[kind] += 1
     attribution = context.execution_options.get("_bulk_profile")
     if attribution is None or attribution[0] is not token:
+        callers = _recap_callers()
+        profile.callers.update(callers)
+        profile.callers_by_phase.setdefault(profile.phase, Counter()).update(callers)
         return
     _, category, path, callers = attribution
     if category == "lazy":
         profile.lazy_relationships[path] += 1
+        profile.lazy_by_phase.setdefault(profile.phase, Counter())[path] += 1
     elif category == "planned":
         profile.planned_relationships[path] += 1
     elif category == "column":
         profile.column_refreshes += 1
     profile.callers.update(callers)
+    profile.callers_by_phase.setdefault(profile.phase, Counter()).update(callers)
+
+
+def _owns_engine(session, engine, **bind_arguments):
+    try:
+        bind = session.get_bind(**bind_arguments)
+    except UnboundExecutionError:
+        return False
+    return getattr(bind, "engine", bind) is engine
 
 
 @contextmanager
-def capture_sql(engine: Engine):
+def _command_phase_patches(profile, engine):
+    original_snapshot = CommandService._graph_result
+    original_flush = Session.flush
+
+    def snapshot(row, schema):
+        session = object_session(row)
+        if session is not None and _owns_engine(session, engine):
+            with profile.in_phase("snapshot_preparation"):
+                return original_snapshot(row, schema)
+        return original_snapshot(row, schema)
+
+    def flush(session, *args, **kwargs):
+        if _owns_engine(session, engine):
+            with profile.in_phase("flush"):
+                return original_flush(session, *args, **kwargs)
+        return original_flush(session, *args, **kwargs)
+
+    with (
+        patch.object(CommandService, "_graph_result", staticmethod(snapshot)),
+        patch.object(Session, "flush", flush),
+    ):
+        yield
+
+
+@contextmanager
+def capture_sql(engine: Engine, *, command_phases=False):
     """Track one engine and always restore collector/event instrumentation."""
-    profile = SQLProfile()
+    profile = SQLProfile(phase="mutation" if command_phases else "preparation")
     token = object()
 
-    def owns(session, **bind_arguments):
-        bind = session.get_bind(**bind_arguments)
-        return getattr(bind, "engine", bind) is engine
-
     def orm_execute(state):
-        if owns(state.session, **state.bind_arguments):
+        if _owns_engine(state.session, engine, **state.bind_arguments):
             _orm_attribution(state, token)
 
     def before_cursor(conn, cursor, statement, parameters, context, executemany):
-        _count_statement(profile, token, context)
+        _count_statement(profile, token, context, statement)
 
     def loaded(session, instance):
-        if owns(session, mapper=inspect(instance).mapper):
+        if _owns_engine(session, engine, mapper=inspect(instance).mapper):
             profile.loaded_types[type(instance).__name__] += 1
 
     original_collect = EntityBatchCollector.collect
 
     def collect(collector):
         previous = profile.phase
-        profile.phase = "collection"
-        try:
-            return original_collect(collector)
-        finally:
-            profile.phase = previous
+        with profile.in_phase("collection"):
+            batch = original_collect(collector)
+        profile.collected_records[previous] += len(batch.entities)
+        return batch
 
     listeners = [
         (engine, "before_cursor_execute", before_cursor),
@@ -136,7 +208,10 @@ def capture_sql(engine: Engine):
         for target, name, listener in listeners:
             event.listen(target, name, listener)
             installed.append((target, name, listener))
-        with patch.object(EntityBatchCollector, "collect", collect):
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(EntityBatchCollector, "collect", collect))
+            if command_phases:
+                stack.enter_context(_command_phase_patches(profile, engine))
             yield profile
     finally:
         for target, name, listener in reversed(installed):
