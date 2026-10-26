@@ -14,8 +14,9 @@ a :class:`~recap.schemas.process.ProcessRunSchema`:
   serialisation.
 """
 
+from copy import deepcopy
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, ClassVar
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
@@ -31,6 +32,7 @@ from recap.schemas.resource import ResourceSchema, ResourceSlotSchema
 from recap.utils.dsl import (
     build_param_values_model,
     build_step_parameters_model,
+    read_only_unwrap,
 )
 from recap.utils.general import from_json_value, validate_enum_value
 
@@ -73,6 +75,7 @@ class StepTemplateSchema(LoadAwareMixin, CommonFields):
     name: Annotated[str, SIMPLE_FIELD]
     attribute_group_templates: list[AttributeGroupTemplateSchema] = []
     resource_slots: dict[str, ResourceSlotSchema] = {}
+    _draft_shared_fields: ClassVar[frozenset[str]] = frozenset({"resource_slots"})
     _relation_fields = frozenset({"attribute_group_templates", "resource_slots"})
 
     def set_loaded_relations(self, loaded_relations, *, on_unloaded="warn"):
@@ -105,6 +108,7 @@ class ParameterSchema(AttributeChangeMixin, CommonFields):
     """
 
     template: AttributeGroupTemplateSchema
+    _draft_shared_fields: ClassVar[frozenset[str]] = frozenset({"template"})
     values: BaseModel = Field(repr=False)
     _changed_attributes: dict[str, set[str]] = PrivateAttr(default_factory=dict)
 
@@ -366,6 +370,9 @@ class StepSchema(LoadAwareMixin, CommonFields):
     resources: dict[str, "ResourceSchema"] = Field(default_factory=dict)
     resource_overrides: dict[str, UUID] = Field(default_factory=dict)
     _parameters_dirty: bool = PrivateAttr(default=False)
+    _draft_shared_fields: ClassVar[frozenset[str]] = frozenset(
+        {"template", "resources"}
+    )
 
     @property
     def parameters_dirty(self) -> bool:
@@ -424,7 +431,8 @@ class StepSchema(LoadAwareMixin, CommonFields):
                 values={
                     attribute.name: {
                         "value": from_json_value(
-                            attribute.value_type, attribute.default_value
+                            attribute.value_type,
+                            deepcopy(read_only_unwrap(attribute.default_value)),
                         ),
                         "unit": attribute.unit,
                         "metadata_json": {},

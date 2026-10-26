@@ -67,3 +67,13 @@ def test_new_resource_get_model_is_copy_on_write(client):
     assert draft.id == builder.resource.id
     draft.name = "changed"
     assert builder.resource.name == "copy-resource"
+
+
+def test_resource_builder_exposes_template_read_only(client):
+    scoped, resource = _make_resource(client)
+    with scoped.build_resource(resource_id=resource.id) as builder:
+        with pytest.raises(TypeError, match="read-only"):
+            builder.resource.template.name = "unsaved"
+        with pytest.raises(TypeError, match="read-only"):
+            builder.get_model().template.name = "unsaved"
+    assert resource.template.name == "IdentityRT"

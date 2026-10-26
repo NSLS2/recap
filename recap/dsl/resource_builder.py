@@ -23,7 +23,7 @@ from recap.dsl.drafts import (
     AttributeDraft,
     AttributeGroupDraft,
     ResourceTemplateDraft,
-    detached_model,
+    draft_copy,
 )
 from recap.dsl.query import QuerySpec
 from recap.exceptions import (
@@ -116,7 +116,7 @@ class ResourceBuilder:
 
     def _load_existing_resource(self, resource_id: UUID):
         self._resource = self._reload_resource(resource_id)
-        self._draft = self._resource.model_copy(deep=True)
+        self._draft = draft_copy(self._resource)
         self._expected_revision = self._resource.revision
         self._is_new_resource = False
         self._last_properties_payload = self._resource_properties_payload()
@@ -149,7 +149,7 @@ class ResourceBuilder:
         self._template_id = template.id
         if isinstance(template, ResourceTemplateSchema):
             self._resource = self._draft_resource(template)
-            self._draft = self._resource.model_copy(deep=True)
+            self._draft = draft_copy(self._resource)
             self._initial_properties_payload = self._resource_properties_payload(
                 self._draft
             )
@@ -188,9 +188,7 @@ class ResourceBuilder:
                         stacklevel=2,
                     )
                 self._resource = ResourceSchema.model_validate(matches[0])
-                self._draft = self._resource.model_copy(
-                    deep=True, update={"id": self._resource.id}
-                )
+                self._draft = draft_copy(self._resource)
                 self._expected_revision = self._resource.revision
                 self._is_new_resource = False
                 self._reused_existing = True
@@ -315,7 +313,8 @@ class ResourceBuilder:
         )
         if isinstance(result, ResourceSchema):
             self._resource = result
-            self._draft = result.model_copy(deep=True)
+            self._draft = draft_copy(result)
+            bind_attribute_observers(self._draft)
             self._expected_revision = result.revision
             self._last_properties_payload = self._resource_properties_payload(result)
             self._transaction.clear_lifecycle(owner=self)
@@ -334,7 +333,7 @@ class ResourceBuilder:
         if self._draft is None:
             if self._resource is None:
                 raise RuntimeError("Parent builder has no provisional resource")
-            self._draft = self._resource.model_copy(deep=True)
+            self._draft = draft_copy(self._resource)
         if not isinstance(self._draft.children, dict):
             raise ValueError("Parent resource has invalid children schema")
         self._draft.children[child.resource.name] = child.resource
@@ -434,7 +433,7 @@ class ResourceBuilder:
         if previous_children and not pending_children:
             result.children = {**previous_children, **result.children}
         self._resource = result
-        self._draft = result.model_copy(deep=True)
+        self._draft = draft_copy(result)
         bind_attribute_observers(self._draft)
         self._expected_revision = result.revision
         self._is_new_resource = False
@@ -465,7 +464,7 @@ class ResourceBuilder:
             if not child._submitted and child.name in result.children:
                 persisted = result.children[child.name]
                 child._resource = persisted
-                child._draft = persisted.model_copy(deep=True)
+                child._draft = draft_copy(persisted)
                 bind_attribute_observers(child._draft)
                 child._is_new_resource = False
                 child._submitted = True
@@ -561,8 +560,10 @@ class ResourceBuilder:
         if update and self._resource:
             self._resource = self._reload_resource(self._resource.id)
             self._expected_revision = self._resource.revision
-            self._draft = self._resource.model_copy(deep=True)
-        model = (self._draft or self.resource).model_copy(deep=True)
+            self._draft = draft_copy(self._resource)
+            bind_attribute_observers(self._draft)
+            self._last_properties_payload = self._resource_properties_payload()
+        model = draft_copy(self._draft or self.resource)
         return lock_instance_fields(
             model, {"id", "create_date", "modified_date", "slug", "template"}
         )
@@ -572,7 +573,7 @@ class ResourceBuilder:
             raise ValueError(
                 "ID for this Resource does not match the builder's resource"
             )
-        self._draft = detached_model(model)
+        self._draft = draft_copy(model)
         bind_attribute_observers(self._draft)
         mark_attribute_groups_changed(self._draft)
         self._submitted = False
@@ -616,7 +617,7 @@ class ResourceBuilder:
                 source.template, ResourceTemplateSchema
             ):
                 raise ValueError("Copied child requires valid resource schema")
-            copied = source.model_copy(deep=True)
+            copied = draft_copy(source)
             copied.id = uuid4()
             copied.parent = self.resource
             copied.copied_from_id = source_id
@@ -625,7 +626,7 @@ class ResourceBuilder:
                 def clone_children(parent, children):
                     result = {}
                     for child_name, child in children.items():
-                        clone = child.model_copy(deep=True)
+                        clone = draft_copy(child)
                         clone.id = uuid4()
                         clone.parent = parent
                         clone.copied_from_id = None
@@ -645,7 +646,7 @@ class ResourceBuilder:
                 transaction=self._transaction,
             )
             child_builder._resource = copied
-            child_builder._draft = copied.model_copy(deep=True)
+            child_builder._draft = draft_copy(copied)
             child_builder._is_new_resource = True
             child_builder._submitted = False
             child_builder._template_id = copied.template.id
@@ -968,7 +969,7 @@ class ResourceTemplateBuilder:
         if not isinstance(self._template, ResourceTemplateSchema):
             raise RuntimeError("Command backend did not return resource template")
         return lock_instance_fields(
-            self._template.model_copy(deep=True),
+            draft_copy(self._template),
             {"id", "create_date", "modified_date", "version"},
         )
 
@@ -979,7 +980,7 @@ class ResourceTemplateBuilder:
             raise ValueError(
                 "ID for this ResourceTemplate does not match the builder's template"
             )
-        self._draft_model = detached_model(model)
+        self._draft_model = draft_copy(model)
         if isinstance(model, ResourceTemplateSchema):
             self.name = model.name
             self.version = model.version

@@ -1,4 +1,5 @@
 import warnings
+from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
@@ -26,7 +27,7 @@ from recap.dsl.drafts import (
     ProcessTemplateDraft,
     ResourceSlotDraft,
     StepTemplateDraft,
-    detached_model,
+    draft_copy,
 )
 from recap.dsl.query import QuerySpec
 from recap.exceptions import (
@@ -52,8 +53,47 @@ from recap.utils.dsl import (
     build_step_parameters_model,
     lock_instance_fields,
     mark_attribute_groups_changed,
+    read_only_view,
 )
 from recap.utils.general import Direction
+
+
+@dataclass(frozen=True)
+class _ChildStepIdentity:
+    name: str
+    parent_id: UUID | None
+    process_run_id: UUID | None
+    template_id: UUID
+    resource_roles: frozenset[str]
+
+
+@dataclass(frozen=True)
+class _ProcessRunBaseline:
+    """Independent editable payloads and identities, without referenced graphs."""
+
+    description: str
+    assignments: dict[str, UUID]
+    steps: dict[str, dict]
+    children: dict[UUID, _ChildStepIdentity]
+
+    @classmethod
+    def from_model(cls, model):
+        return cls(
+            description=model.description,
+            assignments=ProcessRunBuilder._assignment_ids(model),
+            steps=ProcessRunBuilder._model_steps_payload(model),
+            children={
+                child.id: _ChildStepIdentity(
+                    child.name,
+                    child.parent_id,
+                    child.process_run_id,
+                    child.template.id,
+                    frozenset(child.resources),
+                )
+                for parent in model.steps.values()
+                for child in parent.children.values()
+            },
+        )
 
 
 class ProcessTemplateBuilder:
@@ -281,7 +321,7 @@ class ProcessTemplateBuilder:
         if not isinstance(self._template, ProcessTemplateSchema):
             raise RuntimeError("Command backend did not return process template")
         return lock_instance_fields(
-            self._template.model_copy(deep=True),
+            draft_copy(self._template),
             {"id", "create_date", "modified_date", "version"},
         )
 
@@ -291,7 +331,7 @@ class ProcessTemplateBuilder:
             raise RuntimeError("Template not initialized")
         if model.id != self._template.id:
             raise ValueError("ID for this ProcessTemplate does not match the builder")
-        self._draft_model = detached_model(model)
+        self._draft_model = draft_copy(model)
         if isinstance(model, ProcessTemplateSchema):
             self.name = model.name
             self.version = model.version
@@ -568,11 +608,7 @@ class ProcessRunBuilder:
             if process_run_id is not None
             else None
         )
-        self._draft_process_run = (
-            self._process_run.model_copy(deep=True)
-            if self._process_run is not None
-            else None
-        )
+        self._draft_process_run = None
         self._dirty = False
         if self._process_run is not None:
             self.name = self._process_run.name
@@ -639,7 +675,6 @@ class ProcessRunBuilder:
                     raise TypeError(
                         "Process-run builder requires ProcessRunSchema result"
                     )
-                self._draft_process_run = self._process_run.model_copy(deep=True)
                 self.name = self._process_run.name
                 self.description = self._process_run.description
         self._steps = (
@@ -648,10 +683,10 @@ class ProcessRunBuilder:
             else []
         )
         if self._process_run is not None:
-            self._draft_process_run = self._process_run.model_copy(deep=True)
+            self._draft_process_run = draft_copy(self._process_run)
             self._submitted = True
-        self._baseline_process_run = (
-            self._process_run.model_copy(deep=True)
+        self._baseline = (
+            _ProcessRunBaseline.from_model(self._process_run)
             if self._process_run is not None
             else None
         )
@@ -742,8 +777,8 @@ class ProcessRunBuilder:
             if not isinstance(result, ProcessRunSchema):
                 return self
             self._process_run = result
-            self._draft_process_run = result.model_copy(deep=True)
-            self._baseline_process_run = result.model_copy(deep=True)
+            self._draft_process_run = draft_copy(result)
+            self._baseline = _ProcessRunBaseline.from_model(result)
             self._draft_assignments = self._assignment_ids(result)
             self._draft_steps = self._model_steps_payload(result)
             self.name = result.name
@@ -769,8 +804,9 @@ class ProcessRunBuilder:
             )
             if isinstance(result, ProcessRunSchema):
                 self._process_run = result
-                self._draft_process_run = result.model_copy(deep=True)
-                self._baseline_process_run = result.model_copy(deep=True)
+                self._draft_process_run = draft_copy(result)
+                self._baseline = _ProcessRunBaseline.from_model(result)
+                self._bind_draft_observers()
                 self._draft_assignments = self._assignment_ids(result)
                 self._draft_steps = self._model_steps_payload(result)
                 self._steps = list(result.steps.values())
@@ -816,7 +852,7 @@ class ProcessRunBuilder:
         if model.id != self._process_run.id:
             raise ValueError("ID for this ProcessRun does not match the builder")
         self._validate_step_structure(model)
-        self._draft_process_run = detached_model(model)
+        self._draft_process_run = draft_copy(model)
         self._bind_draft_observers()
         for parent in self._draft_process_run.steps.values():
             for step in (parent, *parent.children.values()):
@@ -876,7 +912,7 @@ class ProcessRunBuilder:
                 },
             )
         )
-        parent.children[child.name] = child.model_copy(deep=True)
+        parent.children[child.name] = draft_copy(child)
         bind_attribute_observers(parent.children[child.name])
         self._dirty = True
         return parent.children[child.name]
@@ -899,7 +935,9 @@ class ProcessRunBuilder:
         )
         if slot is not None:
             self._draft_process_run.assigned_resources[resource_slot_name] = (
-                ResourceAssignmentSchema(slot=slot, resource=resource)
+                ResourceAssignmentSchema(
+                    slot=read_only_view(slot), resource=read_only_view(resource)
+                )
             )
         self._dirty = True
         self._save_called = False
@@ -1068,8 +1106,12 @@ class ProcessRunBuilder:
         """
         if update:
             self._process_run = self._reload_process_run(self._process_run.id)
-            self._draft_process_run = self._process_run.model_copy(deep=True)
-        model = (self._draft_process_run or self._process_run).model_copy(deep=True)
+            self._draft_process_run = draft_copy(self._process_run)
+            self._baseline = _ProcessRunBaseline.from_model(self._process_run)
+            self._draft_assignments = self._assignment_ids(self._process_run)
+            self._draft_steps = self._model_steps_payload(self._process_run)
+            self._bind_draft_observers()
+        model = draft_copy(self._draft_process_run or self._process_run)
         return lock_instance_fields(
             model, {"id", "create_date", "modified_date", "template"}
         )
@@ -1092,9 +1134,9 @@ class ProcessRunBuilder:
 
     def _assignment_changes(self) -> dict[str, UUID]:
         current = self._draft_assignments
-        baseline = self._assignment_ids(self._baseline_process_run)
-        if self._baseline_process_run is None:
+        if self._baseline is None:
             return dict(current)
+        baseline = self._baseline.assignments
         return {
             name: resource_id
             for name, resource_id in current.items()
@@ -1103,11 +1145,7 @@ class ProcessRunBuilder:
 
     def _step_changes(self):
         self._validate_step_structure(self._draft_process_run)
-        persisted_model = (
-            self._model_steps_payload(self._baseline_process_run)
-            if self._baseline_process_run is not None
-            else {}
-        )
+        persisted_model = self._baseline.steps if self._baseline is not None else {}
         current_model = self._model_steps_payload(
             self._draft_process_run, persisted_model
         )
@@ -1145,7 +1183,7 @@ class ProcessRunBuilder:
                 if (str(step.id) if step.parent_id is not None else step.name) == name
             ):
                 self._draft_steps[name] = value
-        if self._baseline_process_run is None:
+        if self._baseline is None:
             return dict(self._draft_steps)
         baseline = persisted_model
         return {
@@ -1155,13 +1193,9 @@ class ProcessRunBuilder:
         }
 
     def _validate_step_structure(self, model):
-        if self._baseline_process_run is None:
+        if self._baseline is None:
             return
-        baseline_children = {
-            child.id: child
-            for parent in self._baseline_process_run.steps.values()
-            for child in parent.children.values()
-        }
+        baseline_children = self._baseline.children
         current_children = {
             child.id: child
             for parent in model.steps.values()
@@ -1185,19 +1219,16 @@ class ProcessRunBuilder:
                     or child.name != original.name
                     or child.process_run_id != original.process_run_id
                     or child.parent_id != original.parent_id
-                    or child.template.id != original.template.id
+                    or child.template.id != original.template_id
                 ):
                     raise ValueError(
                         "Child identity, name, parent and template are fixed"
                     )
-                if original and not original.resources.keys() <= child.resources.keys():
+                if original and not original.resource_roles <= child.resources.keys():
                     raise ValueError("Child resource override removal is not supported")
 
     def _description_change(self):
-        if (
-            self._baseline_process_run is None
-            or self.description != self._baseline_process_run.description
-        ):
+        if self._baseline is None or self.description != self._baseline.description:
             return self.description
         return None
 

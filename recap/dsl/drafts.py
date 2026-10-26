@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from recap.schemas.attribute import AttributeTemplateValidator, TypeName
+from recap.utils.dsl import ReadOnlyMixin, read_only_view
 from recap.utils.general import Direction
 
 
@@ -13,9 +14,60 @@ class DraftModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-def detached_model(model: BaseModel) -> BaseModel:
-    """Copy caller-owned models before using them as builder draft state."""
-    return model.model_copy(deep=True)
+def draft_copy(model: BaseModel) -> BaseModel:
+    """Detach owned state while exposing external canonical references read-only.
+
+    Owned objects take precedence over shared references, preserving back-links
+    such as a copied child's parent pointing to the copied root.
+    """
+    if isinstance(model, ReadOnlyMixin):
+        return model
+    memo = _draft_copy_memo(model)
+    # Pydantic's hook registers the model only after copying its fields. Seed
+    # the root first so child-to-root back-links cannot create a second root.
+    result = object.__new__(type(model))
+    memo[id(model)] = result
+    copied = model.__deepcopy__(memo)
+    for name in (
+        "__dict__",
+        "__pydantic_extra__",
+        "__pydantic_fields_set__",
+        "__pydantic_private__",
+    ):
+        object.__setattr__(result, name, object.__getattribute__(copied, name))
+    return result
+
+
+def _draft_copy_memo(model: BaseModel) -> dict[int, BaseModel]:
+    owned = set()
+    shared = {}
+    visited = set()
+
+    def visit(value, *, external=False):
+        if isinstance(value, ReadOnlyMixin):
+            return
+        if isinstance(value, BaseModel):
+            if external:
+                shared[id(value)] = value
+                return
+            if id(value) in owned:
+                return
+            owned.add(id(value))
+            boundary = getattr(type(value), "_draft_shared_fields", frozenset())
+            for name in type(value).model_fields:
+                visit(value.__dict__.get(name), external=name in boundary)
+        elif isinstance(value, (dict, list, tuple, set)):
+            key = (id(value), external)
+            if key in visited:
+                return
+            visited.add(key)
+            for item in value.values() if isinstance(value, dict) else value:
+                visit(item, external=external)
+
+    visit(model)
+    return {
+        key: read_only_view(value) for key, value in shared.items() if key not in owned
+    }
 
 
 class AttributeDraft(DraftModel):

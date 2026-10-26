@@ -1,6 +1,7 @@
+from collections.abc import Mapping, Sequence, Set
 from copy import deepcopy
 from datetime import datetime
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -249,6 +250,157 @@ def lock_instance_fields(model: BaseModel, fields: set[str]) -> BaseModel:
 
     object.__setattr__(model, "__setattr__", _locked_setattr.__get__(model))
     return model
+
+
+class ReadOnlyError(TypeError):
+    """A draft tried to mutate a referenced canonical model."""
+
+
+class ReadOnlyMixin:
+    """Live read-only model view; canonical refreshes remain visible."""
+
+    __slots__ = ()
+
+    def __setattr__(self, name, value):
+        target = read_only_unwrap(self)
+        raise ReadOnlyError(
+            f"{type(target).__name__}.{name} is read-only; edit through its own builder"
+        )
+
+    def __delattr__(self, name):
+        self.__setattr__(name, None)
+
+    def __getattribute__(self, name):
+        value = super().__getattribute__(name)
+        if name in type(self).model_fields:
+            return _read_only_value(value)
+        return value
+
+    def __getattr__(self, name):
+        value = super().__getattr__(name)
+        return value if name.startswith("_") else _read_only_value(value)
+
+    def __getitem__(self, name):
+        return _read_only_value(super().__getitem__(name))
+
+    def __setitem__(self, name, value):
+        self.__setattr__(str(name), value)
+
+    def items(self):
+        for name, value in read_only_unwrap(self).items():
+            yield name, _read_only_value(value)
+
+    @property
+    def __pydantic_private__(self):
+        return read_only_unwrap(self).__pydantic_private__
+
+    @property
+    def __pydantic_fields_set__(self):
+        return read_only_unwrap(self).__pydantic_fields_set__
+
+    @property
+    def __pydantic_extra__(self):
+        return read_only_unwrap(self).__pydantic_extra__
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def __copy__(self):
+        return self
+
+    def __eq__(self, other):
+        return read_only_unwrap(self) == read_only_unwrap(other)
+
+    __hash__ = None
+
+    def model_copy(self, *, update=None, deep=False):
+        return read_only_unwrap(self).model_copy(update=update, deep=deep)
+
+
+@cache
+def _read_only_class(cls):
+    return type(
+        f"ReadOnly{cls.__name__}",
+        (ReadOnlyMixin, cls),
+        {"__slots__": ("_read_only_target",), "__module__": cls.__module__},
+    )
+
+
+def read_only_view(model: BaseModel) -> BaseModel:
+    """Expose a canonical model without copying or globally freezing it."""
+    if isinstance(model, ReadOnlyMixin):
+        return model
+    view = object.__new__(_read_only_class(type(model)))
+    object.__setattr__(view, "_read_only_target", model)
+    object.__setattr__(view, "__dict__", model.__dict__)
+    return view
+
+
+def read_only_unwrap(value):
+    if isinstance(value, ReadOnlyMixin):
+        return object.__getattribute__(value, "_read_only_target")
+    if isinstance(value, (ReadOnlyMapping, ReadOnlySequence, ReadOnlySet)):
+        return value._data
+    return value
+
+
+def _read_only_value(value):
+    if isinstance(value, BaseModel):
+        return read_only_view(value)
+    if isinstance(value, dict):
+        return ReadOnlyMapping(value)
+    if isinstance(value, (list, tuple)):
+        return ReadOnlySequence(value)
+    if isinstance(value, set):
+        return ReadOnlySet(value)
+    return value
+
+
+class ReadOnlyMapping(Mapping):
+    def __init__(self, data):
+        self._data = data
+
+    def __getitem__(self, key):
+        return _read_only_value(self._data[key])
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+
+class ReadOnlySequence(Sequence):
+    def __init__(self, data):
+        self._data = data
+
+    def __getitem__(self, index):
+        value = self._data[index]
+        if isinstance(index, slice):
+            return ReadOnlySequence(value)
+        return _read_only_value(value)
+
+    def __len__(self):
+        return len(self._data)
+
+    def __eq__(self, other):
+        return self._data == read_only_unwrap(other)
+
+    __hash__ = None
+
+
+class ReadOnlySet(Set):
+    def __init__(self, data):
+        self._data = data
+
+    def __contains__(self, value):
+        return value in self._data
+
+    def __iter__(self):
+        return (_read_only_value(value) for value in self._data)
+
+    def __len__(self):
+        return len(self._data)
 
 
 def _freeze_for_cache(value: Any):

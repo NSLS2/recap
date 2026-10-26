@@ -10,7 +10,7 @@ This module defines the top-level provenance objects:
   reference types used to avoid circular serialisation.
 """
 
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -147,6 +147,7 @@ class ProcessRunSchema(LoadAwareMixin, NamespaceOwnedFields):
     template: ProcessTemplateSchema | None = None
     steps: dict[str, StepSchema] = {}
     assigned_resources: dict[str, ResourceAssignmentSchema] = {}
+    _draft_shared_fields: ClassVar[frozenset[str]] = frozenset({"template"})
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
     _relation_fields = frozenset({"template", "steps", "assigned_resources"})
     # ``assigned_resources`` is populated via ``include('resources')``.

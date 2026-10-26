@@ -5,6 +5,20 @@ import pytest
 from recap.lifecycle import LifecycleStatus
 
 
+def test_resource_template_model_keeps_external_types_read_only(client):
+    client.create_namespace("template-read-only")
+    with client.build_resource_template(
+        name="ViewRT", type_names=["container"]
+    ) as builder:
+        builder.prop_group("details").add_attribute(
+            "label", "str", "", "old"
+        ).close_group()
+        model = builder.get_model(update=True)
+        with pytest.raises(TypeError, match="read-only"):
+            model.types[0].name = "unsaved"
+        model.attribute_group_templates[0].name = "mutable-copy"
+
+
 def test_resource_context_exception_keeps_property_draft_for_retry(client):
     with client.build_resource_template(
         name="RBM-retry-T", type_names=["container"]

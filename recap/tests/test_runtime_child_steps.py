@@ -16,6 +16,33 @@ def _run(client, suffix):
     return scoped, builder.process_run
 
 
+def test_run_builder_templates_are_read_only(client):
+    scoped, run = _run(client, "runtime-read-only")
+    with scoped.build_process_run(process_run_id=run.id) as builder:
+        with pytest.raises(TypeError, match="read-only"):
+            builder.process_run.template.name = "unsaved"
+        with pytest.raises(TypeError, match="read-only"):
+            builder.process_run.steps["Transfer"].template.name = "unsaved"
+
+
+def test_runtime_child_array_defaults_from_read_only_template(client):
+    client.create_namespace("runtime-array-view")
+    scoped = client.namespace("runtime-array-view")
+    with scoped.build_process_template("ArrayRun", "1") as template:
+        template.add_step("Collect").param_group("Readings").add_attribute(
+            "samples", "array", "", [1, 2]
+        )
+    with scoped.build_process_run("run", "", "ArrayRun", "1") as builder:
+        builder.save()
+        child = builder.process_run.steps["Collect"].generate_child(name="repeat")
+        assert child.parameters.readings["samples"].value == [1, 2]
+        child.parameters.readings["samples"].value.append(3)
+        builder.add_child_step(child)
+    assert builder.process_run.steps["Collect"].children["repeat"].parameters.readings[
+        "samples"
+    ].value == [1, 2, 3]
+
+
 def test_runtime_children_use_defaults_and_parent_scoped_names(client):
     scoped, run = _run(client, "runtime-children")
     with scoped.build_process_run(process_run_id=run.id) as builder:

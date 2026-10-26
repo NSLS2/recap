@@ -12,7 +12,7 @@ This module defines the data models for the core RECAP resource hierarchy:
   :class:`ResourceSlotSchema`, :class:`ResourceRef`, :class:`ResourceAssignmentSchema`.
 """
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 try:
     from typing import Self
@@ -88,6 +88,7 @@ class PropertySchema(AttributeChangeMixin, CommonFields):
 
     template: AttributeGroupTemplateSchema
     values: BaseModel = Field(repr=False)
+    _draft_shared_fields: ClassVar[frozenset[str]] = frozenset({"template"})
     _changed_attributes: dict[str, set[str]] = PrivateAttr(default_factory=dict)
 
     @model_validator(mode="before")
@@ -381,6 +382,7 @@ class ResourceTemplateSchema(LoadAwareMixin, NamespaceOwnedFields):
     attribute_group_templates: list[AttributeGroupTemplateSchema] = Field(
         default_factory=list
     )
+    _draft_shared_fields: ClassVar[frozenset[str]] = frozenset({"parent", "types"})
     _relation_fields = frozenset(
         {"parent", "children", "types", "attribute_group_templates"}
     )
@@ -433,6 +435,7 @@ class ResourceSlotSchema(CommonFields):
     resource_type: ResourceTypeSchema
     direction: Annotated[Direction, SIMPLE_FIELD]
     required: Annotated[bool, SIMPLE_FIELD] = True
+    _draft_shared_fields: ClassVar[frozenset[str]] = frozenset({"resource_type"})
 
 
 class ResourceSchema(LoadAwareMixin, NamespaceOwnedFields):
@@ -476,6 +479,7 @@ class ResourceSchema(LoadAwareMixin, NamespaceOwnedFields):
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
     _relation_fields = frozenset({"template", "parent", "children", "properties"})
     _properties_dirty: bool = PrivateAttr(default=False)
+    _draft_shared_fields: ClassVar[frozenset[str]] = frozenset({"template", "parent"})
 
     @property
     def properties_dirty(self) -> bool:
@@ -598,6 +602,7 @@ class ResourceAssignmentSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
     slot: ResourceSlotSchema
     resource: ResourceSchema
+    _draft_shared_fields: ClassVar[frozenset[str]] = frozenset({"slot", "resource"})
     step_id: Annotated[UUID | None, SIMPLE_FIELD] = None
 
 
