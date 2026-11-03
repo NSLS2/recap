@@ -781,7 +781,6 @@ class CommandService:
                                 parent=target,
                                 _init_children=False,
                             )
-                            session.add(copied)
                             for prop in item.properties.values():
                                 new_property = Property(
                                     template=prop.template, resource=copied
@@ -794,6 +793,7 @@ class CommandService:
                                     new_property._values[key].metadata_json = deepcopy(
                                         value.metadata_json
                                     )
+                            session.add(copied)
                             copy_descendants(item, copied)
 
                     copy_descendants(source, child)

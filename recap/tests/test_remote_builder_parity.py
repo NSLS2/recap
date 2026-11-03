@@ -694,13 +694,23 @@ def test_resource_copy_as_child_has_local_remote_parity(command_client):
     scoped = seed_command_namespace(command_client)
     with scoped.build_resource_template(name="Group", type_names=["group"]):
         pass
-    with scoped.build_resource_template(name="Sample", type_names=["sample"]):
-        pass
+    with scoped.build_resource_template(
+        name="Sample", type_names=["sample"]
+    ) as template:
+        template.add_properties(
+            {"Measurements": [{"name": "Readings", "type": "array", "default": []}]}
+        )
     group = scoped.create_resource("group-1", "Group")
     source = scoped.create_resource("sample-1", "Sample")
     with scoped.build_resource(resource_id=source.id) as source_builder:
         source_child_builder = source_builder.add_child("sample-child", "Sample")
     source_child = source_child_builder.resource
+    with scoped.build_resource(resource_id=source_child.id) as child_builder:
+        value = child_builder.resource.properties["Measurements"].values["Readings"]
+        value.value = [3, {"nested": [4]}]
+        value.unit = "mV"
+        value.metadata_json = {"tags": ["source"]}
+    source_child = child_builder.resource
 
     with scoped.build_resource(resource_id=group.id) as builder:
         copied = builder.add_child(source)
@@ -714,6 +724,18 @@ def test_resource_copy_as_child_has_local_remote_parity(command_client):
         refreshed = loader.get_model(update=True)
     assert refreshed.children["sample-1"].id == copied.resource.id
     assert refreshed.children["sample-1"].copied_from_id == source.id
+    refreshed_descendant = refreshed.children["sample-1"].children["sample-child"]
+    source_property = source_child.properties["Measurements"]
+    for descendant in (copied_descendant, refreshed_descendant):
+        prop = descendant.properties["Measurements"]
+        value = prop.values["Readings"]
+        assert prop.id is not None and prop.id != source_property.id
+        assert value.value == [3, {"nested": [4]}]
+        assert value.unit == "mV"
+        assert value.metadata_json == {"tags": ["source"]}
+    assert refreshed_descendant.properties["Measurements"].id == (
+        copied_descendant.properties["Measurements"].id
+    )
 
 
 def test_resource_lifecycle_has_local_remote_parity(command_client):
