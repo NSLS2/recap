@@ -1,5 +1,10 @@
+from uuid import uuid4
+
 import pytest
 
+from recap.commands.context import build_local_command_context
+from recap.commands.errors import CommandValidationError
+from recap.commands.service import CommandService
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.namespace import Namespace
 from recap.db.process import ProcessRun, ProcessTemplate
@@ -142,3 +147,79 @@ def test_process_run_rejects_illegal_finalize_transition(db_session):
 
     with pytest.raises(ValueError, match="Invalid lifecycle transition"):
         run.finalize()
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"object_type": "resource_template", "recursive_depth": 1},
+        {"object_type": "process_run", "recursive_depth": None},
+        {"object_type": "resource", "status": "ARCHIVED", "recursive_depth": 1},
+        {"object_type": "resource", "recursive_depth": -1},
+    ],
+)
+def test_direct_lifecycle_service_validates_recursive_options(options):
+    kwargs = {
+        "object_type": "resource",
+        "status": "ACTIVE",
+        "object_id": uuid4(),
+        "expected_revision": 1,
+        **options,
+    }
+    with pytest.raises(CommandValidationError):
+        CommandService(None).set_lifecycle_status(
+            build_local_command_context(), **kwargs
+        )
+
+
+@pytest.mark.parametrize("target", ["root", "child"])
+def test_postgres_finalization_locks_shared_aggregate_before_writes(
+    client, monkeypatch, target
+):
+    """Exercise emitted lock queries on SQLite, without claiming PG concurrency."""
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session, sessionmaker
+
+    with client.build_resource_template(name="Lock node", type_names=["container"]):
+        pass
+    root = client.create_resource("lock-root", "Lock node")
+    child = client.create_resource("lock-child", "Lock node", parent=root)
+    client.create_resource("lock-grandchild", "Lock node", parent=child)
+    engine = client.connection_state.engine
+    operations = []
+
+    def record(connection, cursor, sql, parameters, context, executemany):
+        statement = context.compiled.statement if context.compiled is not None else None
+        if (
+            statement is not None
+            and statement.is_select
+            and statement._for_update_arg is not None
+        ):
+            operations.append(("lock", statement))
+        elif (
+            statement is not None
+            and statement.is_update
+            and statement.table.name == "resource"
+        ):
+            operations.append(("write", statement))
+
+    # The engine retains its SQLite compiler and real isolated database. Only
+    # the service's PostgreSQL-specific lock-selection branch is selected.
+    monkeypatch.setattr(engine.dialect, "name", "postgresql")
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        resource = root if target == "root" else child
+        result = CommandService(sessionmaker(bind=engine)).set_lifecycle_status(
+            build_local_command_context(),
+            object_type="resource",
+            object_id=resource.id,
+            expected_revision=1,
+            status="ACTIVE",
+            recursive_depth=None,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    assert result.status is LifecycleStatus.ACTIVE
+    assert operations[0][0] == "lock"
+    with Session(engine) as session:
+        assert session.scalars(operations[0][1]).all() == [root.id]

@@ -1,5 +1,13 @@
 from enum import Enum
 
+from pydantic import BaseModel, Field
+
+
+class ResourceFinalizeOptions(BaseModel):
+    """Validated traversal options shared by resource builders and commands."""
+
+    recursive_depth: int | None = Field(default=0, strict=True, ge=0)
+
 
 class LifecycleStatus(str, Enum):
     """Monotonic lifecycle state for persisted RECAP entities."""

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from recap.authentication.models import RequestActor
 from recap.authorization.query import NamespacePolicy
@@ -15,7 +15,7 @@ from recap.dsl.drafts import (
     ProcessTemplateDraft,
     ResourceTemplateDraft,
 )
-from recap.lifecycle import LifecycleStatus
+from recap.lifecycle import LifecycleStatus, ResourceFinalizeOptions
 from recap.schemas.process import ProcessRunCopyOptions
 from recap.schemas.resource import ResourceChildDraft, ResourceCopyOptions
 from recap.server.audit import AuditSink
@@ -112,11 +112,20 @@ class CopyProcessRun(CommandModel):
     options: ProcessRunCopyOptions = ProcessRunCopyOptions()
 
 
-class SetLifecycleStatus(CommandModel):
+class SetLifecycleStatus(CommandModel, ResourceFinalizeOptions):
     object_type: str
     object_id: UUID
     expected_revision: int
     status: str
+
+    @model_validator(mode="after")
+    def validate_resource_options(self):
+        if self.recursive_depth != 0:
+            if self.object_type != "resource":
+                raise ValueError("Recursive lifecycle options require a resource")
+            if self.status != LifecycleStatus.ACTIVE:
+                raise ValueError("Recursive lifecycle options require ACTIVE status")
+        return self
 
 
 @dataclass(frozen=True, slots=True)

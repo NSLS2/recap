@@ -22,6 +22,49 @@ with namespace.build_resource(resource_id=plate.id) as builder:
 
 Activation and preceding edits commit when builder exits normally.
 
+### Finalize children in bulk
+
+By default, `finalize()` uses `recursive_depth=0`, targeting only the resource
+itself. To finalize the resource and its direct children in one lifecycle
+transaction:
+
+```python
+with namespace.build_resource(resource_id=plate.id) as builder:
+    builder.finalize(recursive_depth=1)
+```
+
+Use `recursive_depth` to control how far below the resource to traverse. The
+resource itself is at depth 0; direct children are at depth 1, and grandchildren
+at depth 2. Finite depths must be non-negative integers; `None` means all
+descendants.
+
+```python
+# Include children and grandchildren.
+with namespace.build_resource(resource_id=plate.id) as builder:
+    builder.finalize(recursive_depth=2)
+
+# Include all descendants, regardless of depth.
+with namespace.build_resource(resource_id=plate.id) as builder:
+    builder.finalize(recursive_depth=None)
+```
+
+Traversal includes persisted descendants even if you have not opened child
+builders, as well as children saved by the enclosing builder. Only mutable
+resources transition to active. Active resources retain their revisions and
+timestamps, but traversal continues through them. Archived resources and
+their entire subtrees are skipped. Finalizing an archived resource is a no-op.
+
+The lifecycle changes use bulk SQL updates in one transaction, rather than
+a transaction and graph refresh for every child. Pending draft edits are
+saved before finalization and may use separate transactions. The finalization
+still checks the parent revision; a stale revision fails without partially
+finalizing the subtree.
+
+Repeated finalization requests within one builder context combine their scopes:
+a parent-only or shallower request does not cancel an earlier deeper request.
+Pending child archive requests are applied before recursive finalization, so
+those archived branches are skipped.
+
 ## Archive a resource
 
 ```python

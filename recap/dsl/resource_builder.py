@@ -33,7 +33,7 @@ from recap.exceptions import (
     ExistingResourceWarning,
     RecapNotFoundError,
 )
-from recap.lifecycle import LifecycleStatus
+from recap.lifecycle import LifecycleStatus, ResourceFinalizeOptions
 from recap.schemas.namespace import NamespaceContext
 from recap.schemas.resource import (
     ResourceChildDraft,
@@ -302,12 +302,14 @@ class ResourceBuilder:
         pending = self._pending_lifecycle()
         if pending is None:
             return
+        options = self._transaction.finalize_options_for(self)
         result = self.backend._execute(
             SetLifecycleStatus(
                 object_type="resource",
                 object_id=self.resource.id,
                 expected_revision=self._resource.revision,
                 status=pending.value,
+                recursive_depth=options.recursive_depth,
             ),
             self._command_context,
         )
@@ -317,6 +319,7 @@ class ResourceBuilder:
             bind_attribute_observers(self._draft)
             self._expected_revision = result.revision
             self._last_properties_payload = self._resource_properties_payload(result)
+            self._sync_child_results(result, include_submitted=True)
             self._transaction.clear_lifecycle(owner=self)
 
     def _flush_children(self):
@@ -325,9 +328,42 @@ class ResourceBuilder:
             self._register_child(child)
 
     def _flush_lifecycle_tree(self):
+        options = self._transaction.finalize_options_for(self)
+        if (
+            self._pending_lifecycle() is LifecycleStatus.ACTIVE
+            and options.recursive_depth != 0
+        ):
+            self._flush_pending_archives()
+            self._flush_lifecycle()
+            self._clear_covered_finalizations(options.recursive_depth)
         for child in self._children:
             child._flush_lifecycle_tree()
+            self._register_child(child)
         self._flush_lifecycle()
+
+    def _flush_pending_archives(self):
+        """Commit child-first archive requests before selecting a bulk subtree."""
+        for child in self._children:
+            child._flush_pending_archives()
+            self._register_child(child)
+        if self._pending_lifecycle() is LifecycleStatus.ARCHIVED:
+            self._flush_lifecycle()
+
+    def _clear_covered_finalizations(self, depth):
+        if depth == 0 or self.resource.status is LifecycleStatus.ARCHIVED:
+            return
+        remaining = None if depth is None else depth - 1
+        for child in self._children:
+            if child.resource.status is LifecycleStatus.ARCHIVED:
+                continue
+            if child._pending_lifecycle() is LifecycleStatus.ACTIVE:
+                options = self._transaction.finalize_options_for(child)
+                requested = options.recursive_depth
+                if remaining is None or (
+                    requested is not None and requested <= remaining
+                ):
+                    self._transaction.clear_lifecycle(owner=child)
+            child._clear_covered_finalizations(remaining)
 
     def _register_child(self, child: "ResourceBuilder"):
         if self._draft is None:
@@ -459,10 +495,20 @@ class ResourceBuilder:
             ),
         )
 
-    def _sync_child_results(self, result):
+    def _sync_child_results(self, result, *, include_submitted=False):
+        persisted_by_id = {
+            resource.id: resource for resource in result.children.values()
+        }
         for child in self._children:
-            if not child._submitted and child.name in result.children:
-                persisted = result.children[child.name]
+            if child._submitted and not include_submitted:
+                continue
+            persisted = (
+                persisted_by_id.get(child.resource.id)
+                if child._submitted
+                else result.children.get(child.resource.name)
+            )
+            if persisted is not None:
+                child.name = persisted.name
                 child._resource = persisted
                 child._draft = draft_copy(persisted)
                 bind_attribute_observers(child._draft)
@@ -472,7 +518,9 @@ class ResourceBuilder:
                 child._last_properties_payload = child._resource_properties_payload(
                     persisted
                 )
-                child._sync_child_results(persisted)
+                child._sync_child_results(
+                    persisted, include_submitted=include_submitted
+                )
 
     def _resource_properties_payload(self, resource=None):
         resource = resource or self._resource
@@ -522,8 +570,17 @@ class ResourceBuilder:
             raise RuntimeError("Child builder requires initialized parent resource")
         return parent.id
 
-    def finalize(self):
-        self._transaction.request_lifecycle(LifecycleStatus.ACTIVE, owner=self)
+    def finalize(self, *, recursive_depth: int | None = 0):
+        """Finalize mutable resources, optionally including a pruned subtree.
+
+        ``recursive_depth=0`` targets only this resource; ``1`` includes direct
+        children, and ``None`` includes all descendants. Archived branches are skipped.
+        Changes are committed on a successful builder flush/context exit.
+        """
+        options = ResourceFinalizeOptions(recursive_depth=recursive_depth)
+        self._transaction.request_lifecycle(
+            LifecycleStatus.ACTIVE, owner=self, finalize_options=options
+        )
         return self
 
     def archive(self):

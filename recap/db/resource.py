@@ -9,6 +9,7 @@ from sqlalchemy import (
     UniqueConstraint,
     event,
     inspect,
+    literal,
     select,
 )
 from sqlalchemy.ext.associationproxy import association_proxy
@@ -343,6 +344,57 @@ def _descendant_templates_cte(template_id):
     base = select(rt.c.id).where(rt.c.id == template_id).cte(recursive=True)
     descendants = select(rt.c.id).where(rt.c.parent_id == base.c.id)
     return base.union_all(descendants)
+
+
+def resource_aggregate_root_ids(resource_id):
+    """Select the owning root without materializing ancestors or properties."""
+    table = Resource.__table__
+    ancestors = (
+        select(table.c.id, table.c.parent_id)
+        .where(table.c.id == resource_id)
+        .cte("resource_ownership", recursive=True)
+    )
+    ancestors = ancestors.union(
+        select(table.c.id, table.c.parent_id).join(
+            ancestors, table.c.id == ancestors.c.parent_id
+        )
+    )
+    return select(ancestors.c.id).where(ancestors.c.parent_id.is_(None))
+
+
+def finalizable_resource_ids(resource_id, namespace_id, *, depth):
+    """Select a depth-limited resource subtree, pruning archived branches.
+
+    Unlimited traversal uses identity-only UNION to terminate even if malformed
+    data contains a cycle. Finite traversal carries the distance from the root.
+    """
+    table = Resource.__table__
+    columns = [table.c.id]
+    if depth is not None:
+        columns.append(literal(0).label("depth"))
+    tree = (
+        select(*columns)
+        .where(
+            table.c.id == resource_id,
+            table.c.namespace_id == namespace_id,
+            table.c.status != LifecycleStatus.ARCHIVED,
+        )
+        .cte("finalizable_resources", recursive=True)
+    )
+    child_columns = [table.c.id]
+    if depth is not None:
+        child_columns.append(tree.c.depth + 1)
+    children = (
+        select(*child_columns)
+        .join(tree, table.c.parent_id == tree.c.id)
+        .where(
+            table.c.namespace_id == namespace_id,
+            table.c.status != LifecycleStatus.ARCHIVED,
+        )
+    )
+    if depth is not None:
+        children = children.where(tree.c.depth < depth)
+    return select(tree.union(children).c.id)
 
 
 @event.listens_for(Resource, "before_update", propagate=True)

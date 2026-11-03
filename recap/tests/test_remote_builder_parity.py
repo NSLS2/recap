@@ -53,6 +53,308 @@ def seed_command_namespace(client):
     return scoped
 
 
+def _seed_finalization_tree(client):
+    scoped = seed_command_namespace(client)
+    with scoped.build_resource_template(
+        name="Tree node", type_names=["container"]
+    ) as template:
+        template.add_properties(
+            {"details": [{"name": "note", "type": "str", "default": "before"}]}
+        )
+    root = scoped.create_resource("root", "Tree node")
+    child = scoped.create_resource("child", "Tree node", parent=root)
+    grandchild = scoped.create_resource("grandchild", "Tree node", parent=child)
+    scoped.create_resource("leaf", "Tree node", parent=grandchild)
+    scoped.create_resource("sibling", "Tree node", parent=root)
+    return scoped, root
+
+
+@pytest.mark.parametrize(
+    ("options", "statuses"),
+    [
+        ({}, ["ACTIVE", "MUTABLE", "MUTABLE", "MUTABLE"]),
+        ({"recursive_depth": 0}, ["ACTIVE", "MUTABLE", "MUTABLE", "MUTABLE"]),
+        ({"recursive_depth": 1}, ["ACTIVE", "ACTIVE", "MUTABLE", "MUTABLE"]),
+        ({"recursive_depth": 2}, ["ACTIVE", "ACTIVE", "ACTIVE", "MUTABLE"]),
+        ({"recursive_depth": None}, ["ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE"]),
+    ],
+)
+def test_resource_recursive_finalization_has_local_remote_parity(
+    command_client, options, statuses
+):
+    scoped, root = _seed_finalization_tree(command_client)
+    with scoped.build_resource(resource_id=root.id) as builder:
+        builder.finalize(**options)
+        assert builder.resource.status.value == "MUTABLE"
+    tree = builder.resource
+    chain = [
+        tree,
+        tree.children["child"],
+        tree.children["child"].children["grandchild"],
+        tree.children["child"].children["grandchild"].children["leaf"],
+    ]
+    assert [node.status.value for node in chain] == statuses
+    reloaded = scoped.query_maker().resources(load="eager").filter(id=root.id).first()
+    assert reloaded.children["child"].status == tree.children["child"].status
+
+
+def test_resource_recursive_finalization_prunes_archived_branch(command_client):
+    scoped, root = _seed_finalization_tree(command_client)
+    tree = scoped.build_resource(resource_id=root.id).resource
+    with scoped.build_resource(resource_id=tree.children["child"].id) as child:
+        child.archive()
+    with scoped.build_resource(resource_id=root.id) as builder:
+        builder.finalize(recursive_depth=None)
+    archived = builder.resource.children["child"]
+    assert archived.status.value == "ARCHIVED"
+    assert archived.children["grandchild"].status.value == "MUTABLE"
+    assert builder.resource.children["sibling"].status.value == "ACTIVE"
+
+
+@pytest.mark.parametrize("status", ["ACTIVE", "ARCHIVED"])
+def test_resource_recursive_finalization_preserves_parent_status_and_revision(
+    command_client, status
+):
+    scoped, root = _seed_finalization_tree(command_client)
+    with scoped.build_resource(resource_id=root.id) as builder:
+        if status == "ACTIVE":
+            builder.finalize()
+        else:
+            builder.archive()
+    before = builder.resource
+    # Reuse the builder: normal resource queries intentionally exclude archived
+    # resources, so reopening an archived resource is not part of this API.
+    with builder:
+        builder.finalize(recursive_depth=None)
+    assert builder.resource.status == before.status
+    assert builder.resource.revision == before.revision == 2
+    assert builder.resource.modified_date == before.modified_date
+    expected = "ACTIVE" if status == "ACTIVE" else "MUTABLE"
+    assert (
+        builder.resource.children["child"].children["grandchild"].status.value
+        == expected
+    )
+
+
+def test_resource_recursive_finalization_saves_and_synchronizes_child_builders(
+    command_client,
+):
+    scoped, _ = _seed_finalization_tree(command_client)
+    with scoped.build_resource("new-root", "Tree node") as parent:
+        child = parent.add_child("new-child", "Tree node")
+        grandchild = child.add_child("new-grandchild", "Tree node")
+        grandchild.resource.properties.details.values.note.value = "changed"
+        child.finalize()
+        parent.finalize(recursive_depth=None)
+    assert (
+        parent.resource.status.value
+        == child.resource.status.value
+        == grandchild.resource.status.value
+        == "ACTIVE"
+    )
+    assert child.resource.revision == grandchild.resource.revision == 2
+    assert grandchild.resource.properties.details.values.note.value == "changed"
+    assert (
+        parent.resource.children["new-child"].children["new-grandchild"].revision
+        == grandchild.resource.revision
+    )
+    # Retained builders must have the new revision and allow a harmless save.
+    with child:
+        child.finalize()
+    assert child.resource.revision == 2
+
+
+def test_resource_recursive_finalization_exception_retains_options(command_client):
+    scoped, root = _seed_finalization_tree(command_client)
+    builder = scoped.build_resource(resource_id=root.id)
+    with pytest.raises(RuntimeError, match="abort"), builder:
+        builder.finalize(recursive_depth=None)
+        raise RuntimeError("abort")
+    assert builder.resource.status.value == "MUTABLE"
+    with builder:
+        pass
+    assert (
+        builder.resource.children["child"].children["grandchild"].status.value
+        == "ACTIVE"
+    )
+
+
+def test_resource_recursive_finalization_preserves_deeper_child_request(command_client):
+    scoped, _ = _seed_finalization_tree(command_client)
+    with scoped.build_resource("requested-root", "Tree node") as parent:
+        child = parent.add_child("requested-child", "Tree node")
+        grandchild = child.add_child("requested-grandchild", "Tree node")
+        child.finalize(recursive_depth=None)
+        parent.finalize(recursive_depth=1)
+    assert (
+        parent.resource.children["requested-child"]
+        .children["requested-grandchild"]
+        .status.value
+        == "ACTIVE"
+    )
+    assert child.resource.revision == grandchild.resource.revision == 2
+
+
+def test_resource_recursive_finalization_applies_pending_archives_first(command_client):
+    scoped, _ = _seed_finalization_tree(command_client)
+    with scoped.build_resource("pending-archive-root", "Tree node") as parent:
+        child = parent.add_child("archived-child", "Tree node")
+        grandchild = child.add_child("skipped-grandchild", "Tree node")
+    with parent:
+        child.archive()
+        parent.finalize(recursive_depth=None)
+    assert parent.resource.status.value == "ACTIVE"
+    assert child.resource.status.value == "ARCHIVED"
+    assert child.resource.revision == 2
+    assert grandchild.resource.status.value == "MUTABLE"
+    assert grandchild.resource.revision == 1
+    assert (
+        parent.resource.children["archived-child"]
+        .children["skipped-grandchild"]
+        .status.value
+        == "MUTABLE"
+    )
+
+
+def test_resource_recursive_finalization_synchronizes_renamed_children(command_client):
+    scoped, _ = _seed_finalization_tree(command_client)
+    with scoped.build_resource("rename-root", "Tree node") as parent:
+        child = parent.add_child("old-name", "Tree node")
+        grandchild = child.add_child("grandchild", "Tree node")
+    with parent:
+        child.resource.name = "new-name"
+        parent.finalize(recursive_depth=None)
+    assert set(parent.resource.children) == {"new-name"}
+    assert child.resource.name == "new-name"
+    assert child.resource.status.value == grandchild.resource.status.value == "ACTIVE"
+    assert child.resource.revision == 3
+    assert grandchild.resource.revision == 2
+    assert parent.resource.children["new-name"].revision == child.resource.revision
+    assert (
+        parent.resource.children["new-name"].children["grandchild"].revision
+        == grandchild.resource.revision
+    )
+    with child:
+        child.finalize()
+    assert child.resource.revision == 3
+
+
+@pytest.mark.parametrize(
+    "later_options", [{}, {"recursive_depth": 1}, {"recursive_depth": 2}]
+)
+def test_resource_finalize_requests_do_not_narrow_pending_scope(
+    command_client, later_options
+):
+    scoped, root = _seed_finalization_tree(command_client)
+    with scoped.build_resource(resource_id=root.id) as builder:
+        builder.finalize(recursive_depth=None)
+        builder.finalize(**later_options)
+    assert (
+        builder.resource.children["child"]
+        .children["grandchild"]
+        .children["leaf"]
+        .status.value
+        == "ACTIVE"
+    )
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [(2, None), (2, 1), (1, 2)],
+)
+def test_resource_finalize_requests_combine_finite_depths(
+    command_client, first, second
+):
+    scoped, root = _seed_finalization_tree(command_client)
+    with scoped.build_resource(resource_id=root.id) as builder:
+        builder.finalize(recursive_depth=first)
+        if second is None:
+            builder.finalize()
+        else:
+            builder.finalize(recursive_depth=second)
+    grandchild = builder.resource.children["child"].children["grandchild"]
+    assert grandchild.status.value == "ACTIVE"
+    assert grandchild.children["leaf"].status.value == "MUTABLE"
+
+
+def test_resource_recursive_finalization_saves_property_edits(command_client):
+    scoped, root = _seed_finalization_tree(command_client)
+    with scoped.build_resource(resource_id=root.id) as builder:
+        builder.resource.properties.details.values.note.value = "saved"
+        builder.finalize(recursive_depth=None)
+    assert builder.resource.properties.details.values.note.value == "saved"
+    assert (
+        builder.resource.children["child"].children["grandchild"].status.value
+        == "ACTIVE"
+    )
+
+
+def test_resource_recursive_finalization_of_copy_leaves_source_unchanged(
+    command_client,
+):
+    scoped, root = _seed_finalization_tree(command_client)
+    copied = scoped.copy_resource(source_resource_id=root.id)
+    with scoped.build_resource(resource_id=copied.id) as builder:
+        builder.finalize(recursive_depth=None)
+    assert (
+        builder.resource.children["child"].children["grandchild"].status.value
+        == "ACTIVE"
+    )
+    source = scoped.build_resource(resource_id=root.id).resource
+    # Copying already activates its source root; finalizing the copy must not
+    # activate source descendants or increment the source revision again.
+    assert source.status.value == "ACTIVE"
+    assert source.revision == 2
+    assert source.children["child"].status.value == "MUTABLE"
+    assert source.children["child"].revision == 1
+
+
+def test_resource_recursive_finalization_is_one_remote_lifecycle_request(
+    rest_loopback_client,
+):
+    scoped, root = _seed_finalization_tree(rest_loopback_client)
+    writer = scoped.connection_state.backend.writer
+    http_client = writer._transport._client
+    requests = []
+
+    def record(request):
+        if "/api/v1/lifecycle/" in request.url.path:
+            requests.append(request)
+
+    builder = scoped.build_resource(resource_id=root.id)
+    http_client.event_hooks["request"].append(record)
+    try:
+        with builder:
+            builder.finalize(recursive_depth=None)
+    finally:
+        http_client.event_hooks["request"].remove(record)
+    assert len(requests) == 1
+    assert (
+        builder.resource.children["child"].children["grandchild"].status.value
+        == "ACTIVE"
+    )
+
+
+@pytest.mark.parametrize("depth", [-1, True, False, 1.5, "2"])
+def test_resource_finalize_rejects_invalid_depth_before_mutation(command_client, depth):
+    scoped, root = _seed_finalization_tree(command_client)
+    with scoped.build_resource(resource_id=root.id) as builder:
+        with pytest.raises(ValueError):
+            builder.finalize(recursive_depth=depth)
+        assert builder.changes().lifecycle is None
+
+
+@pytest.mark.parametrize("old_options", [{"recursive": True}, {"depth": 1}])
+def test_resource_finalize_rejects_replaced_keyword_arguments(
+    command_client, old_options
+):
+    scoped, root = _seed_finalization_tree(command_client)
+    with scoped.build_resource(resource_id=root.id) as builder:
+        with pytest.raises(TypeError):
+            builder.finalize(**old_options)
+        assert builder.changes().lifecycle is None
+
+
 @pytest.mark.parametrize("well_count", [12, 96], ids=["12-wells", "96-wells"])
 def test_two_transfer_plate_workflow_has_local_remote_parity(
     command_client, well_count

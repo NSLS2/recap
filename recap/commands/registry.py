@@ -470,10 +470,13 @@ def _decode_namespace_response(
 
 def _encode_lifecycle_status(command: CommandModel) -> EncodedRequest:
     assert isinstance(command, SetLifecycleStatus)
+    body = {"status": command.status}
+    if command.recursive_depth != 0:
+        body["recursive_depth"] = command.recursive_depth
     return EncodedRequest(
         method="POST",
         path=f"/api/v1/lifecycle/{command.object_type}/{command.object_id}",
-        body={"status": command.status},
+        body=body,
         etag=_revision_etag(command.expected_revision),
     )
 
@@ -484,14 +487,18 @@ def _decode_lifecycle_status(
     body: BaseModel,
 ) -> SetLifecycleStatus:
     data = _body_data(body)
-    return SetLifecycleStatus(
-        object_type=str(path_params["object_type"]),
-        object_id=_path_uuid(path_params, "object_id"),
-        expected_revision=_expected_revision(headers),
-        status=data["status"].value
-        if isinstance(data["status"], LifecycleStatus)
-        else data["status"],
-    )
+    try:
+        return SetLifecycleStatus(
+            object_type=str(path_params["object_type"]),
+            object_id=_path_uuid(path_params, "object_id"),
+            expected_revision=_expected_revision(headers),
+            status=data["status"].value
+            if isinstance(data["status"], LifecycleStatus)
+            else data["status"],
+            recursive_depth=data.get("recursive_depth", 0),
+        )
+    except ValueError as error:
+        raise CommandValidationError(str(error)) from error
 
 
 COMMAND_REGISTRY = CommandRegistry(

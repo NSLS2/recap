@@ -38,6 +38,7 @@ from recap.server.rest_models import (
     CopyResourceRequest,
     CreateNamespaceRequest,
     CreateResourceRequest,
+    SetLifecycleStatusRequest,
     UpdateNamespaceRequest,
     UpdateProcessRunRequest,
     UpdateResourceRequest,
@@ -107,6 +108,83 @@ def test_lifecycle_registration_uses_batch_results():
     assert registration.method == "POST"
     assert registration.route_template == "/api/v1/lifecycle/{object_type}/{object_id}"
     assert registration.decode_response is None
+
+
+@pytest.mark.parametrize("depth", [0, 1, 2, None])
+def test_recursive_lifecycle_request_round_trip(depth):
+    command = SetLifecycleStatus(
+        object_type="resource",
+        object_id=uuid4(),
+        expected_revision=3,
+        status="ACTIVE",
+        recursive_depth=depth,
+    )
+    registration = COMMAND_REGISTRY.by_command(command)
+    encoded = registration.encode_request(command)
+    expected_body = {"status": "ACTIVE"}
+    if depth != 0:
+        expected_body["recursive_depth"] = depth
+    assert encoded.body == expected_body
+    decoded = registration.decode_command(
+        {"object_type": "resource", "object_id": str(command.object_id)},
+        {"If-Match": encoded.etag},
+        SetLifecycleStatusRequest.model_validate(encoded.body),
+    )
+    assert decoded == command
+
+
+def test_lifecycle_default_request_preserves_existing_body():
+    command = SetLifecycleStatus(
+        object_type="resource", object_id=uuid4(), expected_revision=1, status="ACTIVE"
+    )
+    assert COMMAND_REGISTRY.by_command(command).encode_request(command).body == {
+        "status": "ACTIVE"
+    }
+
+
+@pytest.mark.parametrize("model", [SetLifecycleStatus, SetLifecycleStatusRequest])
+@pytest.mark.parametrize("old_options", [{"recursive": True}, {"depth": 1}])
+def test_lifecycle_request_rejects_replaced_keyword_arguments(model, old_options):
+    values = {"status": "ACTIVE", **old_options}
+    if model is SetLifecycleStatus:
+        values.update(object_type="resource", object_id=uuid4(), expected_revision=1)
+    with pytest.raises(ValueError):
+        model(**values)
+
+
+@pytest.mark.parametrize("depth", [-1, True, False, 1.5, "2"])
+@pytest.mark.parametrize("model", [SetLifecycleStatus, SetLifecycleStatusRequest])
+def test_lifecycle_depth_rejects_invalid_values(model, depth):
+    values = {"status": "ACTIVE", "recursive_depth": depth}
+    if model is SetLifecycleStatus:
+        values.update(object_type="resource", object_id=uuid4(), expected_revision=1)
+    with pytest.raises(ValueError):
+        model(**values)
+
+
+@pytest.mark.parametrize(
+    "object_type", ["resource_template", "process_template", "process_run"]
+)
+def test_recursive_lifecycle_rejects_non_resource_objects(object_type):
+    with pytest.raises(ValueError, match="resource"):
+        SetLifecycleStatus(
+            object_type=object_type,
+            object_id=uuid4(),
+            expected_revision=1,
+            status="ACTIVE",
+            recursive_depth=1,
+        )
+
+
+def test_recursive_lifecycle_rejects_archival():
+    with pytest.raises(ValueError, match="ACTIVE"):
+        SetLifecycleStatus(
+            object_type="resource",
+            object_id=uuid4(),
+            expected_revision=1,
+            status="ARCHIVED",
+            recursive_depth=1,
+        )
 
 
 def test_pilot_command_registry_rejects_unexpected_registered_types():

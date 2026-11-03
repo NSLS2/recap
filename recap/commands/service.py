@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 from json_merge_patch import merge
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload, object_session, sessionmaker
 
@@ -34,6 +34,7 @@ from recap.commands.idempotency import command_fingerprint
 from recap.commands.models import (
     CommandContext,
     CommandModel,
+    SetLifecycleStatus,
 )
 from recap.commands.registry import COMMAND_REGISTRY
 from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
@@ -49,7 +50,14 @@ from recap.db.process import (
     _resource_root,
     allow_in_place_edit,
 )
-from recap.db.resource import Property, Resource, ResourceTemplate, ResourceType
+from recap.db.resource import (
+    Property,
+    Resource,
+    ResourceTemplate,
+    ResourceType,
+    finalizable_resource_ids,
+    resource_aggregate_root_ids,
+)
 from recap.db.step import Step, StepTemplate, StepTemplateResourceSlotBinding
 from recap.dsl.drafts import (
     ProcessRunDraft,
@@ -181,6 +189,10 @@ class _LifecycleFingerprint(BaseModel):
     expected_revision: int
 
 
+class _RecursiveLifecycleFingerprint(_LifecycleFingerprint):
+    recursive_depth: int | None
+
+
 class CommandService:
     """Execute namespace writes with one owning database transaction."""
 
@@ -260,6 +272,7 @@ class CommandService:
         object_id: UUID,
         expected_revision: int,
         status: str,
+        recursive_depth: int | None = 0,
     ):
         models = {
             "process_template": (ProcessTemplate, Scope.PROCESS_TEMPLATE_WRITE),
@@ -273,6 +286,13 @@ class CommandService:
         model, scope = model_scope
         try:
             target_status = LifecycleStatus(status)
+            SetLifecycleStatus(
+                object_type=object_type,
+                object_id=object_id,
+                expected_revision=expected_revision,
+                status=status,
+                recursive_depth=recursive_depth,
+            )
         except ValueError as error:
             raise CommandValidationError(str(error)) from error
         try:
@@ -288,10 +308,19 @@ class CommandService:
                     route_template="/api/v1/lifecycle/{object_type}/{object_id}",
                     namespace_path=None,
                     source_id=object_id,
-                    body=_LifecycleFingerprint(
-                        object_type=object_type,
-                        status=status,
-                        expected_revision=expected_revision,
+                    body=(
+                        _RecursiveLifecycleFingerprint(
+                            object_type=object_type,
+                            status=status,
+                            expected_revision=expected_revision,
+                            recursive_depth=recursive_depth,
+                        )
+                        if recursive_depth != 0
+                        else _LifecycleFingerprint(
+                            object_type=object_type,
+                            status=status,
+                            expected_revision=expected_revision,
+                        )
                     ),
                 )
                 idempotency = IdempotencyRepository(session)
@@ -308,24 +337,35 @@ class CommandService:
                     return self._replay_graph(
                         decision.response, POLICIES_BY_KIND[object_type].schema
                     )
-                validate_transition(obj.status, target_status)
-                prepare_lifecycle_links(
-                    session, obj, activating=target_status is LifecycleStatus.ACTIVE
-                )
-                if target_status is LifecycleStatus.ACTIVE:
-                    if isinstance(obj, ProcessRun):
-                        obj.finalize(bump_revision=False)
-                    else:
-                        obj.activate(bump_revision=False)
+                if (
+                    isinstance(obj, Resource)
+                    and target_status is LifecycleStatus.ACTIVE
+                ):
+                    self._finalize_resource_tree(
+                        session,
+                        obj,
+                        expected_revision=expected_revision,
+                        depth=recursive_depth,
+                    )
                 else:
-                    obj.archive(bump_revision=False)
-                compare_and_swap_revision(
-                    session,
-                    model,
-                    object_id,
-                    expected_revision=expected_revision,
-                    values={},
-                )
+                    validate_transition(obj.status, target_status)
+                    prepare_lifecycle_links(
+                        session, obj, activating=target_status is LifecycleStatus.ACTIVE
+                    )
+                    if target_status is LifecycleStatus.ACTIVE:
+                        if isinstance(obj, ProcessRun):
+                            obj.finalize(bump_revision=False)
+                        else:
+                            obj.activate(bump_revision=False)
+                    else:
+                        obj.archive(bump_revision=False)
+                    compare_and_swap_revision(
+                        session,
+                        model,
+                        object_id,
+                        expected_revision=expected_revision,
+                        values={},
+                    )
                 session.flush()
                 session.refresh(obj)
                 from recap.adapter.entity_records import POLICIES_BY_KIND
@@ -354,6 +394,44 @@ class CommandService:
                 resource_type=object_type,
             )
             raise
+
+    @staticmethod
+    def _finalize_resource_tree(session, resource, *, expected_revision, depth):
+        table = Resource.__table__
+        postgres = session.get_bind().dialect.name == "postgresql"
+        if postgres:
+            # Ancestor and descendant requests share the same first lock. A
+            # request-root-first order can deadlock while locking overlapping
+            # subtrees, even if the later descendant locks are sorted by ID.
+            session.execute(
+                select(table.c.id)
+                .where(table.c.id.in_(resource_aggregate_root_ids(resource.id)))
+                .with_for_update()
+            ).all()
+        # Acquire the parent write lock and check the revision atomically, even
+        # for a no-op. Explicit timestamp assignment suppresses its onupdate.
+        guarded = session.execute(
+            update(table)
+            .where(table.c.id == resource.id, table.c.revision == expected_revision)
+            .values(revision=table.c.revision, modified_date=table.c.modified_date)
+        )
+        if guarded.rowcount != 1:
+            raise CommandConflictError("Expected revision is stale")
+        ids = finalizable_resource_ids(resource.id, resource.namespace_id, depth=depth)
+        if postgres:
+            # SQLite serializes writers at the guarded UPDATE. PostgreSQL also
+            # needs descendant locks before re-evaluating the pruned closure.
+            session.execute(
+                select(table.c.id)
+                .where(table.c.id.in_(ids))
+                .order_by(table.c.id)
+                .with_for_update()
+            ).all()
+        session.execute(
+            update(table)
+            .where(table.c.id.in_(ids), table.c.status == LifecycleStatus.MUTABLE)
+            .values(status=LifecycleStatus.ACTIVE, revision=table.c.revision + 1)
+        )
 
     def _create_resource(  # noqa: C901
         self,

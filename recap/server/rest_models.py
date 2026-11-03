@@ -6,7 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from recap.dsl.drafts import ChildStepDraft, ProcessRunStepDraft
-from recap.lifecycle import LifecycleStatus
+from recap.lifecycle import LifecycleStatus, ResourceFinalizeOptions
 from recap.schemas.process import ProcessRunCopyOptions
 from recap.schemas.resource import ResourceChildDraft, ResourceCopyOptions
 
@@ -73,8 +73,14 @@ class UpdateProcessRunRequest(RestModel):
         return self
 
 
-class SetLifecycleStatusRequest(RestModel):
+class SetLifecycleStatusRequest(RestModel, ResourceFinalizeOptions):
     status: LifecycleStatus
+
+    @model_validator(mode="after")
+    def validate_resource_options(self):
+        if self.recursive_depth != 0 and self.status != LifecycleStatus.ACTIVE:
+            raise ValueError("Recursive lifecycle options require ACTIVE status")
+        return self
 
 
 class CopyResourceRequest(RestModel, ResourceCopyOptions):
