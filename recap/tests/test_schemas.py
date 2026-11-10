@@ -11,6 +11,7 @@ from recap.schemas.attribute import (
 from recap.schemas.common import Attribute, ValueType
 from recap.schemas.resource import PropertySchema
 from recap.schemas.step import ParameterSchema
+from recap.utils.dsl import read_only_view
 
 
 @pytest.mark.parametrize("value_type", list(ValueType))
@@ -66,16 +67,18 @@ def test_stored_null_values_preserve_units_and_metadata(
 
 @pytest.mark.parametrize("schema_type", [PropertySchema, ParameterSchema])
 @pytest.mark.parametrize("value_type", ["int", "float"])
-def test_nullable_numeric_bounds(schema_type, value_type):
+@pytest.mark.parametrize("read_only", [False, True])
+def test_nullable_numeric_bounds(schema_type, value_type, read_only):
     attribute = _attribute_template_schema(
         "Value", value_type, 5, metadata={"min": 0, "max": 10}
     )
     stamp = _now()
+    template = _attribute_group_schema("Values", [attribute])
     fields = dict(
         id=uuid4(),
         create_date=stamp,
         modified_date=stamp,
-        template=_attribute_group_schema("Values", [attribute]),
+        template=read_only_view(template) if read_only else template,
     )
     schema = schema_type(**fields, values={"Value": None})
     assert schema.value.value is None
@@ -409,17 +412,25 @@ def test_parameter_schema_respects_metadata_bounds():
         )
 
 
-def test_enum_attribute_validates_choices():
+@pytest.mark.parametrize("schema_type", [PropertySchema, ParameterSchema])
+@pytest.mark.parametrize("read_only", [False, True])
+@pytest.mark.parametrize(
+    "choices",
+    [["u", "d"], {"u": {"x": 0, "y": 1}, "d": {"x": 0, "y": -1}}],
+)
+def test_enum_attribute_validates_choices(schema_type, read_only, choices):
     drop = _attribute_template_schema(
         "Drop Position",
         "enum",
         "u",
-        metadata={"choices": {"u": {"x": 0, "y": 1}, "d": {"x": 0, "y": -1}}},
+        metadata={"choices": choices},
     )
     group_schema = _attribute_group_schema("Positions", [drop])
+    if read_only:
+        group_schema = read_only_view(group_schema)
     stamp = _now()
 
-    schema = ParameterSchema(
+    schema = schema_type(
         id=uuid4(),
         create_date=stamp,
         modified_date=stamp,
@@ -428,11 +439,15 @@ def test_enum_attribute_validates_choices():
     )
     assert schema.get("Drop Position").value == "d"
 
-    with pytest.raises(ValueError):
-        ParameterSchema(
+    with pytest.raises(ValueError, match="must be one of"):
+        schema_type(
             id=uuid4(),
             create_date=stamp,
             modified_date=stamp,
             template=group_schema,
             values={"Drop Position": "x"},
         )
+    assert drop.metadata == {"choices": choices}
+    if read_only:
+        with pytest.raises(TypeError):
+            group_schema.attribute_templates[0].metadata["choices"] = ["x"]

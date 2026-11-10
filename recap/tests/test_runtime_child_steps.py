@@ -43,6 +43,41 @@ def test_runtime_child_array_defaults_from_read_only_template(client):
     ].value == [1, 2, 3]
 
 
+@pytest.mark.parametrize("default", ["known", None])
+def test_runtime_child_enum_defaults_from_read_only_template(command_client, default):  # noqa: F811
+    command_client.create_namespace("runtime-enum-view")
+    scoped = command_client.namespace("runtime-enum-view")
+    with scoped.build_process_template("EnumRun", "1") as template:
+        template.add_step("Collect").add_parameters(
+            {
+                "Settings": [
+                    {
+                        "name": "mode",
+                        "type": "enum",
+                        "default": default,
+                        "metadata": {"choices": ["known", "other"]},
+                    }
+                ]
+            }
+        )
+    with scoped.build_process_run("run", "", "EnumRun", "1") as builder:
+        builder.save()
+        parent = builder.process_run.steps["Collect"]
+        parent.parameters.settings.mode = "other"
+        child = parent.generate_child(name="1")
+        assert child.parameters.settings.mode.value == default
+        with pytest.raises(TypeError):
+            parent.template.attribute_group_templates[0].attribute_templates[
+                0
+            ].metadata["choices"] = ["invalid"]
+        builder.add_child_step(child)
+    with scoped.build_process_run(process_run_id=builder.process_run.id) as reopened:
+        parent = reopened.process_run.steps["Collect"]
+        assert parent.children["1"].parameters.settings.mode.value == default
+        attribute = parent.template.attribute_group_templates[0].attribute_templates[0]
+        assert list(attribute.metadata["choices"]) == ["known", "other"]
+
+
 def test_runtime_children_use_defaults_and_parent_scoped_names(client):
     scoped, run = _run(client, "runtime-children")
     with scoped.build_process_run(process_run_id=run.id) as builder:

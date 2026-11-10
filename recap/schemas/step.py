@@ -42,10 +42,11 @@ def _attr_metadata(vt: Any) -> dict | None:
 
     Handles the two common shapes: a ``metadata`` attribute (dict) on Pydantic
     models and a ``metadata_json`` attribute (dict) on SQLAlchemy ORM objects.
+    Unwraps read-only views before checking the metadata shape.
     Returns an empty dict when neither is present.
     """
-    meta = getattr(vt, "metadata", None)
-    meta_json = getattr(vt, "metadata_json", None)
+    meta = read_only_unwrap(getattr(vt, "metadata", None))
+    meta_json = read_only_unwrap(getattr(vt, "metadata_json", None))
     if isinstance(meta, dict):
         return meta
     elif isinstance(meta_json, dict):

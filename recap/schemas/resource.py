@@ -43,7 +43,11 @@ from recap.schemas.common import (
     NamespaceOwnedFields,
     NormalizedLabels,
 )
-from recap.utils.dsl import build_param_values_model, build_property_groups_model
+from recap.utils.dsl import (
+    build_param_values_model,
+    build_property_groups_model,
+    read_only_unwrap,
+)
 from recap.utils.general import Direction, from_json_value, validate_enum_value
 
 
@@ -52,10 +56,11 @@ def _attr_metadata(vt: Any) -> dict | None:
 
     Handles the two common shapes: a ``metadata`` attribute (dict) returned by
     Pydantic models and a ``metadata_json`` attribute (dict) returned by
-    SQLAlchemy ORM objects.  Returns an empty dict when neither is present.
+    SQLAlchemy ORM objects. Unwraps read-only views before checking the metadata
+    shape. Returns an empty dict when neither is present.
     """
-    meta = getattr(vt, "metadata", None)
-    meta_json = getattr(vt, "metadata_json", None)
+    meta = read_only_unwrap(getattr(vt, "metadata", None))
+    meta_json = read_only_unwrap(getattr(vt, "metadata_json", None))
     if isinstance(meta, dict):
         return meta
     elif isinstance(meta_json, dict):
