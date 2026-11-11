@@ -16,7 +16,7 @@ a :class:`~recap.schemas.process.ProcessRunSchema`:
 
 from copy import deepcopy
 from datetime import UTC, datetime
-from typing import Annotated, Any, ClassVar
+from typing import Annotated, Any, ClassVar, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
@@ -25,6 +25,7 @@ from recap.db.step import Parameter
 from recap.schemas.attribute import (
     AttributeChangeMixin,
     AttributeGroupTemplateSchema,
+    AttributeTemplateSchema,
     AttributeValueSchema,
 )
 from recap.schemas.common import SIMPLE_FIELD, CommonFields, LoadAwareMixin, StepStatus
@@ -234,11 +235,11 @@ class ParameterSchema(AttributeChangeMixin, CommonFields):
         for name, raw_value in values_dict.items():
             attr_tmpl = tmpl_by_name[name]
             if isinstance(raw_value, dict):
-                raw_unit = raw_value.get("unit")
+                raw_unit = raw_value.get("unit", attr_tmpl.unit)
                 raw_metadata = raw_value.get("metadata_json", {})
                 raw_value = raw_value.get("value")
             else:
-                raw_unit = None
+                raw_unit = attr_tmpl.unit
                 raw_metadata = getattr(raw_value, "metadata_json", {})
 
             value = from_json_value(attr_tmpl.value_type, raw_value)
@@ -246,7 +247,7 @@ class ParameterSchema(AttributeChangeMixin, CommonFields):
                 validate_enum_value(value, _attr_metadata(attr_tmpl), name=name)
             coerced[name] = {
                 "value": value,
-                "unit": attr_tmpl.unit if raw_unit is None else raw_unit,
+                "unit": raw_unit,
                 "metadata_json": raw_metadata,
             }
 
@@ -402,7 +403,45 @@ class StepSchema(LoadAwareMixin, CommonFields):
             }
         return data
 
-    def generate_child(self, *, name: str) -> "StepSchema":
+    @staticmethod
+    def _template_parameter_value(attribute: AttributeTemplateSchema) -> dict[str, Any]:
+        return {
+            "value": from_json_value(
+                attribute.value_type,
+                deepcopy(read_only_unwrap(attribute.default_value)),
+            ),
+            "unit": attribute.unit,
+            "metadata_json": {},
+        }
+
+    def _parent_parameter_value(
+        self, parent_param: ParameterSchema | None, attribute: AttributeTemplateSchema
+    ) -> dict[str, Any]:
+        value = parent_param.get(attribute.name) if parent_param is not None else None
+        if value is None:
+            return self._template_parameter_value(attribute)
+        return {
+            "value": deepcopy(read_only_unwrap(value.value)),
+            "unit": value.unit,
+            "metadata_json": deepcopy(read_only_unwrap(value.metadata_json)),
+        }
+
+    def generate_child(
+        self, *, name: str, inherit: Literal["template", "parent"] = "template"
+    ) -> "StepSchema":
+        """Create a pending child with independent parameter values.
+
+        ``inherit="template"`` (the default) uses template defaults.
+        ``inherit="parent"`` snapshots the parent's current values, units,
+        and value metadata, including unsaved edits. Missing parent parameters
+        fall back to template defaults. Resource inheritance is unchanged.
+
+        Raises:
+            ValueError: If the mode, parent, or name is invalid, template
+                definitions are unloaded, or parent-mode parameters are unloaded.
+        """
+        if inherit not in ("template", "parent"):
+            raise ValueError(f"inherit must be 'template' or 'parent', got {inherit!r}")
         if self.parent_id is not None:
             raise ValueError("Children require a template-generated parent step")
         if not name.strip():
@@ -421,25 +460,39 @@ class StepSchema(LoadAwareMixin, CommonFields):
             raise ValueError(
                 "Child generation requires loaded step template definitions"
             )
+        parent_params = {}
+        if inherit == "parent":
+            if self._loaded_relations.get("parameters") is False:
+                raise ValueError(
+                    "Child generation with inherit='parent' requires loaded parent parameters"
+                )
+            source = self.parameters
+            groups = (
+                (getattr(source, field) for field in type(source).model_fields)
+                if isinstance(source, BaseModel)
+                else source.values()
+            )
+            parent_params = {param.template.name: param for param in groups}
+
         now = datetime.now(UTC)
         parameters = {}
         for group in template.attribute_group_templates:
+            values = {
+                attribute.name: (
+                    self._parent_parameter_value(
+                        parent_params.get(group.name), attribute
+                    )
+                    if inherit == "parent"
+                    else self._template_parameter_value(attribute)
+                )
+                for attribute in group.attribute_templates
+            }
             parameters[group.name] = ParameterSchema(
                 id=uuid4(),
                 create_date=now,
                 modified_date=now,
                 template=group,
-                values={
-                    attribute.name: {
-                        "value": from_json_value(
-                            attribute.value_type,
-                            deepcopy(read_only_unwrap(attribute.default_value)),
-                        ),
-                        "unit": attribute.unit,
-                        "metadata_json": {},
-                    }
-                    for attribute in group.attribute_templates
-                },
+                values=values,
             )
         return StepSchema(
             id=uuid4(),

@@ -102,6 +102,141 @@ def test_runtime_children_use_defaults_and_parent_scoped_names(client):
         assert result.steps["Transfer"].parameters.transfer.volume.value == 100
 
 
+def test_runtime_children_inherit_parent_values_units_and_metadata(command_client):  # noqa: F811
+    scoped, run = _run(command_client, "runtime-inherit-parent")
+    with scoped.build_process_run(process_run_id=run.id) as builder:
+        parent = builder.process_run.steps["Transfer"]
+        parent.parameters.transfer.volume = 100
+        parent.parameters.transfer.volume.unit = "mL"
+        parent.parameters.transfer.volume.metadata_json = {"note": ["from parent"]}
+
+        child = parent.generate_child(name="inherited", inherit="parent")
+        assert child.parameters.transfer.volume.value == 100
+        assert child.parameters.transfer.volume.unit == "mL"
+        assert child.parameters.transfer.volume.metadata_json == {
+            "note": ["from parent"]
+        }
+        assert child.id != parent.id
+        assert child.parameters.transfer.id != parent.parameters.transfer.id
+        for name, options in (("defaulted", {}), ("explicit", {"inherit": "template"})):
+            defaulted = parent.generate_child(name=name, **options)
+            assert defaulted.parameters.transfer.volume.value == 10
+            assert defaulted.parameters.transfer.volume.unit == "uL"
+            assert defaulted.parameters.transfer.volume.metadata_json == {}
+
+        child.parameters.transfer.volume = 20
+        child.parameters.transfer.volume.metadata_json["note"].append("child")
+        assert parent.parameters.transfer.volume.value == 100
+        assert parent.parameters.transfer.volume.metadata_json == {
+            "note": ["from parent"]
+        }
+        builder.add_child_step(child)
+
+    with scoped.build_process_run(process_run_id=run.id) as builder:
+        child = builder.process_run.steps["Transfer"]["inherited"]
+        assert child.parameters.transfer.volume.value == 20
+        assert child.parameters.transfer.volume.unit == "mL"
+        assert child.parameters.transfer.volume.metadata_json == {
+            "note": ["from parent", "child"]
+        }
+
+
+def test_runtime_child_inherit_parent_deep_copies_array_values(command_client):  # noqa: F811
+    command_client.create_namespace("runtime-inherit-array")
+    scoped = command_client.namespace("runtime-inherit-array")
+    with scoped.build_process_template("ArrayRun", "1") as template:
+        template.add_step("Collect").param_group("Readings").add_attribute(
+            "samples", "array", "", [1, 2]
+        )
+    with scoped.build_process_run("run", "", "ArrayRun", "1") as builder:
+        builder.save()
+        parent = builder.process_run.steps["Collect"]
+        parent.parameters.readings["samples"].value.append(3)
+        child = parent.generate_child(name="repeat", inherit="parent")
+        sibling = parent.generate_child(name="sibling", inherit="parent")
+        assert child.parameters.readings["samples"].value == [1, 2, 3]
+        child.parameters.readings["samples"].value.append(4)
+        assert parent.parameters.readings["samples"].value == [1, 2, 3]
+        assert sibling.parameters.readings["samples"].value == [1, 2, 3]
+        assert parent.generate_child(name="defaults").parameters.readings[
+            "samples"
+        ].value == [1, 2]
+
+
+@pytest.mark.parametrize("inherit", ["Parent", "", None])
+def test_runtime_child_rejects_unknown_inherit_mode(client, inherit):
+    _, run = _run(client, "runtime-inherit-invalid")
+    with pytest.raises(ValueError, match="inherit"):
+        run.steps["Transfer"].generate_child(name="bad", inherit=inherit)
+
+
+def test_runtime_child_inherit_parent_requires_loaded_parameters(client):
+    _, run = _run(client, "runtime-inherit-unloaded")
+    parent = run.steps["Transfer"]
+    parent.set_loaded_relations(
+        {**parent._loaded_relations, "parameters": False}, on_unloaded="raise"
+    )
+    with pytest.raises(ValueError, match="parameters"):
+        parent.generate_child(name="first", inherit="parent")
+    assert parent.generate_child(name="second").parameters.transfer.volume.value == 10
+
+
+@pytest.mark.parametrize("representation", ["model", "dict", "missing"])
+def test_runtime_child_inherit_parent_schema_values(client, representation):
+    from recap.schemas.step import StepSchema
+
+    _, run = _run(client, "runtime-inherit-schema")
+    source = run.steps["Transfer"]
+    parent = StepSchema(
+        id=source.id,
+        create_date=source.create_date,
+        modified_date=source.modified_date,
+        name=source.name,
+        template=source.template,
+        parameters={"Transfer": source.parameters.transfer.model_copy(deep=True)},
+    )
+    parent.parameters.transfer.volume.value = None
+    parent.parameters.transfer.volume.unit = None
+    parent.parameters.transfer.volume.metadata_json = {"explicit": True}
+    if representation == "dict":
+        parent.parameters = {"Transfer": parent.parameters.transfer}
+    elif representation == "missing":
+        parent.parameters = {}
+    child = parent.generate_child(name="copy", inherit="parent")
+    value = child.parameters.transfer.volume
+    if representation == "missing":
+        assert value.value == 10
+        assert value.unit == "uL"
+        assert value.metadata_json == {}
+    else:
+        assert value.value is None
+        assert value.unit is None
+        assert value.metadata_json == {"explicit": True}
+
+
+def test_runtime_child_inherit_null_unit_survives_typed_access(command_client):  # noqa: F811
+    scoped, run = _run(command_client, "runtime-inherit-null-unit")
+    with scoped.build_process_run(process_run_id=run.id) as builder:
+        parent = builder.process_run.steps["Transfer"]
+        parent.parameters.transfer.volume.unit = None
+        child = parent.generate_child(name="null-unit", inherit="parent")
+        builder.add_child_step(child)
+    with scoped.build_process_run(process_run_id=run.id) as builder:
+        child = builder.process_run.steps["Transfer"]["null-unit"]
+        assert child.parameters.transfer.volume.unit is None
+        params = builder.get_params(step_schema=child)
+        assert params.transfer.volume.unit is None
+        assert child.parameters.transfer.volume.unit is None
+        builder.set_params(params)
+    with scoped.build_process_run(process_run_id=run.id) as builder:
+        assert (
+            builder.process_run.steps["Transfer"][
+                "null-unit"
+            ].parameters.transfer.volume.unit
+            is None
+        )
+
+
 def test_runtime_grandchildren_are_rejected(client):
     scoped, run = _run(client, "runtime-grandchildren")
     with scoped.build_process_run(process_run_id=run.id) as builder:

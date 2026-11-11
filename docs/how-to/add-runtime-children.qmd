@@ -41,7 +41,18 @@ recorded = builder.process_run.steps["Transfer"]["A01 to B01"]
 ```
 
 Children use their parent's exact step template and start with template-default
-parameters, rather than the parent's recorded values. Roles inherit run-level
+parameters by default (`inherit="template"`). To copy the parent's current
+parameter values, units, and value metadata instead, use:
+
+```python
+child = parent.generate_child(name="A01 to B01", inherit="parent")
+```
+
+Parent inheritance includes unsaved parameter edits in the same builder session.
+Values and metadata are independently copied, so changing the child does not
+change its parent. Missing parent parameters fall back to template defaults.
+
+Roles inherit run-level
 resource assignments through the template's slot bindings. An explicit role
 assignment must select the assigned resource or one of its descendants.
 
