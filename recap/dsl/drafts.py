@@ -173,6 +173,7 @@ class ProcessRunDraft(DraftModel):
     description: str
     template_id: UUID
     assignments: dict[str, UUID] = Field(default_factory=dict)
+    copy_assignments: tuple[str, ...] = ()
     steps: dict[str, ProcessRunStepDraft] = Field(default_factory=dict)
     child_steps: tuple[ChildStepDraft, ...] = ()
 

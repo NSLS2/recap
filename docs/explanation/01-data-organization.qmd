@@ -29,6 +29,9 @@ beamline
 Namespace context scopes queries and writes. Namespaces also provide the
 boundary used by remote authorization. A child namespace can inherit visibility
 from ancestors without making sibling namespaces visible.
+Process-run slot assignment enforces this same namespace rule; referencing an
+otherwise non-visible resource requires an explicit opt-in to copy it into the
+run's namespace.
 
 ## Resources and resource templates
 

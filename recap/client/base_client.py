@@ -431,7 +431,7 @@ class RecapClient:
             with client.build_process_run(
                 "Run 001", "First run", "MX Data Collection", "1.0"
             ) as run:
-                run.assign_resource(plate, "crystal_plate")
+                run.assign_resource("crystal_plate", plate)
 
         **Load an existing run by ID**::
 
@@ -835,6 +835,8 @@ class RecapClient:
 
         Destination namespace comes from this client's scope. Returns persisted
         full schema and propagates backend validation or authorization errors.
+        Set ``ResourceCopyOptions(allow_cross_namespace=True)`` to bypass the
+        default same-or-descendant destination rule, without bypassing access checks.
         """
         copy_options = options or ResourceCopyOptions()
         try:
@@ -857,7 +859,7 @@ class RecapClient:
         """Copy process run into current namespace with fresh aggregate identity."""
         if self.connection_state.backend is None:
             raise RuntimeError("Backend not initialized")
-        namespace_context = self._resolve_namespace_context()
+        namespace_context = self.namespace_context
         return self.connection_state.backend._execute(
             CopyProcessRun(
                 source_process_run_id=source_process_run_id,

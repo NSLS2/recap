@@ -96,6 +96,24 @@ with namespace.build_resource(resource_id=copied.id) as builder:
 
 Copy-on-write preserves frozen source and records lineage from copy to source.
 
+### Explicit cross-namespace copies
+
+By default, `copy_resource` can copy only into the source namespace or one of
+its descendants. To intentionally copy into a sibling, ancestor, or unrelated
+namespace, opt in explicitly:
+
+```python
+copied = destination_namespace.copy_resource(
+    source_resource_id=plate.id,
+    options=ResourceCopyOptions(allow_cross_namespace=True),
+)
+```
+
+The opt-in skips only the descendant restriction. You still need resource-read
+permission on the source namespace and resource-write permission on the
+destination. The source must be a resource graph root; non-root resources are
+still rejected. The full tree is copied and lineage is recorded.
+
 ## Edit an active resource in place
 
 When an active resource holds a mistake, or holds state that legitimately

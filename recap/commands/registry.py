@@ -224,6 +224,8 @@ def _encode_copy_resource(command: CommandModel) -> EncodedRequest:
     }
     if not command.options.changes.children:
         body["changes"].pop("children")
+    if not command.options.allow_cross_namespace:
+        body.pop("allow_cross_namespace")
     return EncodedRequest(
         method="POST",
         path=f"/api/v1/resources/{command.source_resource_id}/copies",
@@ -246,12 +248,15 @@ def _decode_copy_resource(
 
 def _encode_copy_process_run(command: CommandModel) -> EncodedRequest:
     assert isinstance(command, CopyProcessRun)
+    options = command.options.model_dump(mode="json")
+    if not command.options.changes.copy_assignments:
+        options["changes"].pop("copy_assignments")
     return EncodedRequest(
         method="POST",
         path=f"/api/v1/process-runs/{command.source_process_run_id}/copies",
         body={
             "destination_namespace": command.destination_namespace_path,
-            **command.options.model_dump(mode="json"),
+            **options,
         },
         etag=None,
     )
@@ -360,6 +365,8 @@ def _encode_create_process_run(command: CommandModel) -> EncodedRequest:
     body = command.draft.model_dump(mode="json")
     if not command.draft.child_steps:
         body.pop("child_steps")
+    if not command.draft.copy_assignments:
+        body.pop("copy_assignments")
     if body["id"] is None:
         body.pop("id")
     return EncodedRequest(
@@ -384,6 +391,8 @@ def _encode_update_process_run(command: CommandModel) -> EncodedRequest:
     data = command.model_dump(mode="json")
     if not command.child_steps:
         data.pop("child_steps")
+    if not command.copy_assignments:
+        data.pop("copy_assignments")
     data.pop("process_run_id")
     data.pop("expected_revision")
     if not command.in_place:

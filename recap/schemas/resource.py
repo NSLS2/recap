@@ -326,10 +326,11 @@ class ResourceCopyChanges(BaseModel):
 
 
 class ResourceCopyOptions(BaseModel):
-    """Name, parent, and property overrides for a resource copy operation."""
+    """Resource copy overrides; cross-namespace destinations require explicit opt-in."""
 
     name: str | None = None
     parent_id: UUID | None = None
+    allow_cross_namespace: bool = False
     changes: ResourceCopyChanges = Field(default_factory=ResourceCopyChanges)
 
 

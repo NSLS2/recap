@@ -101,6 +101,7 @@ class UpdateProcessRun(CommandModel):
     description: str | None = None
     status: str | None = None
     assignments: dict[str, UUID] | None = None
+    copy_assignments: tuple[str, ...] = ()
     steps: dict[str, ProcessRunStepDraft | dict[str, dict[str, object]]] | None = None
     in_place: bool = False
     child_steps: tuple[ChildStepDraft, ...] = ()

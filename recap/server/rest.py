@@ -407,27 +407,6 @@ def update_resource(
 
 
 @router.post(
-    "/process-runs/{namespace_path:path}", response_model=None, status_code=201
-)
-def create_process_run(
-    namespace_path: str,
-    body: ProcessRunDraft,
-    request: Request,
-    response: Response,
-    actor: Annotated[RequestActor, Depends(authenticate_request)],
-    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
-    registration: Annotated[
-        CommandRegistration, Depends(command_registration("create_process_run"))
-    ],
-) -> ProcessRunSchema:
-    command = registration.decode_command({"namespace_path": namespace_path}, {}, body)
-    result = CommandService(request.app.state.session_factory).execute_batch(
-        command, _context(request, actor, idempotency_key)
-    )
-    return _set_etag(response, result)
-
-
-@router.post(
     "/process-runs/{source_process_run_id}/copies", response_model=None, status_code=201
 )
 def copy_process_run(
@@ -444,6 +423,27 @@ def copy_process_run(
     command = registration.decode_command(
         {"source_process_run_id": source_process_run_id}, {}, body
     )
+    result = CommandService(request.app.state.session_factory).execute_batch(
+        command, _context(request, actor, idempotency_key)
+    )
+    return _set_etag(response, result)
+
+
+@router.post(
+    "/process-runs/{namespace_path:path}", response_model=None, status_code=201
+)
+def create_process_run(
+    namespace_path: str,
+    body: ProcessRunDraft,
+    request: Request,
+    response: Response,
+    actor: Annotated[RequestActor, Depends(authenticate_request)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    registration: Annotated[
+        CommandRegistration, Depends(command_registration("create_process_run"))
+    ],
+) -> ProcessRunSchema:
+    command = registration.decode_command({"namespace_path": namespace_path}, {}, body)
     result = CommandService(request.app.state.session_factory).execute_batch(
         command, _context(request, actor, idempotency_key)
     )

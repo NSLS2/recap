@@ -148,6 +148,34 @@ def test_copy_resource_deep_copies_full_graph_with_new_ids(client):
     )
 
 
+@pytest.mark.parametrize("destination", ["sibling", "prefix"])
+def test_copy_resource_cross_namespace_opt_in(client, destination):
+    setup = _create_source(client)
+    scoped = client.namespace(setup[f"{destination}_path"])
+    with pytest.raises(ValueError, match="source namespace or its descendant"):
+        scoped.copy_resource(setup["source_id"])
+    copied = scoped.copy_resource(
+        setup["source_id"], ResourceCopyOptions(allow_cross_namespace=True)
+    )
+    assert copied.id != setup["source_id"]
+    assert copied.namespace_id == setup[f"{destination}_namespace_id"]
+    assert copied.copied_from_id == setup["source_id"]
+    assert set(copied.children) == {"child"}
+    assert _load_tree(client, copied.id)["values"] == {
+        "root": [1, {"nested": [2]}],
+        "child": [3],
+        "grandchild": [4],
+    }
+
+
+def test_copy_resource_cross_namespace_opt_in_requires_root(client):
+    setup = _create_source(client)
+    with pytest.raises(ValueError, match="resource graph root"):
+        client.namespace(setup["sibling_path"]).copy_resource(
+            setup["child_id"], ResourceCopyOptions(allow_cross_namespace=True)
+        )
+
+
 def test_copy_resource_attaches_full_clone_as_parent_child(client):
     setup = _create_source(client)
     with client.connection_state.sessionmaker.begin() as session:

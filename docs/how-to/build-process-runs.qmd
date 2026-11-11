@@ -50,6 +50,45 @@ The resulting ProcessRun records the template, assignments, ordered steps, and
 parameter values. Use `process_run_id=` when updating a known run to avoid a
 name-based lookup.
 
+## Resources must be visible from the run's namespace
+
+A slot resource must belong to the run's namespace or one of its ancestors.
+Resources in sibling, descendant, or unrelated namespaces are rejected when
+the run is saved. Having permission to read another namespace does not bypass
+this visibility rule.
+
+To explicitly copy a resource from another namespace into the run's namespace:
+
+```python
+with namespace.build_process_run(
+    "Run 002", "Copied sample measurement", "Measure Sample", "1.0"
+) as builder:
+    builder.assign_resource("sample", other_sample, copy=True)
+
+assigned_copy = builder.process_run.assigned_resources["sample"].resource
+```
+
+Only graph roots can be copied; the entire tree is copied with fresh IDs and
+`copied_from_id` pointing to the source root. The saved assignment therefore
+has a different resource ID. Values and metadata are copied independently.
+Child-step references to nodes of the original tree are remapped onto the
+matching nodes of the assigned copy, separately for each slot.
+
+Copying requires read access to the source namespace and resource-write access
+to the run's namespace, in addition to permission to create or update the run.
+Copy and assignment commit or roll back together. Archived sources may be copied;
+the new resource is mutable. If the resource is already visible, `copy=True`
+uses the original instead of creating an unnecessary copy.
+
+Before save, the builder's assignment still refers to the source. Read the
+persisted resource from `builder.process_run` after save. A later plain
+`assign_resource()` call for the same slot clears its pending copy opt-in.
+
+When copying a process run to another namespace, carried assignments must also
+be visible there. Replace a non-visible slot explicitly with
+`ProcessRunCopyOptions(changes=ProcessRunCopyChanges(assignments={"sample": resource.id},
+copy_assignments=("sample",)))` to copy its resource and preserve child refinements.
+
 ## Record dynamic resources
 
 When an experiment discovers resource structure at runtime, add child resources

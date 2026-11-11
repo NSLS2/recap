@@ -613,6 +613,7 @@ def test_service_dispatches_process_run_via_registered_handler(monkeypatch):
             "description": "x",
             "status": None,
             "assignments": None,
+            "copy_assignments": (),
             "steps": None,
             "in_place": False,
             "child_steps": (),

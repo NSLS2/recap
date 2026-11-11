@@ -104,6 +104,7 @@ class ProcessRunRef(NamespaceOwnedFields):
 class ProcessRunCopyChanges(BaseModel):
     description: str | None = None
     assignments: dict[str, UUID] | None = None
+    copy_assignments: tuple[str, ...] = ()
     steps: dict[str, ProcessRunStepDraft | dict[str, dict[str, object]]] | None = None
     child_steps: tuple[ChildStepDraft, ...] = ()
 

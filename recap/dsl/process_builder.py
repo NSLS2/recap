@@ -594,6 +594,7 @@ class ProcessRunBuilder:
         self._save_called = False
         self._transaction = BuilderTransactionState()
         self._draft_assignments: dict[str, UUID] = {}
+        self._draft_copy_assignments: set[str] = set()
         self._draft_steps: dict[str, dict[str, dict[str, object]]] = {}
         if (
             template_id is None
@@ -718,6 +719,7 @@ class ProcessRunBuilder:
 
     def _save(self):
         assignments = self._assignment_changes()
+        copy_assignments = self._copy_assignment_changes()
         steps = self._step_changes()
         description = self._description_change()
         needs_data = (
@@ -737,6 +739,7 @@ class ProcessRunBuilder:
                     description=self.description,
                     template_id=self._template_id,
                     assignments=assignments,
+                    copy_assignments=copy_assignments,
                     steps={
                         name: ProcessRunStepDraft(parameters=value)
                         for name, value in self._draft_steps.items()
@@ -756,6 +759,7 @@ class ProcessRunBuilder:
                     "changes": {
                         "description": description,
                         "assignments": assignments or None,
+                        "copy_assignments": copy_assignments,
                         "steps": steps or None,
                         "child_steps": tuple(self._child_additions),
                     }
@@ -767,6 +771,7 @@ class ProcessRunBuilder:
                 expected_revision=self._process_run.revision,
                 description=description,
                 assignments=assignments or None,
+                copy_assignments=copy_assignments,
                 steps=steps or None,
                 in_place=self._in_place,
                 child_steps=tuple(self._child_additions),
@@ -780,6 +785,7 @@ class ProcessRunBuilder:
             self._draft_process_run = draft_copy(result)
             self._baseline = _ProcessRunBaseline.from_model(result)
             self._draft_assignments = self._assignment_ids(result)
+            self._draft_copy_assignments.clear()
             self._draft_steps = self._model_steps_payload(result)
             self.name = result.name
             self.description = result.description
@@ -922,9 +928,19 @@ class ProcessRunBuilder:
         self,
         resource_slot_name: str,
         resource: ResourceSchema,
+        *,
+        copy: bool = False,
     ) -> "ProcessRunBuilder":
-        """Assign resource to named process slot."""
+        """Assign a visible resource, or explicitly copy a foreign root on save.
+
+        ``copy=True`` copies only resources outside this namespace's ancestry.
+        Source read and destination resource-write permissions are still required.
+        """
         self._draft_assignments[resource_slot_name] = resource.id
+        if copy:
+            self._draft_copy_assignments.add(resource_slot_name)
+        else:
+            self._draft_copy_assignments.discard(resource_slot_name)
         slot = next(
             (
                 slot
@@ -1140,8 +1156,13 @@ class ProcessRunBuilder:
         return {
             name: resource_id
             for name, resource_id in current.items()
-            if baseline.get(name) != resource_id
+            if baseline.get(name) != resource_id or name in self._draft_copy_assignments
         }
+
+    def _copy_assignment_changes(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(self._draft_copy_assignments & self._assignment_changes().keys())
+        )
 
     def _step_changes(self):
         self._validate_step_structure(self._draft_process_run)
