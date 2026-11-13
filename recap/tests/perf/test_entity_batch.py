@@ -8,8 +8,8 @@ from recap.dsl.query import QuerySpec
 from recap.schemas.process import ProcessRunSchema
 from recap.schemas.resource import ResourceSchema
 from recap.tests.conftest import count_statements
-from recap.tests.helpers.entity_fixtures import _seed_resource_graph
-from recap.tests.perf.test_process_run_resource_tree_perf import (
+from recap.tests.helpers.entity_fixtures import (
+    _seed_resource_graph,
     _seed_run_with_resource_chain,
 )
 
@@ -36,7 +36,7 @@ def test_batch_resource_subtrees_have_depth_independent_sql_budget(
         counts.append(counter["n"])
         if model_results:
             assert len(result) == 1
-            from recap.tests.perf.test_process_run_resource_tree_perf import _walk_depth
+            from recap.tests.helpers.entity_fixtures import _walk_depth
 
             assert (
                 _walk_depth(next(iter(result[0].assigned_resources.values())).resource)

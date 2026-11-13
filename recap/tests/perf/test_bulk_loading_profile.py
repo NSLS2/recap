@@ -1,8 +1,5 @@
 """Cold graph preparation and workflow SQL budgets."""
 
-# Imported pytest fixtures are intentionally shadowed by test parameters.
-# ruff: noqa: F811
-
 from contextlib import contextmanager
 
 import pytest
@@ -12,11 +9,8 @@ from recap.tests.helpers.entity_fixtures import (
     record_loaded_plate,
     setup_plate_workflow,
 )
+from recap.tests.helpers.loading import read_graph
 from recap.tests.helpers.sql_profile import capture_sql, profile_read
-from recap.tests.query.test_bulk_loading_profile import (  # noqa: F401
-    loaded_plate,
-    read_graph,
-)
 
 
 @pytest.mark.parametrize("root", ["plate", "run"])

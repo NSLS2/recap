@@ -24,11 +24,11 @@ from recap.dsl.query import (
 from recap.exceptions import RecapProtocolError
 from recap.schemas.process import ProcessRunSchema
 from recap.schemas.resource import ResourceSchema
-from recap.tests.helpers.entity_fixtures import _seed_resource_graph
-from recap.tests.helpers.transport_factories import STAMP
-from recap.tests.perf.test_process_run_resource_tree_perf import (
+from recap.tests.helpers.entity_fixtures import (
+    _seed_resource_graph,
     _seed_run_with_resource_chain,
 )
+from recap.tests.helpers.transport_factories import STAMP
 
 
 def test_query_request_serializes_complete_supported_query_spec():

@@ -37,17 +37,6 @@ from recap.tests.helpers.entity_fixtures import (
 from recap.utils.general import Direction
 
 
-@pytest.fixture(params=["local", "remote"], ids=["local", "remote"])
-def command_client(request, tmp_path, rest_loopback_client):
-    db_path = tmp_path / f"{request.param}-commands.db"
-    if request.param == "local":
-        with RecapClient.from_sqlite(db_path) as client:
-            yield client
-        return
-
-    yield rest_loopback_client
-
-
 def seed_command_namespace(client):
     client.create_namespace("beamline")
     client.create_namespace("beamline/amx")

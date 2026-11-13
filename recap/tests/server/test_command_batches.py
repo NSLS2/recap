@@ -27,11 +27,9 @@ from recap.schemas.resource import ResourceSchema
 from recap.tests.helpers.entity_fixtures import (
     _seed_process_template,
     _seed_resource_graph,
-)
-from recap.tests.helpers.sql_profile import capture_sql
-from recap.tests.perf.test_process_run_resource_tree_perf import (
     _seed_run_with_resource_chain,
 )
+from recap.tests.helpers.sql_profile import capture_sql
 
 
 def test_command_batch_replay_preserves_original_snapshot(db_session):

@@ -36,8 +36,6 @@ from recap.schemas.resource import (
 from recap.tests.helpers.entity_fixtures import (
     _seed_process_template,
     _seed_resource_graph,
-)
-from recap.tests.perf.test_process_run_resource_tree_perf import (
     _seed_run_with_resource_chain,
 )
 

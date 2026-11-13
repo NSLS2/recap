@@ -388,3 +388,102 @@ def record_loaded_plate(client, inputs, *, measure=nullcontext):
         inputs.source_ids,
         run_id,
     )
+
+
+def _seed_run_with_resource_chain(db_session, *, name, depth, namespace=None):
+    """Create a process run with one assigned resource that roots a linear
+    child chain of ``depth`` nodes. Returns the ProcessRun."""
+    with db_session.no_autoflush:
+        namespace = namespace or Namespace(path=f"perf/{name}", metadata_json={})
+        template = ProcessTemplate(
+            namespace=namespace, name=f"Template-{name}", version="1.0"
+        )
+        step_template = StepTemplate(name=f"Step-{name}", process_template=template)
+        parameter_group = AttributeGroupTemplate(name=f"Parameters-{name}")
+        parameter_group.attribute_templates.append(
+            AttributeTemplate(name="dwell", value_type="int", default_value="1")
+        )
+        step_template.attribute_group_templates.append(parameter_group)
+        run = ProcessRun(
+            name=f"Run-{name}",
+            description=f"Process run for {name}",
+            template=template,
+            namespace=namespace,
+        )
+
+    db_session.add_all([template, step_template])
+    if namespace not in db_session:
+        db_session.add(namespace)
+    db_session.flush()
+    resource_type = ResourceType(name=f"resource-type-{uuid4().hex}")
+    resource_template = ResourceTemplate(
+        namespace=namespace, name=f"resource-template-{uuid4().hex}"
+    )
+    resource_template.types.append(resource_type)
+    slot = ResourceSlot(
+        name=f"slot-{name}",
+        process_template=template,
+        resource_type=resource_type,
+        direction=Direction.input,
+    )
+    db_session.add(slot)
+    step_template.bindings["input"] = StepTemplateResourceSlotBinding(
+        role="input", resource_slot=slot
+    )
+
+    root = Resource(namespace=namespace, name=f"{name}-0", template=resource_template)
+    db_session.add_all([resource_type, resource_template, slot, root])
+    parent = root
+    for level in range(1, depth):
+        child = Resource(
+            name=f"{name}-{level}",
+            template=resource_template,
+            parent=parent,
+        )
+        db_session.add(child)
+        parent = child
+
+    db_session.flush()
+    db_session.add(run)
+    run.resources[slot] = root
+    run.finalize()
+    db_session.commit()
+    return run
+
+
+def _walk_depth(resource):
+    """Return the number of nodes along the (single) child chain."""
+    n = 1
+    children = list(resource.children.values())
+    while children:
+        n += 1
+        children = list(children[0].children.values())
+    return n
+
+
+def _assignment_fixture(client, suffix):
+    client.create_namespace(suffix)
+    scoped = client.namespace(suffix)
+    with scoped.build_resource_template(
+        name=f"Dataset-{suffix}", type_names=["dataset"]
+    ):
+        pass
+    unchanged = scoped.create_resource(f"unchanged-{suffix}", f"Dataset-{suffix}")
+    changed = scoped.create_resource(f"changed-{suffix}", f"Dataset-{suffix}")
+    with scoped.build_process_template(f"Pandda-{suffix}", "1.0") as template:
+        template.add_resource_slot("unchanged_dataset", "dataset", "input")
+        template.add_resource_slot("changed_dataset", "dataset", "input")
+    return scoped, unchanged, changed
+
+
+def _run(client, suffix):
+    client.create_namespace(suffix)
+    scoped = client.namespace(suffix)
+    with scoped.build_process_template("Transfers", "1.0") as template:
+        for name in ("Transfer", "Repeat"):
+            template.add_step(name).param_group("Transfer").add_attribute(
+                "volume", "float", "uL", 10
+            )
+    with scoped.build_process_run("run", "desc", "Transfers", "1.0") as builder:
+        pass
+    return scoped, builder.process_run

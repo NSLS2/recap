@@ -19,6 +19,7 @@ from recap.client.base_client import RecapClient
 from recap.db.base import Base
 from recap.db.namespace import Namespace
 from recap.server.app import create_app
+from recap.tests.helpers.entity_fixtures import seed_loaded_well_plate
 from recap.utils.general import Direction
 from recap.utils.migrations import apply_migrations as upgrade_database
 
@@ -123,6 +124,31 @@ def idempotency_headers(auth_header):
         return {**auth_header, "Idempotency-Key": key, **extra}
 
     return make
+
+
+@pytest.fixture(params=["local", "remote"], ids=["local", "remote"])
+def command_client(request, tmp_path, rest_loopback_client):
+    db_path = tmp_path / f"{request.param}-commands.db"
+    if request.param == "local":
+        with RecapClient.from_sqlite(db_path) as client:
+            yield client
+        return
+
+    yield rest_loopback_client
+
+
+@pytest.fixture(params=[12, 96], ids=["12-wells", "96-wells"])
+def loaded_plate(request, blank_database_path, copy_database, tmp_path):
+    path = copy_database(blank_database_path, tmp_path / "loaded-plate.db")
+    engine = create_engine(f"sqlite+pysqlite:///{path}")
+    factory = sessionmaker(bind=engine, autoflush=False)
+    try:
+        with factory() as session:
+            graph = seed_loaded_well_plate(session, request.param)
+            session.commit()
+        yield factory, graph
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture

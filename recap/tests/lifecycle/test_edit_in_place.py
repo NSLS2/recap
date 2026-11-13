@@ -24,7 +24,7 @@ from recap.dsl.query import QuerySpec
 from recap.exceptions import RecapConflictError, RecapNotFoundError
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.resource import ResourceSchema
-from recap.tests.processes.test_process_run_update import _assignment_fixture
+from recap.tests.helpers.entity_fixtures import _assignment_fixture
 
 
 def _resource_tree(db_session, suffix):

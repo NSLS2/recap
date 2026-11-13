@@ -22,25 +22,11 @@ from recap.dsl.query import Field, QuerySpec
 from recap.schemas.process import ProcessRunSchema
 from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
 from recap.tests.conftest import count_statements
-from recap.tests.helpers.entity_fixtures import seed_loaded_well_plate
+from recap.tests.helpers.loading import read_graph
 from recap.tests.helpers.sql_profile import (
     capture_sql,
     profile_read,
 )
-
-
-@pytest.fixture(params=[12, 96], ids=["12-wells", "96-wells"])
-def loaded_plate(request, blank_database_path, copy_database, tmp_path):
-    path = copy_database(blank_database_path, tmp_path / "loaded-plate.db")
-    engine = create_engine(f"sqlite+pysqlite:///{path}")
-    factory = sessionmaker(bind=engine, autoflush=False)
-    try:
-        with factory() as session:
-            graph = seed_loaded_well_plate(session, request.param)
-            session.commit()
-        yield factory, graph
-    finally:
-        engine.dispose()
 
 
 def test_fixture_has_distinct_templates_and_committed_values(loaded_plate):
@@ -124,18 +110,6 @@ CASE_IDS = [
     "well-snapshot",
     "run-snapshot",
 ]
-
-
-def read_graph(factory, graph, root, kind, preloads, snapshot):
-    object_id = graph.well_ids[0] if root == "well" else getattr(graph, f"{root}_id")
-    return profile_read(
-        factory,
-        graph.namespace_path,
-        object_id,
-        kind=kind,
-        preloads=preloads,
-        snapshot=snapshot,
-    )
 
 
 @pytest.mark.parametrize("root,kind,preloads,snapshot", READ_CASES, ids=CASE_IDS)

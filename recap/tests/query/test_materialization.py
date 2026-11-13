@@ -13,8 +13,8 @@ from recap.client.materialization import BatchMaterializer
 from recap.exceptions import RecapProtocolError
 from recap.schemas.process import ProcessRunSchema
 from recap.schemas.resource import ResourceSchema
-from recap.tests.helpers.entity_fixtures import _seed_resource_graph
-from recap.tests.perf.test_process_run_resource_tree_perf import (
+from recap.tests.helpers.entity_fixtures import (
+    _seed_resource_graph,
     _seed_run_with_resource_chain,
 )
 

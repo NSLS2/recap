@@ -16,8 +16,7 @@ from recap.exceptions import RecapPermissionDeniedError, RecapValidationError
 from recap.lifecycle import LifecycleStatus
 from recap.schemas.process import ProcessRunCopyChanges, ProcessRunCopyOptions
 from recap.schemas.resource import ResourceCopyOptions
-from recap.tests.client.test_remote_builder_parity import command_client  # noqa: F401
-from recap.tests.namespaces.test_namespace_policy import grant, policy
+from recap.tests.helpers.authorization import grant, policy
 
 
 @pytest.fixture

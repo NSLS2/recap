@@ -2,7 +2,7 @@
 
 import pytest
 
-from recap.tests.processes.test_runtime_child_steps import _run
+from recap.tests.helpers.entity_fixtures import _run
 
 
 @pytest.mark.performance

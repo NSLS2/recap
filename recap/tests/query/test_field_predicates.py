@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from recap.db.resource import Resource, ResourceTemplate
 from recap.dsl.query import Field, FieldOrdering, FieldPredicate, QuerySpec
-from recap.tests.query.test_query_dsl import (  # noqa: F401
+from recap.tests.helpers.query_graphs import (  # noqa: F401
     active_namespace,
     make_query,
     seed_process_run,

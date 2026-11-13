@@ -1,19 +1,6 @@
 import pytest
 
-from recap.tests.client.test_remote_builder_parity import command_client  # noqa: F401
-
-
-def _run(client, suffix):
-    client.create_namespace(suffix)
-    scoped = client.namespace(suffix)
-    with scoped.build_process_template("Transfers", "1.0") as template:
-        for name in ("Transfer", "Repeat"):
-            template.add_step(name).param_group("Transfer").add_attribute(
-                "volume", "float", "uL", 10
-            )
-    with scoped.build_process_run("run", "desc", "Transfers", "1.0") as builder:
-        pass
-    return scoped, builder.process_run
+from recap.tests.helpers.entity_fixtures import _run
 
 
 def test_run_builder_templates_are_read_only(client):

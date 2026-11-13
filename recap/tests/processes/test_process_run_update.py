@@ -1,5 +1,7 @@
 import pytest
 
+from recap.tests.helpers.entity_fixtures import _assignment_fixture
+
 
 def test_process_run_update_persists_param_changes(client):
     client.create_namespace("process-run-update")
@@ -125,21 +127,6 @@ def test_resource_parent_lifecycle_waits_for_child_data(client, monkeypatch):
         index for index, event in enumerate(events) if event == "CreateResource"
     )
     assert last_resource_write < first_lifecycle
-
-
-def _assignment_fixture(client, suffix):
-    client.create_namespace(suffix)
-    scoped = client.namespace(suffix)
-    with scoped.build_resource_template(
-        name=f"Dataset-{suffix}", type_names=["dataset"]
-    ):
-        pass
-    unchanged = scoped.create_resource(f"unchanged-{suffix}", f"Dataset-{suffix}")
-    changed = scoped.create_resource(f"changed-{suffix}", f"Dataset-{suffix}")
-    with scoped.build_process_template(f"Pandda-{suffix}", "1.0") as template:
-        template.add_resource_slot("unchanged_dataset", "dataset", "input")
-        template.add_resource_slot("changed_dataset", "dataset", "input")
-    return scoped, unchanged, changed
 
 
 def test_deferred_process_run_finalization_keeps_all_assignments_without_duplicate(

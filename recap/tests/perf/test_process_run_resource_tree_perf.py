@@ -18,15 +18,14 @@ import pytest
 from sqlalchemy.orm import sessionmaker
 
 from recap.adapter.local import LocalBackend
-from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
 from recap.db.namespace import Namespace
-from recap.db.process import ProcessRun, ProcessTemplate, ResourceSlot
-from recap.db.resource import Resource, ResourceTemplate, ResourceType
-from recap.db.step import StepTemplate, StepTemplateResourceSlotBinding
 from recap.dsl.query import QueryDSL
 from recap.schemas.namespace import NamespaceContext
 from recap.tests.conftest import count_statements
-from recap.utils.general import Direction
+from recap.tests.helpers.entity_fixtures import (
+    _seed_run_with_resource_chain,
+    _walk_depth,
+)
 
 
 def make_query(db_session, namespace):
@@ -35,77 +34,6 @@ def make_query(db_session, namespace):
     return QueryDSL(
         backend, context=NamespaceContext(id=namespace.id, path=namespace.path)
     )
-
-
-def _seed_run_with_resource_chain(db_session, *, name, depth, namespace=None):
-    """Create a process run with one assigned resource that roots a linear
-    child chain of ``depth`` nodes. Returns the ProcessRun."""
-    with db_session.no_autoflush:
-        namespace = namespace or Namespace(path=f"perf/{name}", metadata_json={})
-        template = ProcessTemplate(
-            namespace=namespace, name=f"Template-{name}", version="1.0"
-        )
-        step_template = StepTemplate(name=f"Step-{name}", process_template=template)
-        parameter_group = AttributeGroupTemplate(name=f"Parameters-{name}")
-        parameter_group.attribute_templates.append(
-            AttributeTemplate(name="dwell", value_type="int", default_value="1")
-        )
-        step_template.attribute_group_templates.append(parameter_group)
-        run = ProcessRun(
-            name=f"Run-{name}",
-            description=f"Process run for {name}",
-            template=template,
-            namespace=namespace,
-        )
-
-    db_session.add_all([template, step_template])
-    if namespace not in db_session:
-        db_session.add(namespace)
-    db_session.flush()
-    resource_type = ResourceType(name=f"resource-type-{uuid4().hex}")
-    resource_template = ResourceTemplate(
-        namespace=namespace, name=f"resource-template-{uuid4().hex}"
-    )
-    resource_template.types.append(resource_type)
-    slot = ResourceSlot(
-        name=f"slot-{name}",
-        process_template=template,
-        resource_type=resource_type,
-        direction=Direction.input,
-    )
-    db_session.add(slot)
-    step_template.bindings["input"] = StepTemplateResourceSlotBinding(
-        role="input", resource_slot=slot
-    )
-
-    root = Resource(namespace=namespace, name=f"{name}-0", template=resource_template)
-    db_session.add_all([resource_type, resource_template, slot, root])
-    parent = root
-    for level in range(1, depth):
-        child = Resource(
-            name=f"{name}-{level}",
-            template=resource_template,
-            parent=parent,
-        )
-        db_session.add(child)
-        parent = child
-
-    db_session.flush()
-    db_session.add(run)
-    run.resources[slot] = root
-    run.finalize()
-    db_session.commit()
-    return run
-
-
-def _walk_depth(resource):
-    """Return the number of nodes along the (single) child chain."""
-    n = 1
-    children = list(resource.children.values())
-    while children:
-        n += 1
-        children = list(children[0].children.values())
-    return n
 
 
 @pytest.mark.performance

@@ -3,15 +3,10 @@ import pytest
 from recap.authentication.models import ActorKind, ProviderIdentity, RequestActor
 from recap.authorization.policy import (
     DenialCode,
-    SnapshotNamespacePolicy,
     UnrestrictedNamespacePolicy,
 )
 from recap.authorization.scopes import Scope
-from recap.authorization.snapshot import (
-    AuthorizationSnapshot,
-    GrantProvenance,
-    SnapshotMetadata,
-)
+from recap.tests.helpers.authorization import grant, policy
 
 
 def actor(
@@ -26,32 +21,6 @@ def actor(
         credential_scopes=scopes,
         namespace_restrictions=restrictions,
         credential_fingerprint="sha256:test",
-    )
-
-
-def grant(
-    identity: ProviderIdentity,
-    namespace_path: str,
-    scope: Scope,
-    *,
-    group: str = "scientists",
-    role: str = "member",
-) -> GrantProvenance:
-    return GrantProvenance(
-        identity=identity,
-        namespace_path=namespace_path,
-        scope=scope,
-        group=group,
-        role=role,
-    )
-
-
-def policy(*grants: GrantProvenance) -> SnapshotNamespacePolicy:
-    return SnapshotNamespacePolicy(
-        AuthorizationSnapshot(
-            metadata=SnapshotMetadata(format_version=1, source_revision="revision-7"),
-            grants=frozenset(grants),
-        )
     )
 
 
