@@ -41,9 +41,7 @@ class QueryService:
             batch = self.backend.query_batch_authorized(
                 schema, spec, authorization=authorization
             )
-        return encode_query_batch(
-            batch, entity=request.entity, projection=request.projection
-        )
+        return encode_query_batch(batch, entity=request.entity)
 
     def count(self, request: QueryRequest, *, actor, policy) -> int:
         schema = self._schema(request)
@@ -92,14 +90,7 @@ class QueryService:
     @staticmethod
     def _schema(request: QueryRequest) -> type[BaseModel]:
         try:
-            registration = SCHEMA_REGISTRY.by_key(request.entity)
-            if request.projection not in registration.projections:
-                raise ValueError(
-                    f"Unknown query entity/projection: {request.entity}/{request.projection}"
-                )
-            return registration.model
-        except ValueError as exc:
-            raise RecapValidationError(str(exc)) from exc
+            return SCHEMA_REGISTRY.by_key(request.entity).model
         except KeyError as exc:
             raise RecapValidationError(str(exc)) from exc
 

@@ -1,15 +1,15 @@
 ---
-title: Choose Query Shape and Loading
+title: Choose Query Loading
 description: Decide between targeted includes, eager loading, and no relationship loading.
 ---
 
-# Choose Query Shape and Loading
+# Choose Query Loading
 
 Choose relationship loading, then add targeted paths when needed. Query results
 are canonical full models; loading controls relationship hydration.
 
 ```{mermaid}
-%%| fig-cap: "Choosing RECAP query shape and relationship loading"
+%%| fig-cap: "Choosing RECAP relationship loading"
 flowchart TD
     Start[What data does the task need?]
     Start --> Identity{Identity and scalar fields only?}
@@ -23,10 +23,9 @@ flowchart TD
 
 Use `load="none"` when identity and scalar fields are enough. Use eager loading
 for a complete relationship tree or non-eager explicit includes for targeted
-relationships. `shape="ref"` remains deprecated compatibility syntax and must
-not be used in new code.
+relationships.
 
-## Choose a result shape
+## Read canonical models
 
 ```python
 minimal = namespace.query_maker().resources(load="none").all()
@@ -74,11 +73,10 @@ runs = (
 `include_template()` is the resource shortcut. Process runs provide
 `include_steps()` and `include_resources()`.
 
-## Deprecated combinations
+## Keep eager loading and targeted includes separate
 
-New code should not use `shape="ref"`. It is normalized to full models; use
-`load="none"` when relationships must remain unloaded. `include(...)` still requires
-non-eager loading:
+`include(...)` requires non-eager loading. The following combination raises
+`ValueError`:
 
 ```python
 namespace.query_maker().resources(load="eager").include("children")

@@ -18,45 +18,16 @@ from recap.schemas.resource import (
     ResourceTemplateSchema,
 )
 
-SCHEMA_QUERY_KEYS: dict[type[BaseModel], tuple[str, str]] = {
-    NamespaceSchema: ("namespace", "full"),
-    ResourceTemplateSchema: ("resource_template", "full"),
-    ResourceSchema: ("resource", "full"),
-    ProcessTemplateSchema: ("process_template", "full"),
-    ProcessRunSchema: ("process_run", "full"),
+SCHEMA_ENTITY_KEYS: dict[type[BaseModel], str] = {
+    NamespaceSchema: "namespace",
+    ResourceTemplateSchema: "resource_template",
+    ResourceSchema: "resource",
+    ProcessTemplateSchema: "process_template",
+    ProcessRunSchema: "process_run",
 }
 
-QUERY_SCHEMA_KEYS: dict[tuple[str, str], type[BaseModel]] = {
-    (entity, projection): schema
-    for schema, (entity, projection) in SCHEMA_QUERY_KEYS.items()
-}
-for entity, schema in (
-    ("namespace", NamespaceSchema),
-    ("resource_template", ResourceTemplateSchema),
-    ("resource", ResourceSchema),
-    ("process_template", ProcessTemplateSchema),
-    ("process_run", ProcessRunSchema),
-):
-    QUERY_SCHEMA_KEYS[(entity, "ref")] = schema
-
-QUERY_ENTITY_KEYS = {
-    schema: entity for schema, (entity, _) in SCHEMA_QUERY_KEYS.items()
-}
-
-QUERY_PROJECTION_SCHEMAS: dict[str, dict[str, type[BaseModel]]] = {
-    "namespace": {"full": NamespaceSchema, "ref": NamespaceSchema},
-    "resource_template": {
-        "full": ResourceTemplateSchema,
-        "ref": ResourceTemplateSchema,
-    },
-    "resource": {"full": ResourceSchema, "ref": ResourceSchema},
-    "process_template": {"full": ProcessTemplateSchema, "ref": ProcessTemplateSchema},
-    "process_run": {"full": ProcessRunSchema, "ref": ProcessRunSchema},
-}
-
-SCHEMA_ENTITY_KEYS = QUERY_ENTITY_KEYS
-SCHEMA_PROJECTIONS = {
-    schema: projection for schema, (_, projection) in SCHEMA_QUERY_KEYS.items()
+QUERY_SCHEMA_KEYS: dict[str, type[BaseModel]] = {
+    entity: schema for schema, entity in SCHEMA_ENTITY_KEYS.items()
 }
 
 
@@ -66,7 +37,6 @@ class SchemaRegistration:
     model: type[BaseModel]
     orm_model: type[Base]
     loader_capabilities: tuple[str, ...]
-    projections: tuple[str, ...] = ("full", "ref")
 
     @property
     def record_policy(self) -> RecordPolicy:
@@ -151,13 +121,8 @@ SCHEMA_REGISTRY = SchemaRegistry(
 )
 
 
-def schema_for(entity: str, projection: str) -> type[BaseModel]:
+def schema_for(entity: str) -> type[BaseModel]:
     try:
-        registration = SCHEMA_REGISTRY.by_key(entity)
-        if projection not in registration.projections:
-            raise KeyError(projection)
-        return registration.model
+        return SCHEMA_REGISTRY.by_key(entity).model
     except KeyError as exc:
-        raise ValueError(
-            f"Unknown query entity/projection: {entity}/{projection}"
-        ) from exc
+        raise ValueError(f"Unknown query entity: {entity}") from exc

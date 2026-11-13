@@ -309,9 +309,7 @@ class RESTAdapter:
             )
             if envelope.entity != expected:
                 raise RecapProtocolError("Command result schema does not match command")
-            batch = decode_query_batch(
-                schema_for(envelope.entity, envelope.projection), envelope
-            )
+            batch = decode_query_batch(schema_for(envelope.entity), envelope)
             if len(batch.roots) != 1:
                 raise RecapProtocolError("Command result must contain one root")
             return batch

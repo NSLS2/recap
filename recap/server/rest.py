@@ -93,9 +93,7 @@ def _set_etag(response: Response, entity):
             if record.kind == root.kind and record.id == root.id
         )
         response.headers["ETag"] = f'"{record.revision}"'
-        return encode_query_batch(
-            entity, entity=root.kind, projection="full"
-        ).model_dump(mode="json")
+        return encode_query_batch(entity, entity=root.kind).model_dump(mode="json")
     response.headers["ETag"] = f'"{entity.revision}"'
     return entity
 
@@ -115,7 +113,6 @@ def _query_request(body: QueryRPCRequest) -> QueryRequest:
     try:
         return QueryRequest(
             entity=body.entity,
-            projection=body.projection,
             namespace_path=_canonical_namespace_path(body.namespace_path),
             spec=body.spec,
         )

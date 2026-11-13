@@ -192,7 +192,7 @@ Send an authenticated REST query after starting the server:
 curl https://recap.example.org/api/v1/query \
   -H 'Authorization: Apikey your-api-key' \
   -H 'Content-Type: application/json' \
-  --data '{"entity":"namespace","projection":"full","namespace_path":"beamline/amx","spec":{}}'
+  --data '{"entity":"namespace","namespace_path":"beamline/amx","spec":{}}'
 ```
 
 Use responses as follows:

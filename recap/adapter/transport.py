@@ -3,7 +3,7 @@
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from recap.adapter.entity_records import EntityBatch
 from recap.adapter.schema_registry import (
     SCHEMA_ENTITY_KEYS,
-    SCHEMA_PROJECTIONS,
     schema_for,
 )
 from recap.dsl.query import FieldOrdering, FieldPredicate, QuerySpec
@@ -22,28 +21,26 @@ _SCALAR_TAG = "__recap_transport_scalar_v1__"
 
 class FlatQueryResult(EntityBatch):
     entity: str
-    projection: Literal["full", "ref"]
 
     @model_validator(mode="after")
     def validate_entity(self):
-        schema_for(self.entity, self.projection)
+        schema_for(self.entity)
         return self
 
 
-def encode_query_batch(batch: EntityBatch, *, entity: str, projection: str):
+def encode_query_batch(batch: EntityBatch, *, entity: str):
     """Tag arbitrary payload scalars without treating dictionaries as references."""
     payload = batch.model_dump()
     for record in payload["entities"]:
         record["fields"] = _encode_scalars(record["fields"])
-    return FlatQueryResult(entity=entity, projection=projection, **payload)
+    return FlatQueryResult(entity=entity, **payload)
 
 
 def decode_query_batch(schema, result: FlatQueryResult) -> EntityBatch:
-    if schema_for(result.entity, result.projection) is not schema:
+    if schema_for(result.entity) is not schema:
         raise RecapProtocolError("Query result schema does not match requested schema")
     payload = result.model_dump()
     payload.pop("entity")
-    payload.pop("projection")
     for record in payload["entities"]:
         record["fields"] = _decode_scalars(record["fields"])
     return EntityBatch.model_validate(payload)
@@ -52,7 +49,6 @@ def decode_query_batch(schema, result: FlatQueryResult) -> EntityBatch:
 class QueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     entity: str
-    projection: Literal["full", "ref"]
     namespace_path: str
     spec: dict[str, Any]
 
@@ -69,18 +65,17 @@ class QueryRequest(BaseModel):
             serialized_spec.pop("include_mutable", None)
         return cls(
             entity=SCHEMA_ENTITY_KEYS[schema],
-            projection=SCHEMA_PROJECTIONS[schema],
             namespace_path=namespace_path,
             spec=serialized_spec,
         )
 
     @property
     def wire_schema(self) -> type[BaseModel]:
-        return schema_for(self.entity, self.projection)
+        return schema_for(self.entity)
 
     @model_validator(mode="after")
     def validate_entity(self):
-        schema_for(self.entity, self.projection)
+        schema_for(self.entity)
         return self
 
 

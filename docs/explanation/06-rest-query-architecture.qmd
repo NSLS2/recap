@@ -29,9 +29,9 @@ the corresponding local query behavior. REST command routes carry aggregate
 command payloads to `CommandService`, which owns authorization, transactions,
 revisions, idempotency, and audit outcomes.
 
-Query requests use JSON envelopes such as `entity`, `projection`,
-`namespace_path`, and serialized `spec`; results return the entity, projection,
-and serialized items (or a count for the count endpoint). Local and remote
+Query requests use JSON envelopes containing `entity`, `namespace_path`, and
+serialized `spec`; results return the entity and a flat batch of `roots`,
+`entities`, and `adjacency` (or a count for the count endpoint). Local and remote
 clients therefore share QueryDSL semantics without sharing database access.
 
 For readers who cannot view the diagram, reads use `POST /api/v1/query` and

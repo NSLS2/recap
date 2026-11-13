@@ -1,8 +1,7 @@
-import warnings
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
+from typing import IO, TYPE_CHECKING, Any, Generic, Literal, TypeVar
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -14,16 +13,13 @@ from recap.schemas.namespace import NamespaceContext, NamespaceSchema
 from recap.schemas.resource import (
     ResourceRef,
     ResourceSchema,
-    ResourceTemplateRef,
     ResourceTemplateSchema,
 )
 
 if TYPE_CHECKING:
     from recap.adapter import ReadBackend
 from recap.schemas.process import (
-    ProcessRunRef,
     ProcessRunSchema,
-    ProcessTemplateRef,
     ProcessTemplateSchema,
 )
 
@@ -36,10 +32,7 @@ except ModuleNotFoundError:
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 ModelT = TypeVar("ModelT")
 OnUnloadedPolicy = Literal["silent", "warn", "raise"]
-Shape = Literal["full", "ref"]
-ShapeInput = Literal["full", "ref", "schema"]
 LoadMode = Literal["none", "eager"]
-LoadInput = Literal["none", "eager", "full"]
 FieldOperator = Literal[
     "eq",
     "ne",
@@ -55,52 +48,10 @@ FieldOperator = Literal[
 ]
 
 
-def _normalize_shape(shape: ShapeInput) -> Shape:
-    if shape == "ref":
-        warnings.warn(
-            "shape='ref' is deprecated; use shape='full', load='none' instead",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        return "full"
-    if shape == "schema":
-        warnings.warn(
-            "shape='schema' is deprecated; use shape='full' instead",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        return "full"
-    if shape not in ("full", "ref"):
-        raise ValueError("shape must be one of 'full', 'ref', or deprecated 'schema'")
-    return cast(Shape, shape)
-
-
-def _normalize_expand(expand: bool | None, load: LoadInput) -> LoadMode:
-    if expand:
-        warnings.warn(
-            "expand=True is deprecated; use load='eager' instead",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        if load not in ("none", "eager"):
-            raise ValueError(
-                "expand=True cannot be combined with deprecated load='full'"
-            )
-        return "eager"
-    return _normalize_load(load)
-
-
-def _normalize_load(load: LoadInput) -> LoadMode:
-    if load == "full":
-        warnings.warn(
-            "load='full' is deprecated; use load='eager' instead",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        return "eager"
+def _validate_load(load: LoadMode) -> LoadMode:
     if load not in ("none", "eager"):
-        raise ValueError("load must be one of 'none', 'eager', or deprecated 'full'")
-    return cast(LoadMode, load)
+        raise ValueError("load must be one of 'none' or 'eager'")
+    return load
 
 
 def _validate_field_path(path: str) -> str:
@@ -249,8 +200,8 @@ class ParameterFilter(BaseModel):
 class QuerySpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     filters: dict[str, Any] = {}
-    predicates: Sequence[Any] = ()
-    orderings: Sequence[Any] = ()
+    predicates: Sequence[FieldPredicate] = ()
+    orderings: Sequence[FieldOrdering] = ()
     preloads: Sequence[str] = ()
     limit: int | None = None
     offset: int | None = None
@@ -263,13 +214,6 @@ class QuerySpec(BaseModel):
     effective_metadata_filters: dict[str, Any] = PydanticField(default_factory=dict)
     load_mode: LoadMode | None = None
     on_unloaded: OnUnloadedPolicy | None = None
-
-    @field_validator("load_mode", mode="before")
-    @classmethod
-    def _normalize_load_mode(cls, value):
-        if value is None:
-            return None
-        return _normalize_load(value)
 
     @field_validator("predicates", mode="before")
     @classmethod
@@ -308,8 +252,8 @@ class BaseQuery(Generic[SchemaT]):
         context: NamespaceContext,
         model: type[SchemaT] | None = None,
         filters: dict[str, Any] | None = None,
-        predicates: list[Any] | None = None,
-        orderings: list[Any] | None = None,
+        predicates: list[FieldPredicate] | None = None,
+        orderings: list[FieldOrdering] | None = None,
         preloads: list[str] | None = None,
         limit: int | None = None,
         offset: int | None = None,
@@ -386,18 +330,14 @@ class BaseQuery(Generic[SchemaT]):
         new_filters.update(kwargs)
         return self._clone(filters=new_filters)
 
-    def where(self, *predicates) -> "Self":
+    def where(self, *predicates: FieldPredicate) -> "Self":
         """Return clone with predicates appended using AND semantics."""
         for predicate in predicates:
             if not isinstance(predicate, FieldPredicate):
-                warnings.warn(
-                    "Legacy query predicates are deprecated; use Field(...) instead",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
+                raise TypeError("where() accepts Field(...) predicates only")
         return self._clone(predicates=self._predicates + list(predicates))
 
-    def order_by(self, *orderings) -> "Self":
+    def order_by(self, *orderings: Field | FieldOrdering) -> "Self":
         """Return clone with orderings appended."""
         normalized = []
         for ordering in orderings:
@@ -406,11 +346,7 @@ class BaseQuery(Generic[SchemaT]):
             else:
                 normalized.append(ordering)
                 if not isinstance(ordering, FieldOrdering):
-                    warnings.warn(
-                        "Legacy query orderings are deprecated; use Field(...) instead",
-                        DeprecationWarning,
-                        stacklevel=2,
-                    )
+                    raise TypeError("order_by() accepts Field(...) orderings only")
         return self._clone(orderings=self._orderings + normalized)
 
     def limit(self, value: int) -> "Self":
@@ -464,7 +400,7 @@ class BaseQuery(Generic[SchemaT]):
         return rows
 
     def all(self) -> Sequence[SchemaT] | Sequence[BaseModel]:
-        """Execute query and return all matching models or references."""
+        """Execute query and return all matching models."""
         return self._execute()
 
     def first(self) -> SchemaT | None:
@@ -506,7 +442,7 @@ class NamespaceQuery(BaseQuery[NamespaceSchema]):
         return self._clone(effective_metadata_filters=values)
 
 
-class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
+class ProcessRunQuery(BaseQuery[ProcessRunSchema]):
     """Query process runs with optional steps, resources, and parameters."""
 
     model = ProcessRunSchema
@@ -516,17 +452,11 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
         self,
         backend: "ReadBackend",
         *,
-        shape: ShapeInput = "full",
-        load: LoadInput = "none",
-        expand: bool | None = None,
+        load: LoadMode = "none",
         on_unloaded: OnUnloadedPolicy | None = None,
         **kwargs,
     ):
-        shape = _normalize_shape(shape)
-        load = _normalize_expand(expand, load)
-        if shape == "ref" and load != "none":
-            raise ValueError("load must be 'none' when shape='ref'")
-        self._shape = shape
+        load = _validate_load(load)
         self._load = load
         model = ProcessRunSchema
         super().__init__(
@@ -541,7 +471,6 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
         params = dict(
             backend=self._backend,
             context=self._context,
-            shape=self._shape,
             load=self._load,
             filters=dict(self._filters),
             predicates=list(self._predicates),
@@ -561,8 +490,6 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
         return self.__class__(**params)
 
     def include(self, relation_names: str | Sequence[str]) -> "ProcessRunQuery":
-        if self._shape == "ref":
-            raise ValueError("include(...) is only valid when shape='full'")
         if self._load == "eager":
             raise ValueError("include(...) cannot be combined with load='eager'")
         return super().include(relation_names)
@@ -635,7 +562,7 @@ class ProcessRunQuery(BaseQuery[ProcessRunSchema | ProcessRunRef]):
         return self.include("resources")
 
 
-class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
+class ResourceQuery(BaseQuery[ResourceSchema]):
     """Query resources, properties, templates, and parent relationships."""
 
     model = ResourceSchema
@@ -645,17 +572,11 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
         self,
         backend: "ReadBackend",
         *,
-        shape: ShapeInput = "full",
-        load: LoadInput = "none",
-        expand: bool | None = None,
+        load: LoadMode = "none",
         on_unloaded: OnUnloadedPolicy | None = None,
         **kwargs,
     ):
-        shape = _normalize_shape(shape)
-        load = _normalize_expand(expand, load)
-        if shape == "ref" and load != "none":
-            raise ValueError("load must be 'none' when shape='ref'")
-        self._shape = shape
+        load = _validate_load(load)
         self._load = load
         model = ResourceSchema
         super().__init__(
@@ -670,7 +591,6 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
         params = dict(
             backend=self._backend,
             context=self._context,
-            shape=self._shape,
             load=self._load,
             filters=dict(self._filters),
             predicates=list(self._predicates),
@@ -690,8 +610,6 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
         return self.__class__(**params)
 
     def include(self, relation_names: str | Sequence[str]) -> "ResourceQuery":
-        if self._shape == "ref":
-            raise ValueError("include(...) is only valid when shape='full'")
         if self._load == "eager":
             raise ValueError("include(...) cannot be combined with load='eager'")
         return super().include(relation_names)
@@ -793,7 +711,7 @@ class ResourceQuery(BaseQuery[ResourceSchema | ResourceRef]):
         return q
 
 
-class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateRef]):
+class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema]):
     """Query resource templates and optionally hydrate child relationships."""
 
     model = ResourceTemplateSchema
@@ -803,17 +721,11 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateR
         self,
         backend: "ReadBackend",
         *,
-        shape: ShapeInput = "full",
-        load: LoadInput = "none",
-        expand: bool | None = None,
+        load: LoadMode = "none",
         on_unloaded: OnUnloadedPolicy | None = None,
         **kwargs,
     ):
-        shape = _normalize_shape(shape)
-        load = _normalize_expand(expand, load)
-        if shape == "ref" and load != "none":
-            raise ValueError("load must be 'none' when shape='ref'")
-        self._shape = shape
+        load = _validate_load(load)
         self._load = load
         model = ResourceTemplateSchema
         super().__init__(
@@ -828,7 +740,6 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateR
         params = dict(
             backend=self._backend,
             context=self._context,
-            shape=self._shape,
             load=self._load,
             filters=dict(self._filters),
             predicates=list(self._predicates),
@@ -848,8 +759,6 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateR
         return self.__class__(**params)
 
     def include(self, relation_names: str | Sequence[str]) -> "ResourceTemplateQuery":
-        if self._shape == "ref":
-            raise ValueError("include(...) is only valid when shape='full'")
         if self._load == "eager":
             raise ValueError("include(...) cannot be combined with load='eager'")
         return super().include(relation_names)
@@ -875,7 +784,7 @@ class ResourceTemplateQuery(BaseQuery[ResourceTemplateSchema | ResourceTemplateR
         return self.include("types")
 
 
-class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]):
+class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema]):
     """Query process templates and optionally hydrate steps and slots."""
 
     model = ProcessTemplateSchema
@@ -885,17 +794,11 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]
         self,
         backend: "ReadBackend",
         *,
-        shape: ShapeInput = "full",
-        load: LoadInput = "none",
-        expand: bool | None = None,
+        load: LoadMode = "none",
         on_unloaded: OnUnloadedPolicy | None = None,
         **kwargs,
     ):
-        shape = _normalize_shape(shape)
-        load = _normalize_expand(expand, load)
-        if shape == "ref" and load != "none":
-            raise ValueError("load must be 'none' when shape='ref'")
-        self._shape = shape
+        load = _validate_load(load)
         self._load = load
         model = ProcessTemplateSchema
         super().__init__(
@@ -910,7 +813,6 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]
         params = dict(
             backend=self._backend,
             context=self._context,
-            shape=self._shape,
             load=self._load,
             filters=dict(self._filters),
             predicates=list(self._predicates),
@@ -930,8 +832,6 @@ class ProcessTemplateQuery(BaseQuery[ProcessTemplateSchema | ProcessTemplateRef]
         return self.__class__(**params)
 
     def include(self, relation_names: str | Sequence[str]) -> "ProcessTemplateQuery":
-        if self._shape == "ref":
-            raise ValueError("include(...) is only valid when shape='full'")
         if self._load == "eager":
             raise ValueError("include(...) cannot be combined with load='eager'")
         return super().include(relation_names)
@@ -972,67 +872,51 @@ class QueryDSL:
     def process_runs(
         self,
         *,
-        shape: ShapeInput = "full",
-        load: LoadInput = "none",
-        expand: bool | None = None,
+        load: LoadMode = "none",
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ProcessRunQuery:
         return ProcessRunQuery(
             self.backend,
             context=self.context,
-            shape=_normalize_shape(shape),
-            load=_normalize_load(load),
-            expand=expand,
+            load=load,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )
 
     def process_templates(
         self,
         *,
-        shape: ShapeInput = "full",
-        load: LoadInput = "none",
-        expand: bool | None = None,
+        load: LoadMode = "none",
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ProcessTemplateQuery:
         return ProcessTemplateQuery(
             self.backend,
             context=self.context,
-            shape=_normalize_shape(shape),
-            load=_normalize_load(load),
-            expand=expand,
+            load=load,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )
 
     def resources(
         self,
         *,
-        shape: ShapeInput = "full",
-        load: LoadInput = "none",
-        expand: bool | None = None,
+        load: LoadMode = "none",
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ResourceQuery:
         return ResourceQuery(
             self.backend,
             context=self.context,
-            shape=_normalize_shape(shape),
-            load=_normalize_load(load),
-            expand=expand,
+            load=load,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )
 
     def resource_templates(
         self,
         *,
-        shape: ShapeInput = "full",
-        load: LoadInput = "none",
-        expand: bool | None = None,
+        load: LoadMode = "none",
         on_unloaded: OnUnloadedPolicy | None = None,
     ) -> ResourceTemplateQuery:
         return ResourceTemplateQuery(
             self.backend,
             context=self.context,
-            shape=_normalize_shape(shape),
-            load=_normalize_load(load),
-            expand=expand,
+            load=load,
             on_unloaded=self._on_unloaded if on_unloaded is None else on_unloaded,
         )

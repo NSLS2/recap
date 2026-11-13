@@ -269,15 +269,21 @@ class CommandService:
         from recap.adapter.transport import encode_query_batch
 
         if isinstance(result, EntityBatch):
-            return encode_query_batch(
-                result, entity=result.roots[0].kind, projection="full"
-            ).model_dump(mode="json")
+            return encode_query_batch(result, entity=result.roots[0].kind).model_dump(
+                mode="json"
+            )
         return result.model_dump(mode="json")
 
     @staticmethod
     def _replay_graph(payload, schema):
         from recap.adapter.transport import FlatQueryResult, decode_query_batch
 
+        # Persisted snapshots outlive wire versions. Strip the old discriminator
+        # only here, without relaxing live envelopes or rewriting stored JSON.
+        if payload.get("projection") in ("full", "ref"):
+            payload = {
+                key: value for key, value in payload.items() if key != "projection"
+            }
         return decode_query_batch(schema, FlatQueryResult.model_validate(payload))
 
     def _set_lifecycle_status(

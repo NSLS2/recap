@@ -12,10 +12,7 @@ clients.
 
 ## Canonical models and loading
 
-- `shape="full"` is the supported model shape and returns canonical schema
-  models.
-- `shape="ref"` is deprecated compatibility syntax. It normalizes to
-  `shape="full"`; specify `load="none"` explicitly for unloaded relationships.
+- Queries return canonical schema models.
 - `load="none"` avoids relationship hydration.
 - `load="eager"` loads configured relationships eagerly.
 - `include(...)` selects explicit relationship paths for full, non-eager
@@ -34,8 +31,7 @@ Namespace visibility is applied before user filters, ordering, pagination, and
 counts. This ordering prevents an authorized query from counting or paginating
 records that the actor cannot see.
 
-Structured `Field` predicates work across local and remote backends. Raw
-SQLAlchemy predicates remain local-only and are deprecated.
+Use structured `Field` predicates and orderings across local and remote backends.
 
 Hydration uses bounded SQL plans. Resource and process-run trees do not issue
 N+1 statements as depth or breadth grows; use targeted includes when complete

@@ -147,11 +147,6 @@ requests the configured set. See
 fetched through two different queries is one object in memory, with fuller
 loads upgrading the existing object.
 
-**Shape**
-: A deprecated query option. `shape="full"` is the supported value and returns
-canonical models; `shape="ref"` normalizes to it. Use `load` to control
-relationship hydration instead.
-
 ## Server and security
 
 **Actor**
