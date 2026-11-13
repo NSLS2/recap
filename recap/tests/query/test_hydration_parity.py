@@ -1,0 +1,150 @@
+from uuid import uuid4
+
+import pytest
+
+from recap.adapter.entity_batch import EntityBatchCollector
+from recap.adapter.transport import (
+    FlatQueryResult,
+    decode_query_batch,
+    encode_query_batch,
+)
+from recap.client.identity import IdentityMap
+from recap.client.materialization import BatchMaterializer
+from recap.db.attribute import AttributeGroupTemplate, AttributeTemplate
+from recap.db.namespace import Namespace
+from recap.db.process import ProcessRun, ProcessTemplate
+from recap.db.resource import Resource, ResourceTemplate, ResourceType
+from recap.db.step import StepTemplate
+from recap.dsl.query import FieldOrdering, QuerySpec
+from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
+from recap.schemas.resource import ResourceSchema, ResourceTemplateSchema
+
+
+def _seed_metadata_graph(db_session):
+    namespace = Namespace(path=f"hydration/{uuid4().hex}", metadata_json={})
+    resource_type = ResourceType(name=f"sample-{uuid4().hex}")
+    resource_template = ResourceTemplate(
+        name=f"Resource-{uuid4().hex}", namespace=namespace
+    )
+    resource_template.types.append(resource_type)
+    resource_group = AttributeGroupTemplate(name="Measurements")
+    resource_group.attribute_templates.append(
+        AttributeTemplate(name="dose", value_type="int", default_value="1")
+    )
+    resource_template.attribute_group_templates.append(resource_group)
+    resource = Resource(name="sample", template=resource_template, namespace=namespace)
+    resource.properties["Measurements"]._values["dose"].metadata_json = {
+        "source": "header"
+    }
+
+    process_template = ProcessTemplate(
+        name=f"Process-{uuid4().hex}", version="1.0", namespace=namespace
+    )
+    step_template = StepTemplate(name="Collect", process_template=process_template)
+    parameter_group = AttributeGroupTemplate(name="Exposure")
+    parameter_group.attribute_templates.append(
+        AttributeTemplate(name="dwell", value_type="int", default_value="1")
+    )
+    step_template.attribute_group_templates.append(parameter_group)
+    run = ProcessRun(
+        name=f"run-{uuid4().hex}",
+        description="hydration parity",
+        template=process_template,
+        namespace=namespace,
+    )
+    run.steps["Collect"].parameters["Exposure"]._values["dwell"].metadata_json = {
+        "source": "header"
+    }
+    db_session.add_all(
+        [
+            namespace,
+            resource_type,
+            resource_template,
+            process_template,
+            step_template,
+            resource,
+            run,
+        ]
+    )
+    db_session.flush()
+    return resource, run
+
+
+def test_property_and_parameter_metadata_survive_direct_and_embedded_hydration(
+    db_session,
+):
+    resource, run = _seed_metadata_graph(db_session)
+
+    resource_collector = EntityBatchCollector()
+    resource_collector.add_root(resource, {"template", "properties"})
+    resource_batch = resource_collector.collect()
+    run_collector = EntityBatchCollector()
+    run_collector.add_root(run, {"steps", "steps.parameters"})
+    materializer = BatchMaterializer(IdentityMap())
+    direct = materializer.materialize(ResourceSchema, resource_batch)[0]
+    embedded = materializer.materialize(ProcessRunSchema, run_collector.collect())[0]
+
+    assert direct.properties["Measurements"].values.dose.metadata_json == {
+        "source": "header"
+    }
+    assert direct.is_loaded("template")
+    assert direct.is_loaded("properties")
+    assert not direct.is_loaded("children")
+    assert embedded.is_loaded("steps")
+    assert not embedded.is_loaded("assigned_resources")
+    assert embedded.steps["Collect"].parameters[
+        "Exposure"
+    ].values.dwell.metadata_json == {"source": "header"}
+
+    result = encode_query_batch(resource_batch, entity="resource")
+    decoded = decode_query_batch(
+        ResourceSchema, FlatQueryResult.model_validate_json(result.model_dump_json())
+    )
+    round_tripped = BatchMaterializer(IdentityMap()).materialize(
+        ResourceSchema, decoded
+    )[0]
+    assert round_tripped.properties["Measurements"].values.dose.metadata_json == {
+        "source": "header"
+    }
+
+
+@pytest.mark.parametrize(
+    "schema,preloads",
+    [
+        (ResourceSchema, ("properties", "children")),
+        (ResourceTemplateSchema, ("attribute_group_templates", "children")),
+        (ProcessRunSchema, ("steps.parameters", "resources")),
+        (ProcessTemplateSchema, ("step_templates", "resource_slots")),
+    ],
+)
+@pytest.mark.parametrize("mode", ["none", "included", "eager", "empty"])
+def test_direct_adapter_and_client_read_semantics_match(
+    read_client, schema, preloads, mode
+):
+    backend = read_client.connection_state.backend
+    spec = QuerySpec(
+        filters={"id": uuid4()} if mode == "empty" else {},
+        preloads=preloads if mode == "included" else (),
+        load_mode="eager" if mode == "eager" else "none",
+        on_unloaded="raise",
+        orderings=(FieldOrdering(field="name", direction="asc"),),
+        limit=1,
+        offset=0,
+    )
+    direct = backend.reader.query(
+        schema, spec, namespace_path=read_client.namespace_path
+    )
+    canonical = backend.query(schema, spec, namespace_path=read_client.namespace_path)
+    assert [model.model_dump(mode="json") for model in direct] == [
+        model.model_dump(mode="json") for model in canonical
+    ]
+    if mode == "empty":
+        assert direct == []
+        return
+    assert len(direct) == 1
+    for relation in schema._relation_fields:
+        assert direct[0].is_loaded(relation) == canonical[0].is_loaded(relation)
+    if mode == "none":
+        relation = next(iter(schema._relation_fields))
+        with pytest.raises(RuntimeError, match="not loaded"):
+            getattr(direct[0], relation)

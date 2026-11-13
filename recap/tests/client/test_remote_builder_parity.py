@@ -1,0 +1,1380 @@
+"""Remote command writes and REST read parity."""
+
+from unittest.mock import patch
+from uuid import uuid4
+
+import httpx2
+import pytest
+from fastapi.testclient import TestClient
+
+from recap.adapter.rest import RESTAdapter
+from recap.client import RecapClient
+from recap.commands.context import build_local_command_context
+from recap.commands.models import (
+    CopyResource,
+    CreateResource,
+    SetLifecycleStatus,
+    UpdateResource,
+)
+from recap.dsl.query import QuerySpec
+from recap.exceptions import (
+    RecapAuthenticationError,
+    RecapConflictError,
+    RecapNotFoundError,
+)
+from recap.schemas.namespace import NamespaceContext
+from recap.schemas.process import ProcessRunSchema, ProcessTemplateSchema
+from recap.schemas.resource import (
+    ResourceCopyOptions,
+    ResourceSchema,
+    ResourceTemplateSchema,
+)
+from recap.server.app import create_app
+from recap.tests.helpers.entity_fixtures import (
+    record_loaded_plate,
+    setup_plate_workflow,
+)
+from recap.utils.general import Direction
+
+
+@pytest.fixture(params=["local", "remote"], ids=["local", "remote"])
+def command_client(request, tmp_path, rest_loopback_client):
+    db_path = tmp_path / f"{request.param}-commands.db"
+    if request.param == "local":
+        with RecapClient.from_sqlite(db_path) as client:
+            yield client
+        return
+
+    yield rest_loopback_client
+
+
+def seed_command_namespace(client):
+    client.create_namespace("beamline")
+    client.create_namespace("beamline/amx")
+    scoped = client.namespace("beamline/amx")
+    return scoped
+
+
+def _seed_finalization_tree(client):
+    scoped = seed_command_namespace(client)
+    with scoped.build_resource_template(
+        name="Tree node", type_names=["container"]
+    ) as template:
+        template.add_properties(
+            {"details": [{"name": "note", "type": "str", "default": "before"}]}
+        )
+    root = scoped.create_resource("root", "Tree node")
+    child = scoped.create_resource("child", "Tree node", parent=root)
+    grandchild = scoped.create_resource("grandchild", "Tree node", parent=child)
+    scoped.create_resource("leaf", "Tree node", parent=grandchild)
+    scoped.create_resource("sibling", "Tree node", parent=root)
+    return scoped, root
+
+
+@pytest.mark.parametrize(
+    ("options", "statuses"),
+    [
+        ({}, ["ACTIVE", "MUTABLE", "MUTABLE", "MUTABLE"]),
+        ({"recursive_depth": 0}, ["ACTIVE", "MUTABLE", "MUTABLE", "MUTABLE"]),
+        ({"recursive_depth": 1}, ["ACTIVE", "ACTIVE", "MUTABLE", "MUTABLE"]),
+        ({"recursive_depth": 2}, ["ACTIVE", "ACTIVE", "ACTIVE", "MUTABLE"]),
+        ({"recursive_depth": None}, ["ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE"]),
+    ],
+)
+def test_resource_recursive_finalization_has_local_remote_parity(
+    command_client, options, statuses
+):
+    scoped, root = _seed_finalization_tree(command_client)
+    with scoped.build_resource(resource_id=root.id) as builder:
+        builder.finalize(**options)
+        assert builder.resource.status.value == "MUTABLE"
+    tree = builder.resource
+    chain = [
+        tree,
+        tree.children["child"],
+        tree.children["child"].children["grandchild"],
+        tree.children["child"].children["grandchild"].children["leaf"],
+    ]
+    assert [node.status.value for node in chain] == statuses
+    reloaded = scoped.query_maker().resources(load="eager").filter(id=root.id).first()
+    assert reloaded.children["child"].status == tree.children["child"].status
+
+
+def test_resource_recursive_finalization_prunes_archived_branch(command_client):
+    scoped, root = _seed_finalization_tree(command_client)
+    tree = scoped.build_resource(resource_id=root.id).resource
+    with scoped.build_resource(resource_id=tree.children["child"].id) as child:
+        child.archive()
+    with scoped.build_resource(resource_id=root.id) as builder:
+        builder.finalize(recursive_depth=None)
+    archived = builder.resource.children["child"]
+    assert archived.status.value == "ARCHIVED"
+    assert archived.children["grandchild"].status.value == "MUTABLE"
+    assert builder.resource.children["sibling"].status.value == "ACTIVE"
+
+
+@pytest.mark.parametrize("status", ["ACTIVE", "ARCHIVED"])
+def test_resource_recursive_finalization_preserves_parent_status_and_revision(
+    command_client, status
+):
+    scoped, root = _seed_finalization_tree(command_client)
+    with scoped.build_resource(resource_id=root.id) as builder:
+        if status == "ACTIVE":
+            builder.finalize()
+        else:
+            builder.archive()
+    before = builder.resource
+    # Reuse the builder: normal resource queries intentionally exclude archived
+    # resources, so reopening an archived resource is not part of this API.
+    with builder:
+        builder.finalize(recursive_depth=None)
+    assert builder.resource.status == before.status
+    assert builder.resource.revision == before.revision == 2
+    assert builder.resource.modified_date == before.modified_date
+    expected = "ACTIVE" if status == "ACTIVE" else "MUTABLE"
+    assert (
+        builder.resource.children["child"].children["grandchild"].status.value
+        == expected
+    )
+
+
+def test_resource_recursive_finalization_saves_and_synchronizes_child_builders(
+    command_client,
+):
+    scoped, _ = _seed_finalization_tree(command_client)
+    with scoped.build_resource("new-root", "Tree node") as parent:
+        child = parent.add_child("new-child", "Tree node")
+        grandchild = child.add_child("new-grandchild", "Tree node")
+        grandchild.resource.properties.details.values.note.value = "changed"
+        child.finalize()
+        parent.finalize(recursive_depth=None)
+    assert (
+        parent.resource.status.value
+        == child.resource.status.value
+        == grandchild.resource.status.value
+        == "ACTIVE"
+    )
+    assert child.resource.revision == grandchild.resource.revision == 2
+    assert grandchild.resource.properties.details.values.note.value == "changed"
+    assert (
+        parent.resource.children["new-child"].children["new-grandchild"].revision
+        == grandchild.resource.revision
+    )
+    # Retained builders must have the new revision and allow a harmless save.
+    with child:
+        child.finalize()
+    assert child.resource.revision == 2
+
+
+def test_resource_recursive_finalization_exception_retains_options(command_client):
+    scoped, root = _seed_finalization_tree(command_client)
+    builder = scoped.build_resource(resource_id=root.id)
+    with pytest.raises(RuntimeError, match="abort"), builder:
+        builder.finalize(recursive_depth=None)
+        raise RuntimeError("abort")
+    assert builder.resource.status.value == "MUTABLE"
+    with builder:
+        pass
+    assert (
+        builder.resource.children["child"].children["grandchild"].status.value
+        == "ACTIVE"
+    )
+
+
+def test_resource_recursive_finalization_preserves_deeper_child_request(command_client):
+    scoped, _ = _seed_finalization_tree(command_client)
+    with scoped.build_resource("requested-root", "Tree node") as parent:
+        child = parent.add_child("requested-child", "Tree node")
+        grandchild = child.add_child("requested-grandchild", "Tree node")
+        child.finalize(recursive_depth=None)
+        parent.finalize(recursive_depth=1)
+    assert (
+        parent.resource.children["requested-child"]
+        .children["requested-grandchild"]
+        .status.value
+        == "ACTIVE"
+    )
+    assert child.resource.revision == grandchild.resource.revision == 2
+
+
+def test_resource_recursive_finalization_applies_pending_archives_first(command_client):
+    scoped, _ = _seed_finalization_tree(command_client)
+    with scoped.build_resource("pending-archive-root", "Tree node") as parent:
+        child = parent.add_child("archived-child", "Tree node")
+        grandchild = child.add_child("skipped-grandchild", "Tree node")
+    with parent:
+        child.archive()
+        parent.finalize(recursive_depth=None)
+    assert parent.resource.status.value == "ACTIVE"
+    assert child.resource.status.value == "ARCHIVED"
+    assert child.resource.revision == 2
+    assert grandchild.resource.status.value == "MUTABLE"
+    assert grandchild.resource.revision == 1
+    assert (
+        parent.resource.children["archived-child"]
+        .children["skipped-grandchild"]
+        .status.value
+        == "MUTABLE"
+    )
+
+
+def test_resource_recursive_finalization_synchronizes_renamed_children(command_client):
+    scoped, _ = _seed_finalization_tree(command_client)
+    with scoped.build_resource("rename-root", "Tree node") as parent:
+        child = parent.add_child("old-name", "Tree node")
+        grandchild = child.add_child("grandchild", "Tree node")
+    with parent:
+        child.resource.name = "new-name"
+        parent.finalize(recursive_depth=None)
+    assert set(parent.resource.children) == {"new-name"}
+    assert child.resource.name == "new-name"
+    assert child.resource.status.value == grandchild.resource.status.value == "ACTIVE"
+    assert child.resource.revision == 3
+    assert grandchild.resource.revision == 2
+    assert parent.resource.children["new-name"].revision == child.resource.revision
+    assert (
+        parent.resource.children["new-name"].children["grandchild"].revision
+        == grandchild.resource.revision
+    )
+    with child:
+        child.finalize()
+    assert child.resource.revision == 3
+
+
+@pytest.mark.parametrize(
+    "later_options", [{}, {"recursive_depth": 1}, {"recursive_depth": 2}]
+)
+def test_resource_finalize_requests_do_not_narrow_pending_scope(
+    command_client, later_options
+):
+    scoped, root = _seed_finalization_tree(command_client)
+    with scoped.build_resource(resource_id=root.id) as builder:
+        builder.finalize(recursive_depth=None)
+        builder.finalize(**later_options)
+    assert (
+        builder.resource.children["child"]
+        .children["grandchild"]
+        .children["leaf"]
+        .status.value
+        == "ACTIVE"
+    )
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [(2, None), (2, 1), (1, 2)],
+)
+def test_resource_finalize_requests_combine_finite_depths(
+    command_client, first, second
+):
+    scoped, root = _seed_finalization_tree(command_client)
+    with scoped.build_resource(resource_id=root.id) as builder:
+        builder.finalize(recursive_depth=first)
+        if second is None:
+            builder.finalize()
+        else:
+            builder.finalize(recursive_depth=second)
+    grandchild = builder.resource.children["child"].children["grandchild"]
+    assert grandchild.status.value == "ACTIVE"
+    assert grandchild.children["leaf"].status.value == "MUTABLE"
+
+
+def test_resource_recursive_finalization_saves_property_edits(command_client):
+    scoped, root = _seed_finalization_tree(command_client)
+    with scoped.build_resource(resource_id=root.id) as builder:
+        builder.resource.properties.details.values.note.value = "saved"
+        builder.finalize(recursive_depth=None)
+    assert builder.resource.properties.details.values.note.value == "saved"
+    assert (
+        builder.resource.children["child"].children["grandchild"].status.value
+        == "ACTIVE"
+    )
+
+
+def test_resource_recursive_finalization_of_copy_leaves_source_unchanged(
+    command_client,
+):
+    scoped, root = _seed_finalization_tree(command_client)
+    copied = scoped.copy_resource(source_resource_id=root.id)
+    with scoped.build_resource(resource_id=copied.id) as builder:
+        builder.finalize(recursive_depth=None)
+    assert (
+        builder.resource.children["child"].children["grandchild"].status.value
+        == "ACTIVE"
+    )
+    source = scoped.build_resource(resource_id=root.id).resource
+    # Copying already activates its source root; finalizing the copy must not
+    # activate source descendants or increment the source revision again.
+    assert source.status.value == "ACTIVE"
+    assert source.revision == 2
+    assert source.children["child"].status.value == "MUTABLE"
+    assert source.children["child"].revision == 1
+
+
+def test_resource_recursive_finalization_is_one_remote_lifecycle_request(
+    rest_loopback_client,
+):
+    scoped, root = _seed_finalization_tree(rest_loopback_client)
+    writer = scoped.connection_state.backend.writer
+    http_client = writer._transport._client
+    requests = []
+
+    def record(request):
+        if "/api/v1/lifecycle/" in request.url.path:
+            requests.append(request)
+
+    builder = scoped.build_resource(resource_id=root.id)
+    http_client.event_hooks["request"].append(record)
+    try:
+        with builder:
+            builder.finalize(recursive_depth=None)
+    finally:
+        http_client.event_hooks["request"].remove(record)
+    assert len(requests) == 1
+    assert (
+        builder.resource.children["child"].children["grandchild"].status.value
+        == "ACTIVE"
+    )
+
+
+@pytest.mark.parametrize("depth", [-1, True, False, 1.5, "2"])
+def test_resource_finalize_rejects_invalid_depth_before_mutation(command_client, depth):
+    scoped, root = _seed_finalization_tree(command_client)
+    with scoped.build_resource(resource_id=root.id) as builder:
+        with pytest.raises(ValueError):
+            builder.finalize(recursive_depth=depth)
+        assert builder.changes().lifecycle is None
+
+
+@pytest.mark.parametrize("well_count", [12, 96], ids=["12-wells", "96-wells"])
+def test_two_transfer_plate_workflow_has_local_remote_parity(
+    command_client, well_count
+):
+    scoped = seed_command_namespace(command_client)
+    inputs = setup_plate_workflow(scoped, well_count)
+    result = record_loaded_plate(scoped, inputs)
+    plate = scoped.get_resource("Recorded plate", "Loaded plate", expand=True)
+    run = (
+        scoped.query_maker().process_runs(load="eager").filter(id=result.run_id).first()
+    )
+    assert plate.id == result.plate_id
+    assert plate.status.value == run.status.value == "ACTIVE"
+    assert len(plate.children) == well_count
+    assert len({child.template.id for child in plate.children.values()}) == well_count
+    parent = run.steps["Transfer"]
+    assert len(parent.children) == 2
+    assert run.assigned_resources["plate"].resource.id == plate.id
+    assert run.assigned_resources["group"].resource.id == inputs.group_id
+    assert {child.resources["source"].id for child in parent.children.values()} == set(
+        inputs.source_ids
+    )
+    for child in parent.children.values():
+        destination = child.resources["destination"]
+        assert destination.id == plate.children[child.name].id
+        assert child.parent_id == parent.id and child.process_run_id == run.id
+        assert child.parameters["Transfer details"].values["Volume"].value == 10.0
+        assert child.parameters["Transfer details"].values["Volume"].unit == "uL"
+        mass = destination.properties["Measurements"].values["Mass"]
+        assert mass.value in {2.5, 3.5} and mass.unit == "mg"
+        assert mass.metadata_json["source_id"] == str(child.resources["source"].id)
+        assert destination.properties["Measurements"].values["Readings"].value == [
+            1,
+            1,
+            2,
+        ]
+        assert (
+            destination.properties["Identity"].values["Note"].value == "synthetic-batch"
+        )
+    untouched = next(
+        child for child in plate.children.values() if child.name not in parent.children
+    )
+    assert untouched.properties["Measurements"].values["Mass"].value is None
+
+
+def test_direct_adapter_replays_original_snapshot_after_update(command_client):
+    from dataclasses import replace
+
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(
+        name="Replay sample", type_names=["sample"]
+    ) as builder:
+        builder.add_properties(
+            {"Measurements": [{"name": "Dose", "type": "int", "default": 1}]}
+        )
+    writer = scoped.connection_state.backend.writer
+    context = replace(build_local_command_context(), idempotency_key=str(uuid4()))
+    command = CreateResource(
+        namespace_path=scoped.namespace_path,
+        name="original",
+        template_id=builder.template.id,
+    )
+    original = writer.execute(command, context)
+    snapshot = original.model_dump(mode="json")
+    updated = writer.execute(
+        UpdateResource(
+            resource_id=original.id, expected_revision=original.revision, name="later"
+        ),
+        replace(context, idempotency_key=str(uuid4())),
+    )
+    assert updated.name == "later"
+    replay = writer.execute(command, context)
+    assert replay.model_dump(mode="json") == snapshot
+    assert replay is not original
+
+
+@pytest.mark.parametrize("surface", ["client", "adapter"])
+def test_local_first_workflow_acceptance(command_client, surface):
+    from dataclasses import replace
+
+    from recap.adapter.local import LocalBackend
+
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(
+        name="Acceptance plate", type_names=["container"]
+    ) as template:
+        template.finalize()
+    with scoped.build_resource_template(
+        name="Acceptance sample", type_names=["sample"]
+    ) as template:
+        template.add_properties(
+            {
+                "Measurements": [
+                    {
+                        "name": "Dose",
+                        "type": "int",
+                        "default": None,
+                        "unit": "uL",
+                        "metadata": {"min": 0, "max": 10},
+                    },
+                    {"name": "Readings", "type": "array", "default": [1, 2, 1]},
+                ]
+            }
+        )
+        template.finalize()
+    with scoped.build_resource("acceptance-plate", "Acceptance plate") as builder:
+        builder.add_child("well", "Acceptance sample")
+        builder.finalize()
+    source_plate = builder.resource
+    plate_id = source_plate.id
+    with scoped.build_process_template("Acceptance measurement", "1.0") as template:
+        template.add_resource_slot("plate", "container", Direction.input)
+        template.add_step("Collect").add_parameters(
+            {
+                "Exposure": [
+                    {
+                        "name": "Dwell",
+                        "type": "int",
+                        "default": 1,
+                        "unit": "s",
+                        "metadata": {"min": 0, "max": 10},
+                    },
+                ]
+            }
+        ).bind_slot("input", "plate").close_step()
+        template.finalize()
+    with scoped.build_process_run(
+        "acceptance-run", "shared workflow", "Acceptance measurement", "1.0"
+    ) as builder:
+        builder.assign_resource("plate", source_plate)
+        params = builder.get_params("Collect")
+        params.exposure.dwell = 7
+        builder.set_params(params)
+        builder.finalize()
+    run_id = builder.process_run.id
+    backend = scoped.connection_state.backend
+    backend.identity_map.clear()
+    reader = backend if surface == "client" else backend.reader
+
+    def query(schema, entity_id, **loading):
+        return reader.query(
+            schema,
+            QuerySpec(filters={"id": entity_id}, **loading),
+            namespace_path=scoped.namespace_path,
+        )
+
+    partial = query(ResourceSchema, plate_id, load_mode="none", on_unloaded="raise")[0]
+    assert not partial.is_loaded("children")
+    plate = query(ResourceSchema, plate_id, load_mode="eager", on_unloaded="raise")[0]
+    assert (plate is partial) == (surface == "client")
+    sample = plate.children["well"]
+    assert sample.properties.measurements.dose.value is None
+    assert sample.properties.measurements.dose.unit == "uL"
+    assert sample.properties.measurements.readings.value == [1, 2, 1]
+    run = query(ProcessRunSchema, run_id, preloads=("steps.parameters", "resources"))[0]
+    step = run.steps["Collect"]
+    assigned = run.assigned_resources["plate"].resource
+    assert step.resources["input"] is assigned
+    assert (assigned is plate) == (surface == "client")
+    assert step.parameters.exposure.dwell.value == 7
+    assert step.parameters.exposure.dwell.unit == "s"
+
+    if isinstance(backend.reader, LocalBackend):
+        direct = backend.reader.get_resource(
+            scoped.namespace_context.id,
+            "acceptance-plate",
+            "Acceptance plate",
+            expand=True,
+        )
+        assert direct.id == plate_id and direct is not plate
+        assert direct.children["well"].properties.measurements.readings.value == [
+            1,
+            2,
+            1,
+        ]
+        steps = backend.reader.get_steps(run)
+        assert backend.reader.get_params(steps[0]).exposure.dwell.value == 7
+
+    context = replace(build_local_command_context(), idempotency_key=str(uuid4()))
+    copy_command = CopyResource(
+        source_resource_id=plate_id,
+        destination_namespace_path=scoped.namespace_path,
+        options=ResourceCopyOptions(name="working-plate"),
+    )
+    copied = backend.writer.execute(copy_command, context)
+    assert copied.id != plate_id
+    assert copied.copied_from_id == plate_id
+    assert copied.children["well"].id != sample.id
+    assert copied.children["well"].properties.measurements.readings.value == [1, 2, 1]
+    updated = backend.writer.execute(
+        UpdateResource(
+            resource_id=copied.id,
+            expected_revision=copied.revision,
+            name="working-plate-updated",
+        ),
+        replace(context, idempotency_key=str(uuid4())),
+    )
+    assert updated.id == copied.id and updated.revision == copied.revision + 1
+    with pytest.raises(RecapConflictError):
+        backend.writer.execute(
+            UpdateResource(
+                resource_id=copied.id,
+                expected_revision=copied.revision,
+                name="stale-write",
+            ),
+            replace(context, idempotency_key=str(uuid4())),
+        )
+    replay = backend.writer.execute(copy_command, context)
+    assert replay.id == copied.id
+    assert replay.name == "working-plate" and replay.revision == copied.revision
+    assert (
+        query(ResourceSchema, copied.id, include_mutable=True)[0].name
+        == "working-plate-updated"
+    )
+    assert query(ResourceSchema, plate_id)[0].name == "acceptance-plate"
+    archived = backend.writer.execute(
+        SetLifecycleStatus(
+            object_type="process_run",
+            object_id=run_id,
+            expected_revision=run.revision,
+            status="ARCHIVED",
+        ),
+        replace(context, idempotency_key=str(uuid4())),
+    )
+    assert archived.status.value == "ARCHIVED"
+    assert query(ProcessRunSchema, run_id) == []
+    assert (
+        query(ProcessRunSchema, run_id, include_archived=True)[0].status.value
+        == "ARCHIVED"
+    )
+
+
+def test_overlapping_trees_and_assignments_preserve_generated_properties(
+    command_client,
+):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(name="Overlap plate", type_names=["plate"]):
+        pass
+    for index in range(2):
+        with scoped.build_resource_template(
+            name=f"Overlap well {index}", type_names=["well"]
+        ) as template:
+            template.add_properties(
+                {
+                    "Measurements": [
+                        {
+                            "name": "Dose",
+                            "type": "int",
+                            "default": None,
+                            "unit": "uL",
+                            "metadata": {"min": 0, "max": 10},
+                        },
+                        {"name": "Label", "type": "str", "default": f"well-{index}"},
+                        {"name": "Readings", "type": "array", "default": [index]},
+                    ]
+                }
+            )
+    with scoped.build_resource("plate", "Overlap plate") as plate_builder:
+        for index in range(2):
+            plate_builder.add_child(f"well-{index}", f"Overlap well {index}")
+    with plate_builder:
+        plate_builder.finalize()
+    for child in plate_builder.resource.children.values():
+        with scoped.build_resource(resource_id=child.id) as child_builder:
+            child_builder.finalize()
+    with scoped.build_process_template("Overlap measurement", "1.0") as template:
+        template.add_resource_slot("plate", "plate", Direction.input)
+        template.add_resource_slot("well", "well", Direction.input)
+    plate = plate_builder.resource
+    with scoped.build_process_run(
+        "overlap-run", "", "Overlap measurement", "1.0"
+    ) as run_builder:
+        run_builder.assign_resource("plate", plate)
+        run_builder.assign_resource("well", plate.children["well-0"])
+    with run_builder:
+        run_builder.finalize()
+
+    maker = scoped.query_maker()
+    tree_query = maker.resources(load="eager").filter(id=plate.id)
+    tree = tree_query.first()
+    snapshots = {}
+    for name, child in tree.children.items():
+        group = child.properties.measurements
+        snapshots[name] = (
+            child,
+            child.properties,
+            group,
+            group.values,
+            group.values.dose,
+        )
+
+    def assert_child(child):
+        original, properties, group, values, dose = snapshots[child.name]
+        assert child is original
+        assert child.properties is properties
+        assert type(child.properties) is type(properties)
+        assert child.properties.measurements is group
+        assert child.properties.measurements.values is values
+        assert group.values.dose is dose
+        assert dose.value is None
+        assert dose.unit == "uL"
+        assert group.values.label.value == child.name
+        assert group.values.readings.value == [int(child.name[-1])]
+        assert set(type(properties).model_fields) == {"measurements"}
+        assert set(type(values).model_fields) == {"dose", "label", "readings"}
+
+    for _ in range(2):
+        run = (
+            maker.process_runs(load="eager")
+            .filter(id=run_builder.process_run.id)
+            .first()
+        )
+        assigned_plate = run.assigned_resources["plate"].resource
+        assert assigned_plate is tree
+        assert_child(run.assigned_resources["well"].resource)
+        for child in assigned_plate.children.values():
+            assert_child(child)
+        partial = maker.resources().filter(id=plate.id).first()
+        assert partial is tree
+        repeated = tree_query.all()
+        assert repeated == [tree]
+        for child in repeated[0].children.values():
+            assert_child(child)
+        wells = [
+            resource
+            for resource in maker.resources(load="eager").all()
+            if resource.id != tree.id
+        ]
+        for resource in wells:
+            assert_child(resource)
+
+
+@pytest.mark.parametrize("kind", ["resource", "process"])
+@pytest.mark.parametrize("null_default", [False, True], ids=["clear", "default"])
+def test_null_values_round_trip_save_query_reopen(
+    command_client, tmp_path, kind, null_default
+):
+    scoped = seed_command_namespace(command_client)
+    defaults = {
+        "int": 0,
+        "float": 0.0,
+        "bool": False,
+        "str": "None",
+        "datetime": "2024-01-01T00:00:00",
+        "array": [],
+        "enum": "known",
+    }
+    definitions = [
+        {
+            "name": f"value_{value_type}",
+            "type": value_type,
+            "default": None if null_default else default,
+            "unit": "unit",
+            "metadata": (
+                {"choices": ["known"]}
+                if value_type == "enum"
+                else {"min": 0, "max": 10}
+                if value_type in {"int", "float"}
+                else {}
+            ),
+        }
+        for value_type, default in defaults.items()
+    ]
+    if kind == "resource":
+        with scoped.build_resource_template(
+            name="Nullable", type_names=["sample"]
+        ) as template:
+            template.add_properties({"Measurements": definitions})
+        group_template = template.template.attribute_group_templates[0]
+        with scoped.build_resource("sample", "Nullable") as builder:
+            pass
+        instance = builder.resource
+    else:
+        with scoped.build_process_template("Nullable", "1.0") as template:
+            (
+                template.add_step("Collect")
+                .add_parameters({"Measurements": definitions})
+                .close_step()
+            )
+        group_template = template.template.step_templates[
+            "Collect"
+        ].attribute_group_templates[0]
+        with scoped.build_process_run("run", "", "Nullable", "1.0") as builder:
+            pass
+        instance = builder.get_model(update=True)
+
+    if null_default:
+        assert all(
+            attribute.default_value is None
+            for attribute in group_template.attribute_templates
+        )
+
+    def values_of(model):
+        return (
+            model.properties["Measurements"].values
+            if kind == "resource"
+            else model.steps["Collect"].parameters["Measurements"].values
+        )
+
+    if not null_default:
+        with builder:
+            model = (
+                builder.get_model()
+                if kind == "resource"
+                else builder.get_params("Collect")
+            )
+            values = (
+                values_of(model) if kind == "resource" else model["Measurements"].values
+            )
+            for definition in definitions:
+                attribute = getattr(values, definition["name"])
+                assert attribute.value is not None
+                attribute.value = None
+                attribute.unit = "override"
+            if kind == "resource":
+                builder.set_model(model)
+            else:
+                builder.set_params(model)
+        instance = builder.resource if kind == "resource" else builder.process_run
+
+    def assert_nulls(model):
+        assert model.id == instance.id
+        for definition in definitions:
+            attribute = getattr(values_of(model), definition["name"])
+            assert attribute.value is None
+            assert attribute.unit == ("unit" if null_default else "override")
+
+    assert_nulls(instance)
+    with builder:
+        builder.finalize()
+
+    def query(client):
+        maker = client.namespace("beamline/amx").query_maker()
+        family = (
+            maker.resources(load="eager")
+            if kind == "resource"
+            else maker.process_runs(load="eager")
+        )
+        results = family.filter(id=instance.id).all()
+        assert len(results) == 1
+        return results[0]
+
+    first = query(command_client)
+    assert_nulls(first)
+    second = query(command_client)
+    assert_nulls(second)
+    assert second is first
+
+    command_client.close()
+    db_path = tmp_path / (
+        "local-commands.db"
+        if (tmp_path / "local-commands.db").exists()
+        else "rest-loopback.db"
+    )
+    with RecapClient.from_sqlite(db_path) as reopened:
+        assert_nulls(query(reopened))
+
+
+def make_template_builder(client, kind, name="Deferred"):
+    scoped = seed_command_namespace(client)
+    if kind == "process":
+        return scoped.build_process_template(name, "1.0")
+    return scoped.build_resource_template(name=name, type_names=["sample"])
+
+
+def make_persisted_template_builder(client, kind):
+    builder = make_template_builder(client, kind, name=f"Persisted-{kind}")
+    with builder:
+        pass
+    return builder
+
+
+def template_exists(client, kind, template_id):
+    schema = ProcessTemplateSchema if kind == "process" else ResourceTemplateSchema
+    return bool(
+        client.connection_state.backend.query(
+            schema,
+            QuerySpec(filters={"id": template_id}, include_mutable=True),
+            namespace_path="beamline/amx",
+        )
+    )
+
+
+def test_resource_template_lifecycle_has_local_remote_parity(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(
+        name="Sample", type_names=["sample"]
+    ) as builder:
+        pass
+
+    with builder:
+        builder.finalize()
+    assert builder.template.status.value == "ACTIVE"
+    with builder:
+        builder.archive()
+    assert builder.template.status.value == "ARCHIVED"
+
+
+@pytest.mark.parametrize("kind", ["process", "resource"])
+def test_template_changes_are_local_until_clean_context_exit(command_client, kind):
+    builder = make_template_builder(command_client, kind)
+    if kind == "process":
+        builder.add_step("Collect")
+    else:
+        builder.prop_group("meta").add_attribute("code", "str", "", "").close_group()
+    assert builder.changes().fields
+    assert not template_exists(command_client, kind, builder.template.id)
+    with builder:
+        pass
+    assert template_exists(command_client, kind, builder.template.id)
+
+
+@pytest.mark.parametrize("kind", ["process", "resource"])
+def test_template_finalization_is_deferred_until_clean_exit(command_client, kind):
+    builder = make_persisted_template_builder(command_client, kind)
+    with builder:
+        builder.finalize()
+        assert builder.changes().lifecycle.value == "ACTIVE"
+        assert builder.template.status.value == "MUTABLE"
+    assert builder.template.status.value == "ACTIVE"
+
+
+@pytest.mark.parametrize("kind", ["process", "resource"])
+def test_template_nested_context_commits_once_and_exception_can_retry(
+    command_client, kind
+):
+    builder = make_template_builder(
+        client=command_client, kind=kind, name=f"Nested-{kind}"
+    )
+    if kind == "process":
+        builder.add_step("Collect")
+    else:
+        builder.prop_group("meta").add_attribute("code", "str", "", "").close_group()
+    with builder:  # noqa
+        with builder:
+            pass
+    revision = builder.template.revision
+    with pytest.raises(RuntimeError):  # noqa
+        with builder:
+            builder.finalize()
+            raise RuntimeError("retry")
+    assert builder.template.status.value == "MUTABLE"
+    with builder:
+        pass
+    assert builder.template.status.value == "ACTIVE"
+    assert builder.template.revision == revision + 1
+
+
+def test_new_builders_keep_provisional_ids_after_commit(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_process_template("ID PT", "1.0") as process_template:
+        process_template_id = process_template.template.id
+    assert process_template.template.id == process_template_id
+
+    with scoped.build_resource_template(
+        name="ID RT", type_names=["sample"]
+    ) as resource_template:
+        resource_template_id = resource_template.template.id
+    assert resource_template.template.id == resource_template_id
+
+    process_run = scoped.build_process_run("ID run", "", "ID PT", "1.0")
+    process_run_id = process_run.process_run.id
+    with process_run:
+        pass
+    assert process_run.process_run.id == process_run_id
+
+    resource = scoped.build_resource("ID resource", "ID RT")
+    resource_id = resource.resource.id
+    with resource:
+        pass
+    assert resource.resource.id == resource_id
+
+
+def test_namespace_update_has_local_remote_parity(command_client):
+    scoped = seed_command_namespace(command_client)
+
+    updated = scoped.update_namespace(metadata={"beamline": "AMX"})
+
+    assert updated.metadata == {"beamline": "AMX"}
+    assert updated.revision == 2
+
+
+def test_resource_template_load_update_has_local_remote_parity(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(
+        name="Sample", type_names=["sample"]
+    ) as created:
+        pass
+
+    with scoped.build_resource_template(
+        resource_template_id=created.template.id
+    ) as loaded:
+        loaded.prop_group("details").add_attribute(
+            "batch", "str", "", "B-1"
+        ).close_group()
+
+    assert (
+        loaded.template.attribute_group_templates[0]
+        .attribute_templates[0]
+        .default_value
+        == "B-1"
+    )
+    assert loaded.template.revision == 2
+
+
+def test_resource_update_has_local_remote_parity(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(
+        name="Sample", type_names=["sample"]
+    ) as template:
+        template.prop_group("details").add_attribute(
+            "serial", "str", "", "old"
+        ).close_group()
+    resource = scoped.create_resource("sample-1", "Sample")
+
+    with scoped.build_resource(resource_id=resource.id) as builder:
+        assert builder.resource.id == resource.id
+        model = builder.get_model()
+        model.properties.details.values.serial.value = "new"
+        builder.set_model(model)
+
+    assert builder.resource.properties.details.values.serial.value == "new"
+    assert builder.resource.revision == 2
+
+
+def test_resource_copy_has_local_remote_parity(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(name="Sample", type_names=["sample"]):
+        pass
+    source = scoped.create_resource("sample-1", "Sample")
+
+    copied = scoped.copy_resource(source.id)
+
+    assert copied.id != source.id
+    assert copied.template.id == source.template.id
+
+
+def test_resource_copy_as_child_has_local_remote_parity(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(name="Group", type_names=["group"]):
+        pass
+    with scoped.build_resource_template(
+        name="Sample", type_names=["sample"]
+    ) as template:
+        template.add_properties(
+            {"Measurements": [{"name": "Readings", "type": "array", "default": []}]}
+        )
+    group = scoped.create_resource("group-1", "Group")
+    source = scoped.create_resource("sample-1", "Sample")
+    with scoped.build_resource(resource_id=source.id) as source_builder:
+        source_child_builder = source_builder.add_child("sample-child", "Sample")
+    source_child = source_child_builder.resource
+    with scoped.build_resource(resource_id=source_child.id) as child_builder:
+        value = child_builder.resource.properties["Measurements"].values["Readings"]
+        value.value = [3, {"nested": [4]}]
+        value.unit = "mV"
+        value.metadata_json = {"tags": ["source"]}
+    source_child = child_builder.resource
+
+    with scoped.build_resource(resource_id=group.id) as builder:
+        copied = builder.add_child(source)
+
+    assert copied.resource.id != source.id
+    assert copied.resource.copied_from_id == source.id
+    copied_descendant = copied.resource.children["sample-child"]
+    assert copied_descendant.id != source_child.id
+    assert copied_descendant.copied_from_id is None
+    with scoped.build_resource(resource_id=group.id) as loader:
+        refreshed = loader.get_model(update=True)
+    assert refreshed.children["sample-1"].id == copied.resource.id
+    assert refreshed.children["sample-1"].copied_from_id == source.id
+    refreshed_descendant = refreshed.children["sample-1"].children["sample-child"]
+    source_property = source_child.properties["Measurements"]
+    for descendant in (copied_descendant, refreshed_descendant):
+        prop = descendant.properties["Measurements"]
+        value = prop.values["Readings"]
+        assert prop.id is not None and prop.id != source_property.id
+        assert value.value == [3, {"nested": [4]}]
+        assert value.unit == "mV"
+        assert value.metadata_json == {"tags": ["source"]}
+    assert refreshed_descendant.properties["Measurements"].id == (
+        copied_descendant.properties["Measurements"].id
+    )
+
+
+def test_resource_lifecycle_has_local_remote_parity(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(name="Sample", type_names=["sample"]):
+        pass
+    resource = scoped.create_resource("sample-1", "Sample")
+
+    with scoped.build_resource(resource_id=resource.id) as builder:
+        builder.finalize()
+    assert builder.resource.status.value == "ACTIVE"
+    with builder:
+        builder.archive()
+    assert builder.resource.status.value == "ARCHIVED"
+
+
+def test_process_template_create_load_update_lifecycle_has_local_remote_parity(
+    command_client,
+):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_process_template("Measure", "1.0") as created:
+        created.add_step("Collect").close_step()
+
+    with scoped.build_process_template(
+        process_template_id=created.template.id
+    ) as loaded:
+        loaded.add_step("Analyze").close_step()
+
+    assert loaded.template.revision == 2
+    assert {step.name for step in loaded.template.step_templates.values()} == {
+        "Collect",
+        "Analyze",
+    }
+    with loaded:
+        loaded.finalize()
+    assert loaded.template.status.value == "ACTIVE"
+    with loaded:
+        loaded.archive()
+    assert loaded.template.status.value == "ARCHIVED"
+
+
+def test_process_run_create_load_update_lifecycle_has_local_remote_parity(
+    command_client,
+):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_process_template("Measure", "1.0") as template:
+        (
+            template.add_step("Mix")
+            .param_group("Inputs")
+            .add_attribute("Voltage", "int", "", 0)
+            .close_group()
+            .close_step()
+        )
+
+    with scoped.build_process_run(
+        name="run-1",
+        description="initial",
+        template_name="Measure",
+        version="1.0",
+    ) as created:
+        run_id = created.process_run.id
+
+    with scoped.build_process_run(process_run_id=run_id) as loaded:
+        model = loaded.get_model()
+        model.description = "updated"
+        loaded.set_model(model)
+
+    assert loaded.process_run.description == "updated"
+    assert loaded.process_run.revision == 2
+    with loaded:
+        loaded.finalize()
+    assert loaded.process_run.status.value == "ACTIVE"
+    with loaded:
+        loaded.archive()
+    assert loaded.process_run.status.value == "ARCHIVED"
+
+
+def test_stale_resource_write_preserves_first_mutation(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(name="Sample", type_names=["sample"]):
+        pass
+    resource = scoped.create_resource("sample-1", "Sample")
+
+    first = scoped.build_resource(resource_id=resource.id)
+    second = scoped.build_resource(resource_id=resource.id)
+    first_model = first.get_model()
+    first_model.name = "first"
+    first.set_model(first_model)
+    with first:
+        pass
+
+    second_model = second.get_model()
+    second_model.name = "second"
+    second.set_model(second_model)
+    with pytest.raises(RecapConflictError):  # noqa
+        with second:
+            pass
+
+    assert second.resource.name == "second"
+    assert second.changes().fields["name"] == "second"
+
+    with scoped.build_resource(resource_id=resource.id) as persisted:
+        assert persisted.resource.name == "first"
+
+
+def test_remote_writes_are_visible_to_rest_queries(tmp_path):
+    db_path = tmp_path / "remote.db"
+    api_key = "remote-secret"
+    app_client = TestClient(create_app(db_path, api_key=api_key))
+
+    def request(_client, method, url, **kwargs):
+        path = url.removeprefix("http://recap.test")
+        response = app_client.request(method, path, **kwargs)
+        return response
+
+    with (
+        patch.object(httpx2.Client, "request", request),
+        RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
+    ):
+        remote.create_namespace("beamline")
+        remote.create_namespace("beamline/amx", metadata={"beamline": "amx"})
+        namespace = remote.namespace("beamline/amx")
+
+        with namespace.build_resource_template(name="Sample", type_names=["sample"]):
+            pass
+        with namespace.build_process_template("Measure", "1.0"):
+            pass
+        resource = namespace.create_resource("S-001", "Sample")
+        copied = namespace.copy_resource(
+            resource.id,
+            ResourceCopyOptions(name="S-001-copy"),
+        )
+        with namespace.build_resource(resource_id=copied.id) as copied_builder:
+            copied_builder.finalize()
+        with namespace.build_process_run(
+            name="run-001",
+            description="remote run",
+            template_name="Measure",
+            version="1.0",
+        ) as process_run_builder:
+            process_run = process_run_builder.process_run
+            process_run_builder.finalize()
+
+        assert namespace.namespace_path == "beamline/amx"
+        assert copied.name == "S-001-copy"
+        assert process_run.name == "run-001"
+        assert [item.name for item in namespace.query_maker().resources().all()] == [
+            "S-001",
+            "S-001-copy",
+        ]
+        assert "Sample" in [
+            item.name for item in namespace.query_maker().resource_templates().all()
+        ]
+        assert "Measure" in [
+            item.name for item in namespace.query_maker().process_templates().all()
+        ]
+        assert [item.name for item in namespace.query_maker().process_runs().all()] == [
+            "run-001"
+        ]
+
+
+def test_scoped_remote_public_builders_use_namespace_routes(tmp_path):
+    db_path = tmp_path / "remote-builders.db"
+    api_key = "remote-secret"
+    app_client = TestClient(create_app(db_path, api_key=api_key))
+    request_paths = []
+    template_entity = None
+
+    def request(_client, method, url, **kwargs):
+        nonlocal template_entity
+        path = url.removeprefix("http://recap.test")
+        request_paths.append((method, path))
+        response = app_client.request(method, path, **kwargs)
+        if path == "/api/v1/resource-templates/beamline/amx":
+            template_entity = response.json()
+        return response
+
+    with (
+        patch.object(httpx2.Client, "request", request),
+        RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
+    ):
+        remote.create_namespace("beamline")
+        remote.create_namespace("beamline/amx")
+        namespace = remote.namespace("beamline/amx")
+
+        with namespace.build_resource_template(name="Sample", type_names=["sample"]):
+            pass
+
+        with namespace.build_resource("S-001", "Sample") as resource_builder:
+            resource_id = resource_builder.resource.id
+
+        assert resource_id
+        assert ("POST", "/api/v1/resource-templates/beamline/amx") in request_paths
+        assert ("POST", "/api/v1/resources/beamline/amx") in request_paths
+
+        namespace.close()
+
+
+def test_scoped_remote_create_resource_uses_namespace_route(tmp_path):
+    db_path = tmp_path / "remote-create-resource.db"
+    api_key = "remote-secret"
+    app_client = TestClient(create_app(db_path, api_key=api_key))
+    request_paths = []
+    template_entity = None
+
+    def request(_client, method, url, **kwargs):
+        nonlocal template_entity
+        path = url.removeprefix("http://recap.test")
+        request_paths.append((method, path))
+        response = app_client.request(method, path, **kwargs)
+        if path == "/api/v1/resource-templates/beamline/amx":
+            template_entity = response.json()
+        return response
+
+    with (
+        patch.object(httpx2.Client, "request", request),
+        RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
+    ):
+        remote.create_namespace("beamline")
+        remote.create_namespace("beamline/amx")
+        namespace = remote.namespace("beamline/amx")
+        with namespace.build_resource_template(name="Sample", type_names=["sample"]):
+            pass
+
+        resource = namespace.create_resource("S-001", "Sample")
+        query_paths = []
+
+        def query(_adapter, schema, spec, *, namespace_path):
+            query_paths.append(namespace_path)
+            return original_query(_adapter, schema, spec, namespace_path=namespace_path)
+
+        original_query = RESTAdapter.query_batch
+        with (
+            patch.object(RESTAdapter, "query_batch", query),
+            namespace.build_resource(resource_id=resource.id) as builder,
+        ):
+            assert builder.resource.id == resource.id
+        assert query_paths == ["beamline/amx"]
+
+        assert resource.name == "S-001"
+        assert ("POST", "/api/v1/resources/beamline/amx") in request_paths
+        namespace.close()
+
+
+def test_remote_resource_builder_reports_missing_template_without_lookup(tmp_path):
+    db_path = tmp_path / "remote-missing-template.db"
+    api_key = "remote-secret"
+    app_client = TestClient(create_app(db_path, api_key=api_key))
+
+    def request(_client, method, url, **kwargs):
+        path = url.removeprefix("http://recap.test")
+        return app_client.request(method, path, **kwargs)
+
+    with (
+        patch.object(httpx2.Client, "request", request),
+        patch.object(RESTAdapter, "query", return_value=[]),
+        RecapClient.from_url("http://recap.test", api_key=api_key) as remote,
+    ):
+        remote.create_namespace("beamline")
+        remote.create_namespace("beamline/amx")
+        namespace = remote.namespace("beamline/amx")
+
+        with pytest.raises(
+            RecapNotFoundError,
+            match="Resource template 'Missing' version '1.0' not found",
+        ):
+            namespace.build_resource("S-001", "Missing")
+
+        namespace.close()
+
+
+def test_remote_namespace_write_rejects_invalid_api_key(tmp_path, monkeypatch):
+    with TestClient(
+        create_app(tmp_path / "auth.db", api_key="correct-key")
+    ) as app_client:
+
+        def request(_client, method, url, **kwargs):
+            response = app_client.request(
+                method, url.removeprefix("http://recap.test"), **kwargs
+            )
+            request = httpx2.Request(method, url, headers=kwargs.get("headers"))
+            return httpx2.Response(
+                response.status_code,
+                headers=response.headers,
+                content=response.content,
+                request=request,
+            )
+
+        monkeypatch.setattr(
+            httpx2.Client,
+            "request",
+            request,
+        )
+        with (
+            patch.object(
+                RESTAdapter,
+                "get_namespace_context",
+                return_value=NamespaceContext(id=uuid4(), path=""),
+            ),
+            RecapClient.from_url("http://recap.test", api_key="wrong-key") as client,
+            pytest.raises(RecapAuthenticationError) as caught,
+        ):
+            client.create_namespace("beamline")
+
+    assert caught.value.status_code == 401
+    assert "wrong-key" not in str(caught.value)
+
+
+def test_resource_in_place_edit_has_local_remote_parity(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_resource_template(
+        name="Sample", type_names=["sample"]
+    ) as template:
+        template.prop_group("details").add_attribute(
+            "serial", "str", "", "old"
+        ).close_group()
+    resource = scoped.create_resource("sample-1", "Sample")
+    with scoped.build_resource(resource_id=resource.id) as builder:
+        builder.finalize()
+    active_revision = builder.resource.revision
+
+    with scoped.build_resource(resource_id=resource.id, in_place=True) as builder:
+        model = builder.get_model()
+        model.properties.details.values.serial.value = "new"
+        builder.set_model(model)
+
+    assert builder.resource.id == resource.id
+    assert builder.resource.status.value == "ACTIVE"
+    assert builder.resource.revision == active_revision + 1
+    assert builder.resource.properties.details.values.serial.value == "new"
+
+
+def test_process_run_in_place_edit_has_local_remote_parity(command_client):
+    scoped = seed_command_namespace(command_client)
+    with scoped.build_process_template("Measure", "1.0"):
+        pass
+    with scoped.build_process_run("run-1", "original", "Measure", "1.0") as builder:
+        builder.finalize()
+    run = builder.process_run
+
+    with scoped.build_process_run(process_run_id=run.id, in_place=True) as builder:
+        model = builder.get_model()
+        model.description = "corrected"
+        builder.set_model(model)
+
+    assert builder.process_run.id == run.id
+    assert builder.process_run.status.value == "ACTIVE"
+    assert builder.process_run.description == "corrected"
+    assert builder.process_run.revision == run.revision + 1

@@ -84,8 +84,9 @@ def statement_counter():
 
 
 @pytest.fixture
-def api_client(tmp_path):
-    with TestClient(create_app(tmp_path / "rest.db", api_key="secret")) as client:
+def api_client(tmp_path, blank_database_path, copy_database):
+    db_path = copy_database(blank_database_path, tmp_path / "rest.db")
+    with TestClient(create_app(db_path, api_key="secret")) as client:
         yield client
 
 
@@ -95,9 +96,9 @@ def auth_header():
 
 
 @pytest.fixture
-def rest_loopback_client(tmp_path):
+def rest_loopback_client(tmp_path, blank_database_path, copy_database):
     """Build remote client over FastAPI TestClient transport, not HTTP mocks."""
-    db_path = tmp_path / "rest-loopback.db"
+    db_path = copy_database(blank_database_path, tmp_path / "rest-loopback.db")
     api_key = "loopback-secret"
     with TestClient(create_app(db_path, api_key=api_key)) as app_client:
         transport = HTTPTransport(api_key)
